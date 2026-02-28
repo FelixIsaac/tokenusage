@@ -1,13 +1,13 @@
 {
   "name": "tokenusage",
-  "version": "1.1.2",
-  "description": "Blazing-fast Rust token usage tracker for Claude Code and Codex, with unified reports, live monitoring, and CLI/TUI/GUI.",
+  "version": "1.1.5",
+  "description": "Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hanbu97/tokenusage.git"
   },
-  "homepage": "https://github.com/hanbu97/tokenusage#readme",
+  "homepage": "https://github.com/hanbu97/tokenusage",
   "bugs": {
     "url": "https://github.com/hanbu97/tokenusage/issues"
   },
@@ -33,10 +33,11 @@
     "win32"
   ],
   "keywords": [
-    "codex",
-    "claude-code",
-    "token-usage",
-    "cli",
-    "rust"
+    "codex usage",
+    "claude code usage",
+    "token usage tracker",
+    "rust cli",
+    "tui",
+    "gui"
   ]
 }

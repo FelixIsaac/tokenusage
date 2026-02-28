@@ -1,6 +1,6 @@
 # tokenusage (`tu`)
 
-Blazing-fast Rust token usage tracker for **Claude Code** and **Codex**.
+Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
 
 - Unified report across Claude + Codex
 - Fast parallel scan + cache

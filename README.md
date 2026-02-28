@@ -1,35 +1,23 @@
 # tokenusage (`tu`)
 
-Blazing-fast **Rust** token usage tracker for **Claude Code** and **Codex**.
+Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
 
 [![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
 [![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
 
-`tu` scans local session logs, merges multiple sources, estimates cost, and shows results in:
-- CLI table (responsive columns)
-- TUI (sticky header + scroll)
-- GUI (`iced` + `tiny-skia`)
-- Live session monitor with progress bars
+`tu` scans local session logs and gives one merged token + cost view across Codex and Claude in CLI, live monitor, and GUI.
 
-## Why `tu`
-
-- **Real-world speedup vs `ccusage`**: about **34.5x (cold)** and **131.1x (warm)** on local Codex logs
-- **Why it is faster**: native Rust startup, parallel file discovery/parsing, and incremental cache reuse
-- **One report for both Codex + Claude** (merged totals and merged model view)
-- Also supports source-specific modes: `tu codex`, `tu claude`, `tu live codex`, `tu live claude`
-
-This project is built for people searching for:
-**Claude Code usage tracker**, **Codex usage monitor**, **LLM token cost dashboard**, **Rust TUI/GUI token analytics**.
+**Benchmark:** up to **131.1x faster than `ccusage`** on warm runs (**34.5x** on cold runs) with real local Codex logs. [See full benchmark](#benchmark-details).
 
 ## Screenshots
 
 <table>
   <tr>
-    <td align="center" valign="middle" width="44%">
-      <img src="docs/images/cli-demo.png" height="280" alt="tu cli demo (mock data)" />
+    <td width="50%" align="center" valign="top">
+      <img src="docs/images/cli-demo-padded.png" alt="tu cli demo" width="100%" />
     </td>
-    <td align="center" valign="middle" width="56%">
-      <img src="docs/images/gui-demo.png" height="280" alt="tu gui demo (mock data)" />
+    <td width="50%" align="center" valign="top">
+      <img src="docs/images/gui-demo.png" alt="tu gui demo" width="100%" />
     </td>
   </tr>
 </table>
@@ -42,58 +30,51 @@ This project is built for people searching for:
 cargo install tokenusage --bin tu
 ```
 
-### cargo-binstall (prebuilt binary)
-
-```bash
-cargo binstall tokenusage --no-confirm
-```
-
-### Homebrew
-
-```bash
-brew tap hanbu97/tap
-brew install tu
-```
-
 ### npm
 
 ```bash
 npm install -g tokenusage
 ```
 
-### From source
+### cargo-binstall (prebuilt binary)
 
 ```bash
-cargo install --path . --bin tu --force
+cargo binstall tokenusage --no-confirm
 ```
 
 ## Quick Start
 
 ```bash
-# Run daily report (default command)
 tu
-
-# Only Codex / only Claude
-tu codex
-tu claude
-
-# Date filter
-tu --since 2026-02-01 --until 2026-02-28
-
-# Weekly / monthly
-tu weekly --start-of-week monday
-tu monthly
-
-# Live block monitor
 tu live
-tu live codex
-tu live claude
-
-# GUI dashboard
 tu gui
 ```
 
-## Benchmark Details (Real Local Data, Codex-Only)
+## Why tokenusage
+
+- Faster feedback loop: native Rust + parallel scan/parsing + incremental cache.
+- One dashboard for both Codex and Claude, with merged totals and per-model breakdown.
+- Works in terminal and desktop GUI without sending your logs to a cloud service.
+
+## FAQ
+
+### Where does the data come from?
+
+From local log directories only:
+- Claude: `~/.config/claude/projects`, `~/.claude/projects`
+- Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+
+You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
+
+### How is cost estimated?
+
+`tu` uses OpenRouter pricing when available, caches it for 6 hours, and falls back to built-in offline rates when network pricing is unavailable.
+
+### Is my data private?
+
+Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
+
+## Benchmark Details
 
 Benchmark setup:
 
@@ -117,47 +98,6 @@ Results:
 
 > Notes: results vary by hardware, filesystem cache state, and log volume.
 
-## Demo Dataset (No Real Data)
-
-Use the bundled mock dataset when you want screenshots/demos without exposing local usage logs.
-
-```bash
-# regenerate demo logs
-python3 examples/demo/generate_demo_data.py
-
-# run reports with demo-only config
-tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
-tu live --config ./examples/demo/tu.demo.json
-tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
-```
-
-## What `tu` Tracks
-
-- Input tokens
-- Output tokens
-- Cache create tokens
-- Cache read tokens
-- Total tokens
-- Estimated cost (USD)
-- Per-model merged view (`claude-haiku-...`, `gpt-5.3-codex`, etc.)
-
-## Data Sources
-
-By default, `tu` checks these directories and merges all valid logs:
-
-- Claude:
-  - `~/.config/claude/projects`
-  - `~/.claude/projects`
-- Codex:
-  - `~/.codex/sessions`
-  - `~/.config/codex/sessions`
-
-You can override with:
-- `--claude-projects-dir <PATH>` (repeatable)
-- `--codex-sessions-dir <PATH>` (repeatable)
-
-This merged mode is the key difference from single-source tools: one timeline/table can include both providers, while still allowing per-source commands when needed.
-
 ## Command Overview
 
 ```text
@@ -165,13 +105,13 @@ tu [daily|codex|claude|monthly|weekly|session|blocks|live|statusline|gui]
 ```
 
 Useful commands:
-- `tu daily --tui`: terminal table UI with sticky header
+- `tu daily --tui`
 - `tu daily --json`
 - `tu daily --jq '.rows[0]'`
 - `tu blocks --active`
 - `tu blocks --live`
-- `tu live`: same intent as live block monitor
-- `tu statusline`: statusline output (cache-aware)
+- `tu live`
+- `tu statusline`
 
 ## Config File
 
@@ -180,7 +120,7 @@ Config search order:
 2. `~/.config/tu/tu.json`
 3. `~/.config/tokenusage/tokenusage.json`
 
-You can also pass explicit config:
+Use an explicit config file:
 
 ```bash
 tu --config /path/to/tu.json
@@ -212,36 +152,24 @@ Example:
 
 ## Pricing
 
-- Uses OpenRouter model pricing when available.
-- Pricing cache TTL: **6 hours**.
-- Falls back to built-in offline rate table if network data is unavailable.
-- Optional override file:
-
 ```bash
 tu --pricing-file ./pricing.json
 ```
 
-Use offline-only mode:
+Offline-only mode:
 
 ```bash
 tu --offline
 ```
 
-## Performance Notes
+## Demo Dataset (No Real Data)
 
-- Parallel file discovery via `ignore` crate
-- Parallel parsing with `rayon` + worker threads + channels
-- Incremental parse cache for repeated runs
-
-Built-in heavy directory ignores include: `.git`, `node_modules`, `target`, `dist`, `build`, `.cache`, `venv`...
-
-## Troubleshooting
-
-- If no data appears, pass explicit roots:
-  - `--claude-projects-dir ...`
-  - `--codex-sessions-dir ...`
-- If your terminal is narrow, `tu` auto-switches to compact columns.
-- Use `--debug` to print parser stats.
+```bash
+python3 examples/demo/generate_demo_data.py
+tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
+tu live --config ./examples/demo/tu.demo.json
+tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
+```
 
 ## Development
 
@@ -250,35 +178,6 @@ cargo fmt
 cargo clippy --all-targets --all-features
 cargo check
 ```
-
-## Release (Maintainers)
-
-Tag-based release is enabled in GitHub Actions (`.github/workflows/release.yml`).
-
-On tag push (`vX.Y.Z`), the pipeline:
-- builds and uploads release assets (Linux/macOS/Windows)
-- publishes GitHub Release
-- publishes to crates.io and npm (release fails if tokens are missing)
-- optionally updates Homebrew tap formula (if configured)
-
-Required repository secrets for full multi-channel publish:
-- `CRATES_IO_TOKEN`
-- `NPM_TOKEN`
-- `HOMEBREW_TAP_PAT`
-
-If `CRATES_IO_TOKEN` or `NPM_TOKEN` is missing, the tagged release job fails to prevent partial publish.
-
-Homebrew tap target repo defaults to:
-- `hanbu97/homebrew-tap` (tap name: `hanbu97/tap`)
-
-```bash
-git tag v1.1.0
-git push origin v1.1.0
-```
-
-Version sync requirement before tagging:
-- `Cargo.toml` `package.version` must equal tag without `v`
-- npm package version is auto-synced from `Cargo.toml` during release workflow
 
 ## License
 
