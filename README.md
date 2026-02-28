@@ -52,7 +52,7 @@ brew install tu
 ### npm
 
 ```bash
-npm install -g @hanbu97/tokenusage
+npm install -g tokenusage
 ```
 
 ### From source

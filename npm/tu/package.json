@@ -1,5 +1,5 @@
 {
-  "name": "@hanbu97/tokenusage",
+  "name": "tokenusage",
   "version": "0.1.0",
   "description": "Blazing-fast Rust token usage tracker for Codex and Claude Code.",
   "license": "MIT",

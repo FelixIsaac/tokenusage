@@ -28,7 +28,7 @@ function request(url) {
         url,
         {
           headers: {
-            'user-agent': '@hanbu97/tokenusage-installer',
+            'user-agent': 'tokenusage-installer',
             accept: 'application/octet-stream',
           },
         },
