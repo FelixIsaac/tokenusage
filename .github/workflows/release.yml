@@ -138,12 +138,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish crate (if token exists)
+      - name: Publish crate
         run: |
           set -euxo pipefail
           if [ -z "${CRATES_IO_TOKEN}" ]; then
-            echo "CRATES_IO_TOKEN is not configured; skipping crates.io publish."
-            exit 0
+            echo "CRATES_IO_TOKEN is not configured; refusing release publish."
+            exit 1
           fi
           tag="${GITHUB_REF_NAME#v}"
           cargo_version=$(grep -E '^version\\s*=\\s*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\\1/')
@@ -167,12 +167,12 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Publish npm package (if token exists)
+      - name: Publish npm package
         run: |
           set -euxo pipefail
           if [ -z "${NPM_TOKEN}" ]; then
-            echo "NPM_TOKEN is not configured; skipping npm publish."
-            exit 0
+            echo "NPM_TOKEN is not configured; refusing release publish."
+            exit 1
           fi
           tag="${GITHUB_REF_NAME#v}"
           npm_version=$(node -p "require('./npm/tu/package.json').version")

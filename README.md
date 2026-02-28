@@ -93,7 +93,7 @@ Benchmark setup:
 
 - Machine: Apple M3 Max, macOS 15.6.1
 - Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
-- `tu` version: `0.1.0`
+- `tu` version: `1.1.0`
 - `@ccusage/codex` version: `18.0.8`
 - Both in default mode (online pricing behavior, network enabled)
 
@@ -252,21 +252,22 @@ Tag-based release is enabled in GitHub Actions (`.github/workflows/release.yml`)
 On tag push (`vX.Y.Z`), the pipeline:
 - builds and uploads release assets (Linux/macOS/Windows)
 - publishes GitHub Release
-- optionally publishes to crates.io / npm / Homebrew tap (if secrets are configured)
+- publishes to crates.io and npm (release fails if tokens are missing)
+- optionally updates Homebrew tap formula (if configured)
 
 Required repository secrets for full multi-channel publish:
 - `CRATES_IO_TOKEN`
 - `NPM_TOKEN`
 - `HOMEBREW_TAP_PAT`
 
-If a secret is missing, the corresponding publish job is automatically skipped.
+If `CRATES_IO_TOKEN` or `NPM_TOKEN` is missing, the tagged release job fails to prevent partial publish.
 
 Homebrew tap target repo defaults to:
 - `hanbu97/homebrew-tap` (tap name: `hanbu97/tap`)
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 Version sync requirement before tagging:
