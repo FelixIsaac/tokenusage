@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin tu
+
+      - name: Package archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -euxo pipefail
+          ASSET_NAME="tu-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/${ASSET_NAME}"
+          cp "target/${{ matrix.target }}/release/tu" "dist/${ASSET_NAME}/"
+          cp README.md LICENSE "dist/${ASSET_NAME}/"
+          tar -C dist -czf "dist/${ASSET_NAME}.tar.gz" "${ASSET_NAME}"
+          rm -rf "dist/${ASSET_NAME}"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $assetName = "tu-${env:GITHUB_REF_NAME}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$assetName" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/tu.exe" "dist/$assetName/"
+          Copy-Item "README.md","LICENSE" "dist/$assetName/"
+          Compress-Archive -Path "dist/$assetName/*" -DestinationPath "dist/$assetName.zip" -Force
+          Remove-Item "dist/$assetName" -Recurse -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tu-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tu-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euxo pipefail
+          cd dist
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tu-release-bundle
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: checksums
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: tu-release-bundle
+          path: dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

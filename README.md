@@ -2,6 +2,9 @@
 
 Fast **Rust** token usage tracker for **Claude Code** and **Codex**.
 
+[![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
+[![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
+
 `tu` scans local session logs, merges multiple sources, estimates cost, and shows results in:
 - CLI table (responsive columns)
 - TUI (sticky header + scroll)
@@ -168,6 +171,17 @@ cargo fmt
 cargo clippy --all-targets --all-features
 cargo check
 ```
+
+## Release (Maintainers)
+
+Tag-based release is enabled in GitHub Actions.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This will build multi-platform binaries, generate `SHA256SUMS.txt`, and publish assets to GitHub Releases.
 
 ## License
 
