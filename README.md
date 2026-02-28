@@ -36,16 +36,29 @@ This project is built for people searching for:
 
 ## Install
 
+### cargo (crates.io)
+
+```bash
+cargo install tokenusage --bin tu
+```
+
+### Homebrew
+
+```bash
+brew tap hanbu97/tap
+brew install tu
+```
+
+### npm
+
+```bash
+npm install -g @hanbu97/tokenusage
+```
+
 ### From source
 
 ```bash
 cargo install --path . --bin tu --force
-```
-
-### From crates.io (after publish)
-
-```bash
-cargo install tokenusage --bin tu
 ```
 
 ## Quick Start
@@ -234,14 +247,31 @@ cargo check
 
 ## Release (Maintainers)
 
-Tag-based release is enabled in GitHub Actions.
+Tag-based release is enabled in GitHub Actions (`.github/workflows/release.yml`).
+
+On tag push (`vX.Y.Z`), the pipeline:
+- builds and uploads release assets (Linux/macOS/Windows)
+- publishes GitHub Release
+- optionally publishes to crates.io / npm / Homebrew tap (if secrets are configured)
+
+Required repository secrets for full multi-channel publish:
+- `CRATES_IO_TOKEN`
+- `NPM_TOKEN`
+- `HOMEBREW_TAP_PAT`
+
+If a secret is missing, the corresponding publish job is automatically skipped.
+
+Homebrew tap target repo defaults to:
+- `hanbu97/homebrew-tap` (tap name: `hanbu97/tap`)
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-This will build multi-platform binaries, generate `SHA256SUMS.txt`, and publish assets to GitHub Releases.
+Version sync requirement before tagging:
+- `Cargo.toml` `package.version` must equal tag without `v`
+- `npm/tu/package.json` `version` must equal tag without `v`
 
 ## License
 

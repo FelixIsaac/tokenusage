@@ -1,0 +1,42 @@
+{
+  "name": "@hanbu97/tokenusage",
+  "version": "0.1.0",
+  "description": "Blazing-fast Rust token usage tracker for Codex and Claude Code.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hanbu97/tokenusage.git"
+  },
+  "homepage": "https://github.com/hanbu97/tokenusage#readme",
+  "bugs": {
+    "url": "https://github.com/hanbu97/tokenusage/issues"
+  },
+  "bin": {
+    "tu": "bin/tu.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "keywords": [
+    "codex",
+    "claude-code",
+    "token-usage",
+    "cli",
+    "rust"
+  ]
+}

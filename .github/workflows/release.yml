@@ -13,6 +13,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  HOMEBREW_TAP_REPO: hanbu97/homebrew-tap
 
 jobs:
   build:
@@ -55,6 +56,8 @@ jobs:
           cp "target/${{ matrix.target }}/release/tu" "dist/${ASSET_NAME}/"
           cp README.md LICENSE "dist/${ASSET_NAME}/"
           tar -C dist -czf "dist/${ASSET_NAME}.tar.gz" "${ASSET_NAME}"
+          cp "target/${{ matrix.target }}/release/tu" "dist/${ASSET_NAME}"
+          chmod +x "dist/${ASSET_NAME}"
           rm -rf "dist/${ASSET_NAME}"
 
       - name: Package archive (Windows)
@@ -66,6 +69,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/tu.exe" "dist/$assetName/"
           Copy-Item "README.md","LICENSE" "dist/$assetName/"
           Compress-Archive -Path "dist/$assetName/*" -DestinationPath "dist/$assetName.zip" -Force
+          Copy-Item "target/${{ matrix.target }}/release/tu.exe" "dist/$assetName.exe"
           Remove-Item "dist/$assetName" -Recurse -Force
 
       - name: Upload build artifact
@@ -91,7 +95,9 @@ jobs:
         run: |
           set -euxo pipefail
           cd dist
-          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+          shopt -s nullglob
+          files=( *.tar.gz *.zip tu-* tu-*.exe )
+          sha256sum "${files[@]}" > SHA256SUMS.txt
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
@@ -117,3 +123,124 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  publish-crates:
+    name: Publish crates.io
+    runs-on: ubuntu-latest
+    needs: checksums
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.CRATES_IO_TOKEN != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify Cargo version matches tag
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(grep -E '^version\\s*=\\s*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\\1/')
+          test "$tag" = "$cargo_version"
+
+      - name: Publish crate
+        run: cargo publish --locked --token "${{ secrets.CRATES_IO_TOKEN }}"
+
+  publish-npm:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.NPM_TOKEN != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm package version matches tag
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          npm_version=$(node -p "require('./npm/tu/package.json').version")
+          test "$tag" = "$npm_version"
+
+      - name: Publish npm package
+        working-directory: npm/tu
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-homebrew-tap:
+    name: Publish Homebrew tap formula
+    runs-on: ubuntu-latest
+    needs: checksums
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.HOMEBREW_TAP_PAT != ''
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: tu-release-bundle
+          path: dist
+
+      - name: Generate Formula
+        run: |
+          set -euxo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          linux_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" | awk '{print $1}')
+          mac_arm_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz" | awk '{print $1}')
+          mac_x64_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz" | awk '{print $1}')
+
+          mkdir -p out/Formula
+          cat > out/Formula/tu.rb <<RUBY
+          class Tu < Formula
+            desc "Blazing-fast Rust token usage tracker for Codex and Claude Code"
+            homepage "https://github.com/hanbu97/tokenusage"
+            license "MIT"
+            version "${version}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/hanbu97/tokenusage/releases/download/v${version}/tu-v${version}-aarch64-apple-darwin.tar.gz"
+                sha256 "${mac_arm_sha}"
+              else
+                url "https://github.com/hanbu97/tokenusage/releases/download/v${version}/tu-v${version}-x86_64-apple-darwin.tar.gz"
+                sha256 "${mac_x64_sha}"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/hanbu97/tokenusage/releases/download/v${version}/tu-v${version}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${linux_sha}"
+            end
+
+            def install
+              bin.install "tu"
+              prefix.install "README.md", "LICENSE"
+            end
+
+            test do
+              assert_match "tokenusage", shell_output("#{bin}/tu --version")
+            end
+          end
+          RUBY
+
+      - name: Update tap repository
+        run: |
+          set -euxo pipefail
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_PAT }}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp out/Formula/tu.rb tap/Formula/tu.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/tu.rb
+          if git diff --cached --quiet; then
+            echo "No formula changes."
+            exit 0
+          fi
+          git commit -m "chore: update tu formula for ${GITHUB_REF_NAME}"
+          git push origin HEAD:main
