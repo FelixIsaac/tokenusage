@@ -42,6 +42,12 @@ This project is built for people searching for:
 cargo install tokenusage --bin tu
 ```
 
+### cargo-binstall (prebuilt binary)
+
+```bash
+cargo binstall tokenusage --no-confirm
+```
+
 ### Homebrew
 
 ```bash
@@ -93,7 +99,7 @@ Benchmark setup:
 
 - Machine: Apple M3 Max, macOS 15.6.1
 - Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
-- `tu` version: `1.1.0`
+- `tu` version: `1.1.1`
 - `@ccusage/codex` version: `18.0.8`
 - Both in default mode (online pricing behavior, network enabled)
 
