@@ -464,5 +464,4 @@ impl TableLayout {
             Self::Full => 56,
         }
     }
-
 }
