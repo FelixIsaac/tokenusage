@@ -45,7 +45,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin tu
+        run: cargo build --release --target ${{ matrix.target }} --bin tu
 
       - name: Package archive (Unix)
         if: runner.os != 'Windows'
@@ -146,9 +146,9 @@ jobs:
             exit 1
           fi
           tag="${GITHUB_REF_NAME#v}"
-          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\1/')
+          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
           test "$tag" = "$cargo_version"
-          cargo publish --locked --token "${CRATES_IO_TOKEN}"
+          cargo publish --token "${CRATES_IO_TOKEN}"
 
   publish-npm:
     name: Publish npm package
@@ -175,9 +175,10 @@ jobs:
             exit 1
           fi
           tag="${GITHUB_REF_NAME#v}"
-          npm_version=$(node -p "require('./npm/tu/package.json').version")
-          test "$tag" = "$npm_version"
+          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
+          test "$tag" = "$cargo_version"
           cd npm/tu
+          npm version "${cargo_version}" --no-git-tag-version
           NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --access public
 
   publish-homebrew-tap:

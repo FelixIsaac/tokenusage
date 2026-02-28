@@ -278,7 +278,7 @@ git push origin v1.1.0
 
 Version sync requirement before tagging:
 - `Cargo.toml` `package.version` must equal tag without `v`
-- `npm/tu/package.json` `version` must equal tag without `v`
+- npm package version is auto-synced from `Cargo.toml` during release workflow
 
 ## License
 
