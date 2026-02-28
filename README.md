@@ -1,6 +1,6 @@
 # tokenusage (`tu`)
 
-Fast **Rust** token usage tracker for **Claude Code** and **Codex**.
+Blazing-fast **Rust** token usage tracker for **Claude Code** and **Codex**.
 
 [![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
 [![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
@@ -10,6 +10,36 @@ Fast **Rust** token usage tracker for **Claude Code** and **Codex**.
 - TUI (sticky header + scroll)
 - GUI (`iced` + `tiny-skia`)
 - Live session monitor with progress bars
+
+## Why `tu`
+
+- **Much faster than `ccusage` on real Codex logs** (see benchmark below)
+- **One report for both Codex + Claude** (merged totals and merged model view)
+- Also supports source-specific modes: `tu codex`, `tu claude`, `tu live codex`, `tu live claude`
+
+### Speed Benchmark (Real Local Data, Codex-Only)
+
+Benchmark setup:
+
+- Machine: Apple M3 Max, macOS 15.6.1
+- Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
+- `tu` version: `0.1.0`
+- `@ccusage/codex` version: `18.0.8`
+- Both in offline pricing mode (`-O`)
+
+Results:
+
+| Tool | Command | Time |
+|---|---|---:|
+| `tu` (cold, rebuild cache) | `tu codex -O --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
+| `@ccusage/codex` (single run) | `ccusage-codex daily -O -s 2025-09-01 -u 2026-02-28` | **5.06s** |
+| `tu` (warm, avg of 10 runs) | `tu codex -O -s 2025-09-01 -u 2026-02-28` | **0.05s** |
+| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -O -s 2025-09-01 -u 2026-02-28` | **4.89s** |
+
+- Cold-run speedup: about **26.6x**
+- Warm-run speedup: about **97.8x**
+
+> Notes: results vary by hardware, filesystem cache state, and log volume.
 
 This project is built for people searching for:
 **Claude Code usage tracker**, **Codex usage monitor**, **LLM token cost dashboard**, **Rust TUI/GUI token analytics**.
@@ -102,6 +132,8 @@ By default, `tu` checks these directories and merges all valid logs:
 You can override with:
 - `--claude-projects-dir <PATH>` (repeatable)
 - `--codex-sessions-dir <PATH>` (repeatable)
+
+This merged mode is the key difference from single-source tools: one timeline/table can include both providers, while still allowing per-source commands when needed.
 
 ## Command Overview
 
