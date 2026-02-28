@@ -129,6 +129,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: checksums
     if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -136,27 +138,25 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Skip when CRATES_IO_TOKEN is missing
-        if: ${{ secrets.CRATES_IO_TOKEN == '' }}
-        run: echo "CRATES_IO_TOKEN is not configured; skipping crates.io publish."
-
-      - name: Verify Cargo version matches tag
-        if: ${{ secrets.CRATES_IO_TOKEN != '' }}
+      - name: Publish crate (if token exists)
         run: |
           set -euxo pipefail
+          if [ -z "${CRATES_IO_TOKEN}" ]; then
+            echo "CRATES_IO_TOKEN is not configured; skipping crates.io publish."
+            exit 0
+          fi
           tag="${GITHUB_REF_NAME#v}"
           cargo_version=$(grep -E '^version\\s*=\\s*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\\1/')
           test "$tag" = "$cargo_version"
-
-      - name: Publish crate
-        if: ${{ secrets.CRATES_IO_TOKEN != '' }}
-        run: cargo publish --locked --token "${{ secrets.CRATES_IO_TOKEN }}"
+          cargo publish --locked --token "${CRATES_IO_TOKEN}"
 
   publish-npm:
     name: Publish npm package
     runs-on: ubuntu-latest
     needs: publish
     if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -167,44 +167,34 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Skip when NPM_TOKEN is missing
-        if: ${{ secrets.NPM_TOKEN == '' }}
-        run: echo "NPM_TOKEN is not configured; skipping npm publish."
-
-      - name: Verify npm package version matches tag
-        if: ${{ secrets.NPM_TOKEN != '' }}
+      - name: Publish npm package (if token exists)
         run: |
           set -euxo pipefail
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish."
+            exit 0
+          fi
           tag="${GITHUB_REF_NAME#v}"
           npm_version=$(node -p "require('./npm/tu/package.json').version")
           test "$tag" = "$npm_version"
-
-      - name: Publish npm package
-        if: ${{ secrets.NPM_TOKEN != '' }}
-        working-directory: npm/tu
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          cd npm/tu
+          NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --access public
 
   publish-homebrew-tap:
     name: Publish Homebrew tap formula
     runs-on: ubuntu-latest
     needs: checksums
     if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
     steps:
-      - name: Skip when HOMEBREW_TAP_PAT is missing
-        if: ${{ secrets.HOMEBREW_TAP_PAT == '' }}
-        run: echo "HOMEBREW_TAP_PAT is not configured; skipping Homebrew publish."
-
       - name: Download release bundle
-        if: ${{ secrets.HOMEBREW_TAP_PAT != '' }}
         uses: actions/download-artifact@v4
         with:
           name: tu-release-bundle
           path: dist
 
       - name: Generate Formula
-        if: ${{ secrets.HOMEBREW_TAP_PAT != '' }}
         run: |
           set -euxo pipefail
           version="${GITHUB_REF_NAME#v}"
@@ -247,10 +237,13 @@ jobs:
           RUBY
 
       - name: Update tap repository
-        if: ${{ secrets.HOMEBREW_TAP_PAT != '' }}
         run: |
           set -euxo pipefail
-          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_PAT }}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          if [ -z "${HOMEBREW_TAP_PAT}" ]; then
+            echo "HOMEBREW_TAP_PAT is not configured; skipping Homebrew publish."
+            exit 0
+          fi
+          git clone "https://x-access-token:${HOMEBREW_TAP_PAT}@github.com/${HOMEBREW_TAP_REPO}.git" tap
           mkdir -p tap/Formula
           cp out/Formula/tu.rb tap/Formula/tu.rb
           cd tap
