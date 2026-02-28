@@ -285,7 +285,9 @@ fn draw_report_tui(frame: &mut ratatui::Frame<'_>, report: &DailyReport, offset:
     let end = (start + visible_rows).min(all_rows.len());
 
     let table = TuiTable::new(
-        all_rows[start..end].iter().cloned().map(TuiRow::new),
+        all_rows[start..end]
+            .iter()
+            .map(|cells| TuiRow::new(cells.clone()).height(tui_row_height(cells))),
         constraints,
     )
     .header(
@@ -381,7 +383,7 @@ fn tui_rows(report: &DailyReport, layout: TableLayout) -> Vec<Vec<String>> {
 
 fn tui_day_row(row: &DailyRow, layout: TableLayout) -> Vec<String> {
     let date = row.date.clone();
-    let models = format_model_inline(&row.models, layout);
+    let models = format_model_multiline(&row.models, layout);
     match layout {
         TableLayout::Compact => vec![
             date,
@@ -439,7 +441,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout) -> Vec<String> {
     }
 }
 
-fn format_model_inline(models: &BTreeMap<String, TokenCounts>, layout: TableLayout) -> String {
+fn format_model_multiline(models: &BTreeMap<String, TokenCounts>, layout: TableLayout) -> String {
     if models.is_empty() {
         return "-".to_string();
     }
@@ -452,17 +454,26 @@ fn format_model_inline(models: &BTreeMap<String, TokenCounts>, layout: TableLayo
             .then_with(|| model_a.cmp(model_b))
     });
 
-    let model_limit = layout.model_inline_limit();
-    let mut parts = sorted
+    let model_limit = layout.model_line_limit();
+    let mut lines = sorted
         .iter()
         .take(model_limit)
-        .map(|(model, _)| truncate_text(model, layout.model_inline_char_limit()))
+        .map(|(model, _)| format!("- {}", truncate_text(model, layout.model_char_limit())))
         .collect::<Vec<_>>();
     if sorted.len() > model_limit {
-        parts.push(format!("+{}", sorted.len() - model_limit));
+        lines.push(format!("... +{} more", sorted.len() - model_limit));
     }
 
-    truncate_text(&parts.join(", "), layout.model_inline_char_limit())
+    lines.join("\n")
+}
+
+fn tui_row_height(cells: &[String]) -> u16 {
+    cells
+        .iter()
+        .map(|cell| cell.lines().count() as u16)
+        .max()
+        .unwrap_or(1)
+        .max(1)
 }
 
 fn visible_body_rows(area_height: usize) -> usize {

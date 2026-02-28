@@ -14,6 +14,16 @@ Fast **Rust** token usage tracker for **Claude Code** and **Codex**.
 This project is built for people searching for:
 **Claude Code usage tracker**, **Codex usage monitor**, **LLM token cost dashboard**, **Rust TUI/GUI token analytics**.
 
+## Screenshots
+
+### CLI (mock data)
+
+![tu cli demo](docs/images/cli-demo.png)
+
+### GUI (mock data)
+
+![tu gui demo](docs/images/gui-demo.png)
+
 ## Quick Start
 
 ```bash
@@ -40,6 +50,20 @@ tu live claude
 tu gui
 ```
 
+## Demo Dataset (No Real Data)
+
+Use the bundled mock dataset when you want screenshots/demos without exposing local usage logs.
+
+```bash
+# regenerate demo logs
+python3 examples/demo/generate_demo_data.py
+
+# run reports with demo-only config
+tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
+tu live --config ./examples/demo/tu.demo.json
+tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
+```
+
 ## Install
 
 ### From source
@@ -62,7 +86,7 @@ cargo install tokenusage --bin tu
 - Cache read tokens
 - Total tokens
 - Estimated cost (USD)
-- Per-model merged view (`claude:<model>`, `codex:<model>`)
+- Per-model merged view (`claude-haiku-...`, `gpt-5.3-codex`, etc.)
 
 ## Data Sources
 

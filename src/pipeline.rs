@@ -60,7 +60,7 @@ struct GroupAggregate {
 impl GroupAggregate {
     fn add_event(&mut self, event: &UsageEvent) {
         self.totals.add(event.usage);
-        let merged_model = format!("{}:{}", event.source.as_str(), event.model);
+        let merged_model = event.model.clone();
         self.by_model
             .entry(merged_model)
             .or_default()

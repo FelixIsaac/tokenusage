@@ -1,0 +1,23 @@
+{
+  "defaults": {
+    "claudeProjectsDir": ["./examples/demo/data/claude/projects"],
+    "codexSessionsDir": ["./examples/demo/data/codex/sessions"],
+    "offline": true,
+    "noIncrementalCache": true,
+    "timezone": "Asia/Shanghai",
+    "order": "desc"
+  },
+  "commands": {
+    "daily": {
+      "instances": false
+    },
+    "gui": {
+      "period": "daily",
+      "instances": false
+    },
+    "live": {
+      "sessionLength": 5,
+      "refreshInterval": 1
+    }
+  }
+}

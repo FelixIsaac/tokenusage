@@ -1122,18 +1122,19 @@ fn models_summary(
             .then_with(|| a_name.cmp(b_name))
     });
 
-    let model_limit = layout.model_inline_limit();
-    let mut items = sorted
+    let line_limit = layout.model_line_limit();
+    let char_limit = layout.model_char_limit();
+    let mut lines = sorted
         .into_iter()
-        .take(model_limit)
-        .map(|(name, _)| truncate_text(name, layout.model_inline_char_limit()))
+        .take(line_limit)
+        .map(|(name, _)| format!("- {}", truncate_text(name, char_limit)))
         .collect::<Vec<_>>();
 
-    if models.len() > model_limit {
-        items.push(format!("+{}", models.len() - model_limit));
+    if models.len() > line_limit {
+        lines.push(format!("... +{} more", models.len() - line_limit));
     }
 
-    truncate_text(&items.join(" · "), layout.model_inline_char_limit())
+    lines.join("\n")
 }
 
 fn table_layout_for_width(width_px: f32) -> TableLayout {

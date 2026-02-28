@@ -465,19 +465,4 @@ impl TableLayout {
         }
     }
 
-    pub(crate) fn model_inline_limit(self) -> usize {
-        match self {
-            Self::Compact => 2,
-            Self::Standard => 3,
-            Self::Full => 4,
-        }
-    }
-
-    pub(crate) fn model_inline_char_limit(self) -> usize {
-        match self {
-            Self::Compact => 28,
-            Self::Standard => 44,
-            Self::Full => 62,
-        }
-    }
 }
