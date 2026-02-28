@@ -23,10 +23,16 @@ This project is built for people searching for:
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/images/cli-demo.png" width="49%" alt="tu cli demo (mock data)" />
-  <img src="docs/images/gui-demo.png" width="49%" alt="tu gui demo (mock data)" />
-</p>
+<table>
+  <tr>
+    <td align="center" valign="middle" width="44%">
+      <img src="docs/images/cli-demo.png" height="280" alt="tu cli demo (mock data)" />
+    </td>
+    <td align="center" valign="middle" width="56%">
+      <img src="docs/images/gui-demo.png" height="280" alt="tu gui demo (mock data)" />
+    </td>
+  </tr>
+</table>
 
 ## Install
 
