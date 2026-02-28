@@ -25,19 +25,19 @@ Benchmark setup:
 - Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
 - `tu` version: `0.1.0`
 - `@ccusage/codex` version: `18.0.8`
-- Both in offline pricing mode (`-O`)
+- Both in default mode (online pricing behavior, network enabled)
 
 Results:
 
 | Tool | Command | Time |
 |---|---|---:|
-| `tu` (cold, rebuild cache) | `tu codex -O --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
-| `@ccusage/codex` (single run) | `ccusage-codex daily -O -s 2025-09-01 -u 2026-02-28` | **5.06s** |
-| `tu` (warm, avg of 10 runs) | `tu codex -O -s 2025-09-01 -u 2026-02-28` | **0.05s** |
-| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -O -s 2025-09-01 -u 2026-02-28` | **4.89s** |
+| `tu` (cold, rebuild cache) | `tu codex --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
+| `@ccusage/codex` (single run) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.56s** |
+| `tu` (warm, avg of 10 runs) | `tu codex -s 2025-09-01 -u 2026-02-28` | **0.052s** |
+| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.819s** |
 
-- Cold-run speedup: about **26.6x**
-- Warm-run speedup: about **97.8x**
+- Cold-run speedup: about **34.5x**
+- Warm-run speedup: about **131.1x**
 
 > Notes: results vary by hardware, filesystem cache state, and log volume.
 
