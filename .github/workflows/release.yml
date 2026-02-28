@@ -16,8 +16,50 @@ env:
   HOMEBREW_TAP_REPO: hanbu97/homebrew-tap
 
 jobs:
+  prepare-release:
+    name: Prepare release context
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.rel.outputs.should_release }}
+      release_tag: ${{ steps.rel.outputs.release_tag }}
+      release_version: ${{ steps.rel.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release version/tag
+        id: rel
+        run: |
+          set -euxo pipefail
+          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
+          tag="v${cargo_version}"
+          should_release=false
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            test "${GITHUB_REF_NAME}" = "${tag}"
+            should_release=true
+          elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            if git ls-remote --tags origin "refs/tags/${tag}" | grep -q "refs/tags/${tag}$"; then
+              should_release=false
+            else
+              should_release=true
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git tag "${tag}"
+              git push origin "refs/tags/${tag}"
+            fi
+          fi
+
+          echo "should_release=${should_release}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_version=${cargo_version}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: Build (${{ matrix.target }})
+    needs: prepare-release
+    if: needs.prepare-release.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -49,9 +91,11 @@ jobs:
 
       - name: Package archive (Unix)
         if: runner.os != 'Windows'
+        env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
         run: |
           set -euxo pipefail
-          ASSET_NAME="tu-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          ASSET_NAME="tu-${RELEASE_TAG}-${{ matrix.target }}"
           mkdir -p "dist/${ASSET_NAME}"
           cp "target/${{ matrix.target }}/release/tu" "dist/${ASSET_NAME}/"
           cp README.md LICENSE "dist/${ASSET_NAME}/"
@@ -63,8 +107,10 @@ jobs:
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
         run: |
-          $assetName = "tu-${env:GITHUB_REF_NAME}-${{ matrix.target }}"
+          $assetName = "tu-${env:RELEASE_TAG}-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path "dist/$assetName" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/tu.exe" "dist/$assetName/"
           Copy-Item "README.md","LICENSE" "dist/$assetName/"
@@ -82,7 +128,8 @@ jobs:
   checksums:
     name: Checksums
     runs-on: ubuntu-latest
-    needs: build
+    needs: [prepare-release, build]
+    if: needs.prepare-release.outputs.should_release == 'true'
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -109,8 +156,8 @@ jobs:
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: checksums
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare-release, checksums]
+    if: needs.prepare-release.outputs.should_release == 'true'
     steps:
       - name: Download release bundle
         uses: actions/download-artifact@v4
@@ -121,14 +168,16 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare-release.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true
 
   publish-crates:
     name: Publish crates.io
     runs-on: ubuntu-latest
-    needs: checksums
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare-release, checksums]
+    if: needs.prepare-release.outputs.should_release == 'true'
     env:
       CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
@@ -139,22 +188,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish crate
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.release_version }}
         run: |
           set -euxo pipefail
           if [ -z "${CRATES_IO_TOKEN}" ]; then
             echo "CRATES_IO_TOKEN is not configured; refusing release publish."
             exit 1
           fi
-          tag="${GITHUB_REF_NAME#v}"
           cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
-          test "$tag" = "$cargo_version"
+          test "${RELEASE_VERSION}" = "$cargo_version"
           cargo publish --token "${CRATES_IO_TOKEN}"
 
   publish-npm:
     name: Publish npm package
     runs-on: ubuntu-latest
-    needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare-release, publish]
+    if: needs.prepare-release.outputs.should_release == 'true'
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
@@ -168,15 +218,16 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Publish npm package
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.release_version }}
         run: |
           set -euxo pipefail
           if [ -z "${NPM_TOKEN}" ]; then
             echo "NPM_TOKEN is not configured; refusing release publish."
             exit 1
           fi
-          tag="${GITHUB_REF_NAME#v}"
           cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
-          test "$tag" = "$cargo_version"
+          test "${RELEASE_VERSION}" = "$cargo_version"
           cd npm/tu
           npm version "${cargo_version}" --no-git-tag-version
           NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --access public
@@ -184,8 +235,8 @@ jobs:
   publish-homebrew-tap:
     name: Publish Homebrew tap formula
     runs-on: ubuntu-latest
-    needs: checksums
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare-release, checksums]
+    if: needs.prepare-release.outputs.should_release == 'true'
     env:
       HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
     steps:
@@ -196,12 +247,15 @@ jobs:
           path: dist
 
       - name: Generate Formula
+        env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.release_version }}
         run: |
           set -euxo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          linux_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" | awk '{print $1}')
-          mac_arm_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz" | awk '{print $1}')
-          mac_x64_sha=$(sha256sum "dist/tu-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz" | awk '{print $1}')
+          version="${RELEASE_VERSION}"
+          linux_sha=$(sha256sum "dist/tu-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" | awk '{print $1}')
+          mac_arm_sha=$(sha256sum "dist/tu-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" | awk '{print $1}')
+          mac_x64_sha=$(sha256sum "dist/tu-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" | awk '{print $1}')
 
           mkdir -p out/Formula
           cat > out/Formula/tu.rb <<RUBY
@@ -238,6 +292,8 @@ jobs:
           RUBY
 
       - name: Update tap repository
+        env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
         run: |
           set -euxo pipefail
           if [ -z "${HOMEBREW_TAP_PAT}" ]; then
@@ -255,5 +311,5 @@ jobs:
             echo "No formula changes."
             exit 0
           fi
-          git commit -m "chore: update tu formula for ${GITHUB_REF_NAME}"
+          git commit -m "chore: update tu formula for ${RELEASE_TAG}"
           git push origin HEAD:main
