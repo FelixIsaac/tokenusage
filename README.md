@@ -13,46 +13,34 @@ Blazing-fast **Rust** token usage tracker for **Claude Code** and **Codex**.
 
 ## Why `tu`
 
-- **Much faster than `ccusage` on real Codex logs** (see benchmark below)
+- **Real-world speedup vs `ccusage`**: about **34.5x (cold)** and **131.1x (warm)** on local Codex logs
+- **Why it is faster**: native Rust startup, parallel file discovery/parsing, and incremental cache reuse
 - **One report for both Codex + Claude** (merged totals and merged model view)
 - Also supports source-specific modes: `tu codex`, `tu claude`, `tu live codex`, `tu live claude`
-
-### Speed Benchmark (Real Local Data, Codex-Only)
-
-Benchmark setup:
-
-- Machine: Apple M3 Max, macOS 15.6.1
-- Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
-- `tu` version: `0.1.0`
-- `@ccusage/codex` version: `18.0.8`
-- Both in default mode (online pricing behavior, network enabled)
-
-Results:
-
-| Tool | Command | Time |
-|---|---|---:|
-| `tu` (cold, rebuild cache) | `tu codex --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
-| `@ccusage/codex` (single run) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.56s** |
-| `tu` (warm, avg of 10 runs) | `tu codex -s 2025-09-01 -u 2026-02-28` | **0.052s** |
-| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.819s** |
-
-- Cold-run speedup: about **34.5x**
-- Warm-run speedup: about **131.1x**
-
-> Notes: results vary by hardware, filesystem cache state, and log volume.
 
 This project is built for people searching for:
 **Claude Code usage tracker**, **Codex usage monitor**, **LLM token cost dashboard**, **Rust TUI/GUI token analytics**.
 
 ## Screenshots
 
-### CLI (mock data)
+<p align="center">
+  <img src="docs/images/cli-demo.png" width="49%" alt="tu cli demo (mock data)" />
+  <img src="docs/images/gui-demo.png" width="49%" alt="tu gui demo (mock data)" />
+</p>
 
-![tu cli demo](docs/images/cli-demo.png)
+## Install
 
-### GUI (mock data)
+### From source
 
-![tu gui demo](docs/images/gui-demo.png)
+```bash
+cargo install --path . --bin tu --force
+```
+
+### From crates.io (after publish)
+
+```bash
+cargo install tokenusage --bin tu
+```
 
 ## Quick Start
 
@@ -80,6 +68,30 @@ tu live claude
 tu gui
 ```
 
+## Benchmark Details (Real Local Data, Codex-Only)
+
+Benchmark setup:
+
+- Machine: Apple M3 Max, macOS 15.6.1
+- Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
+- `tu` version: `0.1.0`
+- `@ccusage/codex` version: `18.0.8`
+- Both in default mode (online pricing behavior, network enabled)
+
+Results:
+
+| Tool | Command | Time |
+|---|---|---:|
+| `tu` (cold, rebuild cache) | `tu codex --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
+| `@ccusage/codex` (single run) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.56s** |
+| `tu` (warm, avg of 10 runs) | `tu codex -s 2025-09-01 -u 2026-02-28` | **0.052s** |
+| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.819s** |
+
+- Cold-run speedup: about **34.5x**
+- Warm-run speedup: about **131.1x**
+
+> Notes: results vary by hardware, filesystem cache state, and log volume.
+
 ## Demo Dataset (No Real Data)
 
 Use the bundled mock dataset when you want screenshots/demos without exposing local usage logs.
@@ -92,20 +104,6 @@ python3 examples/demo/generate_demo_data.py
 tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
 tu live --config ./examples/demo/tu.demo.json
 tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
-```
-
-## Install
-
-### From source
-
-```bash
-cargo install --path . --bin tu --force
-```
-
-### From crates.io (after publish)
-
-```bash
-cargo install tokenusage --bin tu
 ```
 
 ## What `tu` Tracks
