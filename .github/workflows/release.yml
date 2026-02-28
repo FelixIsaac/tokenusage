@@ -146,7 +146,7 @@ jobs:
             exit 1
           fi
           tag="${GITHUB_REF_NAME#v}"
-          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\\1/')
+          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\1/')
           test "$tag" = "$cargo_version"
           cargo publish --locked --token "${CRATES_IO_TOKEN}"
 
