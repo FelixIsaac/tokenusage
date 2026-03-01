@@ -3,6 +3,7 @@ mod config;
 mod gui;
 mod output;
 mod pipeline;
+mod share;
 mod types;
 
 use anyhow::Result;
@@ -30,6 +31,7 @@ pub async fn run() -> Result<()> {
         }
         Commands::Monthly(args) => pipeline::run_monthly(args).await,
         Commands::Weekly(args) => pipeline::run_weekly(args).await,
+        Commands::Img(args) => share::run_share(args).await,
         Commands::Session(args) => pipeline::run_session(args).await,
         Commands::Blocks(args) => pipeline::run_blocks(args).await,
         Commands::Live(args) => pipeline::run_blocks(args.into()).await,

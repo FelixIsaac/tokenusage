@@ -67,6 +67,7 @@ pub(crate) enum Commands {
     Claude(DailyArgs),
     Monthly(MonthlyArgs),
     Weekly(WeeklyArgs),
+    Img(ImgArgs),
     Session(SessionArgs),
     Blocks(BlocksArgs),
     Live(LiveArgs),
@@ -189,6 +190,11 @@ pub(crate) struct BlocksArgs {
     pub(crate) live: bool,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
+    #[arg(
+        long,
+        help = "Fetch official Codex 5h/weekly usage + plan via codex app-server"
+    )]
+    pub(crate) official_limits: bool,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -208,6 +214,11 @@ pub(crate) struct LiveArgs {
     pub(crate) session_length: u32,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
+    #[arg(
+        long,
+        help = "Fetch official Codex 5h/weekly usage + plan via codex app-server"
+    )]
+    pub(crate) official_limits: bool,
 }
 
 impl From<LiveArgs> for BlocksArgs {
@@ -220,6 +231,7 @@ impl From<LiveArgs> for BlocksArgs {
             session_length: value.session_length,
             live: true,
             refresh_interval: value.refresh_interval,
+            official_limits: value.official_limits,
         }
     }
 }
@@ -228,6 +240,11 @@ impl From<LiveArgs> for BlocksArgs {
 pub(crate) struct StatuslineArgs {
     #[command(flatten)]
     pub(crate) common: CommonArgs,
+    #[arg(
+        long,
+        help = "Fetch official Codex 5h/week usage and plan via codex app-server"
+    )]
+    pub(crate) official_limits: bool,
     #[arg(long, default_value_t = true, help = "Enable statusline cache")]
     pub(crate) cache: bool,
     #[arg(long, default_value_t = 1, help = "Cache refresh interval seconds")]
@@ -270,6 +287,14 @@ pub(crate) enum GuiPeriod {
     Weekly,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ImgPeriod {
+    #[default]
+    Daily,
+    Weekly,
+}
+
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct GuiArgs {
     #[command(flatten)]
@@ -288,6 +313,41 @@ pub(crate) struct GuiArgs {
     pub(crate) start_of_week: WeekStart,
 }
 
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct ImgArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(long, value_enum, default_value_t = ImgPeriod::Daily)]
+    pub(crate) period: ImgPeriod,
+    #[arg(long, short = 'p', help = "Filter specific project (daily mode only)")]
+    pub(crate) project: Option<String>,
+    #[arg(
+        long,
+        short = 'f',
+        default_value = "tokenusage-share.png",
+        help = "Output image file path"
+    )]
+    pub(crate) output: String,
+    #[arg(long, default_value_t = 1600, help = "Image width in pixels")]
+    pub(crate) width: u32,
+    #[arg(long, default_value_t = 900, help = "Image height in pixels")]
+    pub(crate) height: u32,
+    #[arg(long, help = "Portrait social card layout (9:16 style)")]
+    pub(crate) portrait: bool,
+    #[arg(long, default_value_t = 56, help = "Max periods rendered in charts")]
+    pub(crate) bars: usize,
+    #[arg(long, default_value = "tokenusage", help = "Brand label on the card")]
+    pub(crate) brand: String,
+    #[arg(
+        long,
+        default_value = "github.com/hanbu97/tokenusage",
+        help = "Brand URL shown on the card"
+    )]
+    pub(crate) brand_url: String,
+    #[arg(long, help = "Optional logo image path (PNG/JPG/WebP)")]
+    pub(crate) logo: Option<String>,
+}
+
 pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     normalize_live_shortcuts(&mut argv);
 
@@ -295,7 +355,7 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     let should_insert_daily = match first {
         None => true,
         Some(
-            "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "monthly" | "weekly"
+            "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "monthly" | "weekly" | "img"
             | "session" | "blocks" | "live" | "statusline" | "gui" | "codex" | "claude",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,

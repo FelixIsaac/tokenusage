@@ -4,8 +4,9 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::cli::{
-    BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod, LiveArgs,
-    MonthlyArgs, SessionArgs, SortOrder, StatuslineArgs, VisualBurnRate, WeekStart, WeeklyArgs,
+    BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod, ImgArgs,
+    ImgPeriod, LiveArgs, MonthlyArgs, SessionArgs, SortOrder, StatuslineArgs, VisualBurnRate,
+    WeekStart, WeeklyArgs,
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -21,6 +22,7 @@ struct CommandConfigs {
     claude: Option<DailyConfig>,
     monthly: Option<MonthlyConfig>,
     weekly: Option<WeeklyConfig>,
+    img: Option<ImgConfig>,
     session: Option<SessionConfig>,
     blocks: Option<BlocksConfig>,
     live: Option<LiveConfig>,
@@ -149,6 +151,22 @@ struct GuiConfig {
     start_of_week: Option<WeekStart>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ImgConfig {
+    #[serde(flatten)]
+    common: CommonConfig,
+    period: Option<ImgPeriod>,
+    project: Option<String>,
+    output: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    bars: Option<usize>,
+    brand: Option<String>,
+    #[serde(alias = "brandUrl")]
+    brand_url: Option<String>,
+    logo: Option<String>,
+}
+
 pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
     let cfg_path = resolve_config_path(&command)?;
     let Some(config_path) = cfg_path else {
@@ -209,6 +227,14 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Weekly(args)
         }
+        Commands::Img(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(img_cfg) = config.commands.as_ref().and_then(|c| c.img.as_ref()) {
+                apply_common_config(&mut args.common, Some(&img_cfg.common));
+                apply_img_config(&mut args, img_cfg);
+            }
+            Commands::Img(args)
+        }
         Commands::Session(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(session_cfg) = config.commands.as_ref().and_then(|c| c.session.as_ref()) {
@@ -267,6 +293,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Claude(args) => args.common.config.as_deref(),
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
+        Commands::Img(args) => args.common.config.as_deref(),
         Commands::Session(args) => args.common.config.as_deref(),
         Commands::Blocks(args) => args.common.config.as_deref(),
         Commands::Live(args) => args.common.config.as_deref(),
@@ -415,6 +442,26 @@ fn apply_gui_config(args: &mut GuiArgs, cfg: &GuiConfig) {
     );
 }
 
+fn apply_img_config(args: &mut ImgArgs, cfg: &ImgConfig) {
+    merge_if_default(&mut args.period, cfg.period, ImgPeriod::Daily);
+    merge_if_none(&mut args.project, &cfg.project);
+    merge_if_string_default(
+        &mut args.output,
+        cfg.output.as_deref(),
+        "tokenusage-share.png",
+    );
+    merge_if_u32_default(&mut args.width, cfg.width, 1600);
+    merge_if_u32_default(&mut args.height, cfg.height, 900);
+    merge_if_usize_default(&mut args.bars, cfg.bars, 56);
+    merge_if_string_default(&mut args.brand, cfg.brand.as_deref(), "tokenusage");
+    merge_if_string_default(
+        &mut args.brand_url,
+        cfg.brand_url.as_deref(),
+        "github.com/hanbu97/tokenusage",
+    );
+    merge_if_none(&mut args.logo, &cfg.logo);
+}
+
 fn merge_if_none<T: Clone>(dst: &mut Option<T>, src: &Option<T>) {
     if dst.is_none() {
         *dst = src.clone();
@@ -464,6 +511,14 @@ fn merge_if_u8_default(dst: &mut u8, src: Option<u8>, default: u8) {
         && let Some(value) = src
     {
         *dst = value;
+    }
+}
+
+fn merge_if_string_default(dst: &mut String, src: Option<&str>, default: &str) {
+    if dst == default
+        && let Some(value) = src
+    {
+        *dst = value.to_string();
     }
 }
 

@@ -20,6 +20,11 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
       <img src="docs/images/gui-demo.png" alt="tu gui demo" width="100%" />
     </td>
   </tr>
+  <tr>
+    <td colspan="2" align="center" valign="top">
+      <img src="docs/images/share-demo.png" alt="tu share image demo" width="100%" />
+    </td>
+  </tr>
 </table>
 
 ## Install
@@ -48,12 +53,15 @@ cargo binstall tokenusage --no-confirm
 tu
 tu live
 tu gui
+tu img --output tokenusage-share.png                 # daily view (today, hourly bars)
+tu img --period weekly --output tokenusage-week.png  # weekly view (daily bars)
 ```
 
 ## Why tokenusage
 
 - Faster feedback loop: native Rust + parallel scan/parsing + incremental cache.
 - One dashboard for both Codex and Claude, with merged totals and per-model breakdown.
+- Share-ready image card (`tu img`) for posting your token/cost trend.
 - Works in terminal and desktop GUI without sending your logs to a cloud service.
 
 ## FAQ
@@ -101,7 +109,7 @@ Results:
 ## Command Overview
 
 ```text
-tu [daily|codex|claude|monthly|weekly|session|blocks|live|statusline|gui]
+tu [daily|codex|claude|monthly|weekly|img|session|blocks|live|statusline|gui]
 ```
 
 Useful commands:
@@ -111,6 +119,9 @@ Useful commands:
 - `tu blocks --active`
 - `tu blocks --live`
 - `tu live`
+- `tu img --output tokenusage-share.png` (today, hourly)
+- `tu img --period weekly --output tokenusage-week.png` (7 days, daily)
+- `tu img --logo ./logo.png --brand-url tokenusage.dev`
 - `tu statusline`
 
 ## Config File
@@ -143,6 +154,12 @@ Example:
       "sessionLength": 5,
       "refreshInterval": 1
     },
+    "img": {
+      "period": "daily",
+      "bars": 24,
+      "brand": "tokenusage",
+      "brandUrl": "github.com/hanbu97/tokenusage"
+    },
     "weekly": {
       "startOfWeek": "monday"
     }
@@ -169,6 +186,8 @@ python3 examples/demo/generate_demo_data.py
 tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
 tu live --config ./examples/demo/tu.demo.json
 tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
+tu img --config ./examples/demo/tu.demo.json --since 2026-02-27 --until 2026-02-27 --output ./docs/images/share-demo.png
+tu img --config ./examples/demo/tu.demo.json --period weekly --since 2026-02-22 --until 2026-02-28 --output ./docs/images/share-week-demo.png
 ```
 
 ## Development

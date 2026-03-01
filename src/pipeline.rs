@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike, Utc};
 use chrono_tz::Tz;
 use crossbeam_channel::{Receiver, bounded};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -42,10 +42,32 @@ use crate::types::{
 };
 
 #[derive(Debug, Clone)]
-enum TimeZoneMode {
+pub(crate) enum TimeZoneMode {
     Local,
     Utc,
     Named(Tz),
+}
+
+impl TimeZoneMode {
+    pub(crate) fn date_of(&self, ts: DateTime<Utc>) -> NaiveDate {
+        match self {
+            TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
+            TimeZoneMode::Utc => ts.date_naive(),
+            TimeZoneMode::Named(tz) => ts.with_timezone(tz).date_naive(),
+        }
+    }
+
+    pub(crate) fn hour_of(&self, ts: DateTime<Utc>) -> u32 {
+        match self {
+            TimeZoneMode::Local => ts.with_timezone(&Local).hour(),
+            TimeZoneMode::Utc => ts.hour(),
+            TimeZoneMode::Named(tz) => ts.with_timezone(tz).hour(),
+        }
+    }
+
+    pub(crate) fn now_date(&self) -> NaiveDate {
+        self.date_of(Utc::now())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -85,6 +107,12 @@ impl GroupAggregate {
 struct LoadedUsage {
     events: Vec<UsageEvent>,
     stats: ParseStats,
+}
+
+pub(crate) struct UsageSnapshot {
+    pub(crate) events: Vec<UsageEvent>,
+    pub(crate) stats: ParseStats,
+    pub(crate) timezone: TimeZoneMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +184,7 @@ struct BlockJsonReport {
     token_limit: Option<u64>,
     token_limit_source: TokenLimitSource,
     membership_estimate: Option<MembershipEstimate>,
+    official_codex: Option<OfficialCodexSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +196,19 @@ struct BlockReportBuildOptions {
     token_limit: Option<u64>,
     token_limit_source: TokenLimitSource,
     membership_estimate: Option<MembershipEstimate>,
+    official_codex: Option<OfficialCodexSnapshot>,
     now: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OfficialCodexSnapshot {
+    plan_type: Option<String>,
+    primary_used_percent: Option<f64>,
+    secondary_used_percent: Option<f64>,
+    primary_window_mins: Option<i64>,
+    secondary_window_mins: Option<i64>,
+    primary_resets_at: Option<i64>,
+    secondary_resets_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,21 +282,25 @@ struct LiveFrameContext<'a> {
     refresh_every: u64,
     window_secs: i64,
     elapsed_secs: i64,
+    tz: &'a TimeZoneMode,
     now_text: String,
     block_start_text: String,
     block_end_text: String,
     limit: LimitDisplayContext<'a>,
+    official_codex: Option<&'a OfficialCodexSnapshot>,
     active: Option<&'a ActiveBlockSummary>,
     stats: &'a ParseStats,
 }
 
 impl<'a> LiveFrameContext<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         now: DateTime<Utc>,
-        tz: &TimeZoneMode,
+        tz: &'a TimeZoneMode,
         window_secs: i64,
         refresh_every: u64,
         limit: LimitDisplayContext<'a>,
+        official_codex: Option<&'a OfficialCodexSnapshot>,
         active: Option<&'a ActiveBlockSummary>,
         stats: &'a ParseStats,
     ) -> Self {
@@ -268,10 +313,12 @@ impl<'a> LiveFrameContext<'a> {
             refresh_every,
             window_secs,
             elapsed_secs: (now_unix - block_start_unix).clamp(0, window_secs.max(1)),
+            tz,
             now_text: format_display_datetime(now, tz),
             block_start_text: format_display_datetime(block_start, tz),
             block_end_text: format_display_datetime(block_end, tz),
             limit,
+            official_codex,
             active,
             stats,
         }
@@ -710,9 +757,20 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
+    let official_codex = if args.official_limits {
+        match fetch_codex_official_limits().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                eprintln!("official: failed to fetch Codex limits ({error})");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     if args.live {
-        return run_blocks_live(&args, &tz, window_secs, token_limit_mode).await;
+        return run_blocks_live(&args, &tz, window_secs, token_limit_mode, official_codex).await;
     }
 
     let loaded = load_usage(&args.common, &tz).await?;
@@ -737,6 +795,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             token_limit: resolved_limit,
             token_limit_source,
             membership_estimate: membership_estimate.clone(),
+            official_codex: official_codex.clone(),
             now,
         },
     );
@@ -766,6 +825,8 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             &json_report.membership_estimate,
             resolved_limit,
             token_limit_source,
+            json_report.official_codex.as_ref(),
+            &tz,
         );
         print_debug(&show.stats, &args.common);
         Ok(())
@@ -1154,6 +1215,7 @@ fn build_block_json_report(
         token_limit,
         token_limit_source,
         membership_estimate,
+        official_codex,
         now,
     } = options;
     let mut grouped: HashMap<i64, GroupAggregate> = HashMap::new();
@@ -1227,6 +1289,7 @@ fn build_block_json_report(
         token_limit,
         token_limit_source,
         membership_estimate,
+        official_codex,
     }
 }
 
@@ -1235,6 +1298,7 @@ async fn run_blocks_live(
     tz: &TimeZoneMode,
     window_secs: i64,
     token_limit_mode: Option<TokenLimitMode>,
+    mut official_codex: Option<OfficialCodexSnapshot>,
 ) -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("--live requires an interactive terminal");
@@ -1242,10 +1306,25 @@ async fn run_blocks_live(
 
     let refresh_every = args.refresh_interval.max(1);
     let mut session = BlocksLiveSession::enter()?;
+    let mut last_official_refresh = Instant::now();
 
     loop {
         let now = Utc::now();
         let loaded = load_usage(&args.common, tz).await?;
+        if args.official_limits
+            && (official_codex.is_none()
+                || last_official_refresh.elapsed() >= Duration::from_secs(30))
+        {
+            match fetch_codex_official_limits().await {
+                Ok(snapshot) => {
+                    official_codex = Some(snapshot);
+                    last_official_refresh = Instant::now();
+                }
+                Err(_) => {
+                    last_official_refresh = Instant::now();
+                }
+            }
+        }
         let membership_estimate = estimate_membership_from_logs(&loaded.events, now, window_secs);
         let inferred_limit = membership_estimate
             .as_ref()
@@ -1266,6 +1345,7 @@ async fn run_blocks_live(
                 token_limit_source,
                 membership_estimate: membership_estimate.as_ref(),
             },
+            official_codex.as_ref(),
             active.as_ref(),
             &loaded.stats,
         );
@@ -1395,6 +1475,8 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
         context.limit.token_limit,
         context.limit.token_limit_source,
         context.limit.membership_estimate,
+        context.official_codex,
+        context.tz,
     ));
     let body_widget = Paragraph::new(body_lines).wrap(Wrap { trim: true });
     frame.render_widget(body_widget, body_area);
@@ -1575,9 +1657,11 @@ fn live_projection_lines(
     token_limit: Option<u64>,
     token_limit_source: TokenLimitSource,
     membership_estimate: Option<&MembershipEstimate>,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    tz: &TimeZoneMode,
 ) -> Vec<Line<'static>> {
     let Some(active_block) = active else {
-        return match token_limit {
+        let mut lines = match token_limit {
             Some(limit) if limit > 0 => {
                 let label = if token_limit_source == TokenLimitSource::EstimatedFromLogs {
                     "Estimated token limit"
@@ -1605,6 +1689,8 @@ fn live_projection_lines(
                 }
             }
         };
+        append_official_codex_lines(&mut lines, official_codex, tz);
+        return lines;
     };
 
     let current_tokens = active_block.totals.total_tokens;
@@ -1674,6 +1760,7 @@ fn live_projection_lines(
             estimate.confidence * 100.0
         )));
     }
+    append_official_codex_lines(&mut lines, official_codex, tz);
 
     lines
 }
@@ -1866,12 +1953,25 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
 
     let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
     let block_summary = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
+    let official_codex = if args.official_limits {
+        match fetch_codex_official_limits().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                eprintln!("official: failed to fetch Codex limits ({error})");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let line = build_statusline_line(
         &args,
         hook.as_ref(),
         session_totals.as_ref(),
         &today_totals,
         block_summary.as_ref(),
+        official_codex.as_ref(),
+        &tz,
     );
 
     println!("{line}");
@@ -1936,6 +2036,16 @@ pub(crate) async fn collect_report(
     };
 
     Ok(build_report_from_rows(rows, loaded.stats))
+}
+
+pub(crate) async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {
+    let timezone = parse_timezone_mode(common.timezone.as_deref())?;
+    let loaded = load_usage(&common, &timezone).await?;
+    Ok(UsageSnapshot {
+        events: loaded.events,
+        stats: loaded.stats,
+        timezone,
+    })
 }
 
 fn read_statusline_hook_input() -> Result<Option<StatuslineHookInput>> {
@@ -2136,6 +2246,8 @@ fn build_statusline_line(
     session_totals: Option<&TokenCounts>,
     today_totals: &TokenCounts,
     block: Option<&ActiveBlockSummary>,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    tz: &TimeZoneMode,
 ) -> String {
     let model_name = hook
         .and_then(|h| h.model.as_ref())
@@ -2221,7 +2333,44 @@ fn build_statusline_line(
         }
     }
 
+    if let Some(official) = official_codex {
+        parts.push(build_statusline_official_segment(official, tz));
+    }
+
     parts.join(" | ")
+}
+
+fn build_statusline_official_segment(
+    official: &OfficialCodexSnapshot,
+    tz: &TimeZoneMode,
+) -> String {
+    let plan = official.plan_type.as_deref().unwrap_or("unknown");
+    let now = Utc::now();
+    let mut parts = vec![format!("official {plan}")];
+
+    if let Some(primary_used) = official.primary_used_percent {
+        let remaining = (100.0 - primary_used).clamp(0.0, 100.0);
+        let mut entry = format!("5h {:.1}% left", remaining);
+        if let Some(resets_at) = official.primary_resets_at {
+            let reset_text = format_reset_timestamp(resets_at, tz);
+            let eta_text = format_time_until_reset_short(resets_at, now);
+            entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+        }
+        parts.push(entry);
+    }
+
+    if let Some(secondary_used) = official.secondary_used_percent {
+        let remaining = (100.0 - secondary_used).clamp(0.0, 100.0);
+        let mut entry = format!("wk {:.1}% left", remaining);
+        if let Some(resets_at) = official.secondary_resets_at {
+            let reset_text = format_reset_timestamp(resets_at, tz);
+            let eta_text = format_time_until_reset_short(resets_at, now);
+            entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+        }
+        parts.push(entry);
+    }
+
+    parts.join(" ")
 }
 
 fn format_remaining_minutes(minutes: i64) -> String {
@@ -2239,50 +2388,430 @@ fn format_hours_minutes(minutes: i64) -> String {
     }
 }
 
+fn append_official_codex_lines(
+    lines: &mut Vec<Line<'static>>,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    tz: &TimeZoneMode,
+) {
+    let Some(official) = official_codex else {
+        return;
+    };
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "Official Codex",
+        Style::default()
+            .fg(TuiColor::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(format!(
+        "Plan: {}",
+        official.plan_type.as_deref().unwrap_or("unknown")
+    )));
+    if let Some(primary) = official.primary_used_percent {
+        lines.push(Line::from(format_official_window_line(
+            "5h",
+            primary,
+            official.primary_window_mins,
+            official.primary_resets_at,
+            tz,
+        )));
+    }
+    if let Some(weekly) = official.secondary_used_percent {
+        lines.push(Line::from(format_official_window_line(
+            "Weekly",
+            weekly,
+            official.secondary_window_mins,
+            official.secondary_resets_at,
+            tz,
+        )));
+    }
+}
+
+fn format_official_window_line(
+    label: &str,
+    used_percent: f64,
+    window_mins: Option<i64>,
+    resets_at: Option<i64>,
+    tz: &TimeZoneMode,
+) -> String {
+    let mut text = format!(
+        "{label}: used {:.1}% | remaining {:.1}%",
+        used_percent,
+        (100.0 - used_percent).clamp(0.0, 100.0)
+    );
+    let details = official_window_details(window_mins, resets_at, tz);
+    if !details.is_empty() {
+        text.push_str(" | ");
+        text.push_str(&details.join(" | "));
+    }
+    text
+}
+
+fn official_window_details(
+    window_mins: Option<i64>,
+    resets_at: Option<i64>,
+    tz: &TimeZoneMode,
+) -> Vec<String> {
+    let mut details = Vec::new();
+    if let Some(mins) = window_mins {
+        details.push(format!("window={mins}m"));
+    }
+    if let Some(resets_at) = resets_at {
+        details.push(format!("resets={}", format_reset_timestamp(resets_at, tz)));
+    }
+    details
+}
+
+fn format_reset_timestamp(unix_secs: i64, tz: &TimeZoneMode) -> String {
+    DateTime::from_timestamp(unix_secs, 0)
+        .map(|ts| format_display_datetime(ts, tz))
+        .unwrap_or_else(|| format!("unix:{unix_secs}"))
+}
+
+fn format_time_until_reset_short(resets_at: i64, now: DateTime<Utc>) -> String {
+    let delta_secs = (resets_at - now.timestamp()).max(0);
+    let minutes = delta_secs / 60;
+    let days = minutes / (24 * 60);
+    if days > 0 {
+        let hours = (minutes % (24 * 60)) / 60;
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else {
+        format_hours_minutes(minutes)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcEnvelope {
+    id: Option<serde_json::Value>,
+    result: Option<serde_json::Value>,
+    error: Option<RpcErrorObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcErrorObject {
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcRateLimitsReadResult {
+    #[serde(rename = "rateLimits")]
+    rate_limits: Option<RpcRateLimits>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcRateLimits {
+    primary: Option<RpcRateLimitWindow>,
+    secondary: Option<RpcRateLimitWindow>,
+    #[serde(rename = "planType")]
+    plan_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcRateLimitWindow {
+    #[serde(rename = "usedPercent")]
+    used_percent: Option<f64>,
+    #[serde(rename = "windowDurationMins")]
+    window_duration_mins: Option<i64>,
+    #[serde(rename = "resetsAt")]
+    resets_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcAccountReadResult {
+    account: Option<RpcAccount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcAccount {
+    #[serde(rename = "planType")]
+    plan_type: Option<String>,
+}
+
+async fn fetch_codex_official_limits() -> Result<OfficialCodexSnapshot> {
+    tokio::task::spawn_blocking(fetch_codex_official_limits_blocking)
+        .await
+        .context("codex app-server task join failed")?
+}
+
+fn fetch_codex_official_limits_blocking() -> Result<OfficialCodexSnapshot> {
+    let rpc_script = r#"(
+exec </dev/null;
+printf '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"tu","version":"official-limits"}}}\n';
+sleep 0.3;
+printf '{"method":"initialized","params":{}}\n';
+sleep 0.3;
+printf '{"id":2,"method":"account/rateLimits/read","params":{}}\n';
+sleep 1.2;
+printf '{"id":4,"method":"account/rateLimits/read","params":{}}\n';
+sleep 1.2;
+printf '{"id":3,"method":"account/read","params":{}}\n';
+sleep 1.8;
+) | script -q /dev/null codex -s read-only -a untrusted app-server"#;
+
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..3 {
+        let output = match Command::new("/bin/sh")
+            .arg("-lc")
+            .arg(rpc_script)
+            .output()
+            .context("failed to run codex app-server probe via script")
+        {
+            Ok(output) => output,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+
+        let mut raw = String::new();
+        raw.push_str(&String::from_utf8_lossy(&output.stdout));
+        raw.push('\n');
+        raw.push_str(&String::from_utf8_lossy(&output.stderr));
+
+        match parse_codex_official_snapshot(&raw) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < 2 {
+                    thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+    }
+
+    if let Some(error) = last_error {
+        return Err(error);
+    }
+    bail!("codex app-server probe failed with unknown error")
+}
+
+fn parse_codex_official_snapshot(raw: &str) -> Result<OfficialCodexSnapshot> {
+    let mut rate_limits_value: Option<serde_json::Value> = None;
+    let mut account_value: Option<serde_json::Value> = None;
+
+    for chunk in extract_json_objects(raw) {
+        let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(&chunk) else {
+            continue;
+        };
+
+        if let Some(error) = envelope.error {
+            if let Some(message) = error.message {
+                bail!("codex app-server error: {message}");
+            }
+            bail!("codex app-server returned error");
+        }
+
+        match rpc_envelope_id(&envelope) {
+            Some(2) | Some(4) => rate_limits_value = envelope.result,
+            Some(3) => account_value = envelope.result,
+            _ => {}
+        }
+    }
+
+    let rate_limits_value =
+        rate_limits_value.context("codex app-server missing rateLimits response")?;
+    let rate_limits: RpcRateLimitsReadResult = serde_json::from_value(rate_limits_value)
+        .context("invalid account/rateLimits/read response")?;
+    let account = account_value
+        .and_then(|value| serde_json::from_value::<RpcAccountReadResult>(value).ok())
+        .and_then(|res| res.account);
+
+    let limits = rate_limits
+        .rate_limits
+        .context("rateLimits missing from Codex response")?;
+    let primary_used_percent = limits
+        .primary
+        .as_ref()
+        .and_then(|window| window.used_percent);
+    let secondary_used_percent = limits
+        .secondary
+        .as_ref()
+        .and_then(|window| window.used_percent);
+    let primary_window_mins = limits
+        .primary
+        .as_ref()
+        .and_then(|window| window.window_duration_mins);
+    let secondary_window_mins = limits
+        .secondary
+        .as_ref()
+        .and_then(|window| window.window_duration_mins);
+    let primary_resets_at = limits.primary.as_ref().and_then(|window| window.resets_at);
+    let secondary_resets_at = limits
+        .secondary
+        .as_ref()
+        .and_then(|window| window.resets_at);
+
+    Ok(OfficialCodexSnapshot {
+        plan_type: limits
+            .plan_type
+            .or_else(|| account.and_then(|acc| acc.plan_type)),
+        primary_used_percent,
+        secondary_used_percent,
+        primary_window_mins,
+        secondary_window_mins,
+        primary_resets_at,
+        secondary_resets_at,
+    })
+}
+
+fn extract_json_objects(raw: &str) -> Vec<String> {
+    let mut objects = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for ch in raw.chars() {
+        if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') {
+            continue;
+        }
+
+        if depth == 0 {
+            if ch == '{' {
+                current.clear();
+                current.push(ch);
+                depth = 1;
+                in_string = false;
+                escape = false;
+            }
+            continue;
+        }
+
+        current.push(ch);
+
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    objects.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    objects
+}
+
+fn rpc_envelope_id(envelope: &RpcEnvelope) -> Option<i64> {
+    envelope.id.as_ref().and_then(|id| {
+        if let Some(v) = id.as_i64() {
+            Some(v)
+        } else {
+            id.as_u64().map(|v| v as i64)
+        }
+    })
+}
+
 fn print_membership_estimate(
     estimate: &Option<MembershipEstimate>,
     token_limit: Option<u64>,
     token_limit_source: TokenLimitSource,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    tz: &TimeZoneMode,
 ) {
-    let Some(estimate) = estimate else {
+    if estimate.is_none() && official_codex.is_none() {
         return;
-    };
-
-    println!();
-    println!(
-        "estimate: plan={} | window_limit={} tokens | confidence={:.0}% | completed_blocks={} | observed_total={}",
-        estimate.estimated_plan,
-        format_u64(estimate.estimated_window_tokens),
-        estimate.confidence * 100.0,
-        estimate.completed_blocks,
-        format_u64(estimate.observed_total_tokens),
-    );
-    println!(
-        "estimate: peak_window={} | p95_window={} | limit_source={}",
-        format_u64(estimate.observed_peak_window_tokens),
-        format_u64(estimate.observed_p95_window_tokens),
-        token_limit_source_label(token_limit_source),
-    );
-
-    if token_limit_source == TokenLimitSource::EstimatedFromLogs
-        && let Some(limit) = token_limit
-    {
-        println!(
-            "estimate: using inferred token limit {} (set --token-limit to override)",
-            format_u64(limit)
-        );
     }
 
-    for source in &estimate.source_breakdown {
+    if let Some(estimate) = estimate {
+        println!();
         println!(
-            "estimate:{} plan={} | limit={} | confidence={:.0}% | blocks={} | total={}",
-            source.source,
-            source.estimated_plan,
-            format_u64(source.estimated_window_tokens),
-            source.confidence * 100.0,
-            source.completed_blocks,
-            format_u64(source.observed_total_tokens),
+            "estimate: plan={} | window_limit={} tokens | confidence={:.0}% | completed_blocks={} | observed_total={}",
+            estimate.estimated_plan,
+            format_u64(estimate.estimated_window_tokens),
+            estimate.confidence * 100.0,
+            estimate.completed_blocks,
+            format_u64(estimate.observed_total_tokens),
         );
+        println!(
+            "estimate: peak_window={} | p95_window={} | limit_source={}",
+            format_u64(estimate.observed_peak_window_tokens),
+            format_u64(estimate.observed_p95_window_tokens),
+            token_limit_source_label(token_limit_source),
+        );
+
+        if token_limit_source == TokenLimitSource::EstimatedFromLogs
+            && let Some(limit) = token_limit
+        {
+            println!(
+                "estimate: using inferred token limit {} (set --token-limit to override)",
+                format_u64(limit)
+            );
+        }
+
+        for source in &estimate.source_breakdown {
+            println!(
+                "estimate:{} plan={} | limit={} | confidence={:.0}% | blocks={} | total={}",
+                source.source,
+                source.estimated_plan,
+                format_u64(source.estimated_window_tokens),
+                source.confidence * 100.0,
+                source.completed_blocks,
+                format_u64(source.observed_total_tokens),
+            );
+        }
+    }
+
+    if let Some(official) = official_codex {
+        println!();
+        let plan = official.plan_type.as_deref().unwrap_or("unknown");
+        println!("official: codex app-server plan={plan}");
+        if let Some(primary_used) = official.primary_used_percent {
+            let details = official_window_details(
+                official.primary_window_mins,
+                official.primary_resets_at,
+                tz,
+            );
+            let detail_text = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", details.join(" "))
+            };
+            println!(
+                "official: 5h used={:.1}% remaining={:.1}%{}",
+                primary_used,
+                (100.0 - primary_used).clamp(0.0, 100.0),
+                detail_text
+            );
+        }
+        if let Some(secondary_used) = official.secondary_used_percent {
+            let details = official_window_details(
+                official.secondary_window_mins,
+                official.secondary_resets_at,
+                tz,
+            );
+            let detail_text = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", details.join(" "))
+            };
+            println!(
+                "official: weekly used={:.1}% remaining={:.1}%{}",
+                secondary_used,
+                (100.0 - secondary_used).clamp(0.0, 100.0),
+                detail_text
+            );
+        }
     }
 }
 
@@ -2410,11 +2939,7 @@ fn parse_timezone_mode(input: Option<&str>) -> Result<TimeZoneMode> {
 }
 
 fn local_date(ts: DateTime<Utc>, tz: &TimeZoneMode) -> NaiveDate {
-    match tz {
-        TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
-        TimeZoneMode::Utc => ts.date_naive(),
-        TimeZoneMode::Named(tz) => ts.with_timezone(tz).date_naive(),
-    }
+    tz.date_of(ts)
 }
 
 fn format_display_datetime(ts: DateTime<Utc>, tz: &TimeZoneMode) -> String {

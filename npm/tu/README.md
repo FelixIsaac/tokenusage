@@ -5,6 +5,7 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
 - Unified report across Claude + Codex
 - Fast parallel scan + cache
 - CLI table, TUI, GUI (`iced` + `tiny-skia`)
+- Share image card generator (`tu img`)
 - Live monitor with progress bars
 
 Repository: [github.com/hanbu97/tokenusage](https://github.com/hanbu97/tokenusage)
@@ -40,12 +41,17 @@ tu live claude
 
 # GUI dashboard
 tu gui
+
+# Share image card (for social posting)
+tu img --output tokenusage-share.png
+tu img --period weekly --output tokenusage-week.png
 ```
 
 ## Screenshots
 
 ![CLI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo.png)
 ![GUI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png)
+![Share card demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png)
 
 ## Why `tu`
 

@@ -372,9 +372,11 @@ fn tui_constraints(layout: TableLayout) -> Vec<Constraint> {
 }
 
 fn tui_rows(report: &DailyReport, layout: TableLayout) -> Vec<Vec<String>> {
-    let mut rows = report
-        .daily
-        .iter()
+    let mut sorted_daily = report.daily.iter().collect::<Vec<_>>();
+    sorted_daily.sort_by(|a, b| b.date.cmp(&a.date));
+
+    let mut rows = sorted_daily
+        .into_iter()
         .map(|row| tui_day_row(row, layout))
         .collect::<Vec<_>>();
     rows.push(tui_total_row(report, layout));
