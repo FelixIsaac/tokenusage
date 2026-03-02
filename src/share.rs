@@ -850,7 +850,6 @@ fn draw_line_chart(
     }
 
     let values = points.iter().map(|p| p.tokens).collect::<Vec<_>>();
-    let min_value = values.iter().copied().min().unwrap_or(0);
     let max_value = values.iter().copied().max().unwrap_or(1).max(1);
     let n = values.len().max(1);
     let x_start = plot.x + 12;
@@ -940,7 +939,7 @@ fn draw_line_chart(
         rgba(145, 167, 217),
     );
 
-    let range_line = format!("{} -> {}", format_u64(min_value), format_u64(max_value));
+    let range_line = format_u64(max_value);
     let range_w = text_width(&range_line, 3) as u32;
     draw_text(
         img,
