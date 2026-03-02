@@ -165,10 +165,6 @@ struct ShareSnapshot {
     peak_tokens: (String, u64),
     top_model: Option<(String, u64)>,
     models_used: Vec<String>,
-    trend_start: u64,
-    trend_end: u64,
-    trend_delta_tokens: i64,
-    trend_delta_percent: f64,
     points: Vec<SharePoint>,
 }
 
@@ -243,9 +239,6 @@ impl ShareSnapshot {
             .map(|p| (p.label.clone(), p.tokens))
             .unwrap_or_else(|| ("-".to_string(), 0));
 
-        let (trend_start, trend_end, trend_delta_tokens, trend_delta_percent) =
-            compute_trend_metrics(&points);
-
         let (period_label, range_label) = match period {
             ImgPeriod::Daily => {
                 let target =
@@ -285,10 +278,6 @@ impl ShareSnapshot {
             peak_tokens,
             top_model,
             models_used,
-            trend_start,
-            trend_end,
-            trend_delta_tokens,
-            trend_delta_percent,
             points,
         })
     }
@@ -473,20 +462,8 @@ fn draw_share_card_portrait(
         rgba(176, 201, 236),
     );
 
-    let big_number = format!(
-        "{sign}{value}",
-        sign = if snapshot.trend_delta_tokens >= 0 {
-            "+"
-        } else {
-            "-"
-        },
-        value = format_compact_u64(snapshot.trend_delta_tokens.unsigned_abs())
-    );
-    let big_color = if snapshot.trend_delta_tokens >= 0 {
-        rgba(112, 241, 166)
-    } else {
-        rgba(255, 129, 141)
-    };
+    let big_number = format_compact_u64(snapshot.total_tokens);
+    let big_color = rgba(112, 241, 166);
     draw_text(
         img,
         layout.x as i32 + 14,
@@ -717,53 +694,18 @@ fn draw_header(
         img,
         area.x as i32,
         area.y as i32 + 112,
-        &format!("{:+.2}%", snapshot.trend_delta_percent),
+        &format_compact_u64(snapshot.total_tokens),
         if portrait { 11 } else { 10 },
-        if snapshot.trend_delta_tokens >= 0 {
-            rgba(125, 235, 168)
-        } else {
-            rgba(255, 121, 134)
-        },
+        rgba(125, 235, 168),
     );
-    let delta_line = if portrait {
-        format!(
-            "delta {} tokens",
-            format_signed_i64(snapshot.trend_delta_tokens)
-        )
-    } else {
-        format!(
-            "delta {} tokens  ({} -> {})",
-            format_signed_i64(snapshot.trend_delta_tokens),
-            format_u64(snapshot.trend_start),
-            format_u64(snapshot.trend_end)
-        )
-    };
     draw_text(
         img,
         area.x as i32,
         area.y as i32 + if portrait { 218 } else { 200 },
-        &delta_line,
+        "TOTAL USAGE",
         3,
-        if snapshot.trend_delta_tokens >= 0 {
-            rgba(156, 224, 185)
-        } else {
-            rgba(255, 162, 170)
-        },
+        rgba(156, 224, 185),
     );
-    if portrait {
-        draw_text(
-            img,
-            area.x as i32,
-            area.y as i32 + 248,
-            &format!(
-                "from {} to {}",
-                format_u64(snapshot.trend_start),
-                format_u64(snapshot.trend_end)
-            ),
-            2,
-            rgba(156, 178, 220),
-        );
-    }
     if portrait {
         let base_y = area.y as i32 + 286;
         draw_text(
@@ -1586,24 +1528,6 @@ fn draw_circle(img: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u
     }
 }
 
-fn compute_trend_metrics(points: &[SharePoint]) -> (u64, u64, i64, f64) {
-    let start = points
-        .iter()
-        .find(|p| p.tokens > 0)
-        .map(|p| p.tokens)
-        .unwrap_or_else(|| points.first().map(|p| p.tokens).unwrap_or(0));
-    let end = points.last().map(|p| p.tokens).unwrap_or(0);
-    let delta = end as i64 - start as i64;
-    let pct = if start > 0 {
-        (delta as f64 / start as f64) * 100.0
-    } else if end > 0 {
-        100.0
-    } else {
-        0.0
-    };
-    (start, end, delta, pct)
-}
-
 fn aggregate_hourly(
     events: &[UsageEvent],
     timezone: &crate::pipeline::TimeZoneMode,
@@ -2300,14 +2224,6 @@ fn format_u64(value: u64) -> String {
         }
     }
     out
-}
-
-fn format_signed_i64(value: i64) -> String {
-    if value < 0 {
-        format!("-{}", format_u64(value.unsigned_abs()))
-    } else {
-        format!("+{}", format_u64(value as u64))
-    }
 }
 
 fn format_compact_u64(value: u64) -> String {
