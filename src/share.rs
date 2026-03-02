@@ -382,7 +382,7 @@ fn draw_share_card(img: &mut RgbaImage, snapshot: &ShareSnapshot, args: &ImgArgs
     );
 
     draw_header(img, header, snapshot, args, portrait)?;
-    draw_line_chart(img, chart, "trend", &snapshot.points, rgba(189, 205, 229));
+    draw_line_chart(img, chart, "trend", &snapshot.points, rgba(98, 245, 154));
     draw_footer(img, footer, args);
     Ok(())
 }
@@ -907,54 +907,75 @@ fn draw_line_chart(
         }
     }
 
-    let values = points.iter().map(|p| p.tokens as f64).collect::<Vec<_>>();
-    let min_value = values.iter().copied().fold(f64::MAX, f64::min);
-    let max_value = values.iter().copied().fold(f64::MIN, f64::max);
-    let span = (max_value - min_value).max(1.0);
-    let n = values.len().max(2);
+    let values = points.iter().map(|p| p.tokens).collect::<Vec<_>>();
+    let min_value = values.iter().copied().min().unwrap_or(0);
+    let max_value = values.iter().copied().max().unwrap_or(1).max(1);
+    let n = values.len().max(1);
     let x_start = plot.x + 12;
     let x_end = plot.right().saturating_sub(12);
     let y_bottom = plot.bottom().saturating_sub(26);
     let y_top = plot.y + 14;
+    let x_span = (x_end.saturating_sub(x_start)).max(1) as f64;
+    let slot_w = (x_span / n as f64).max(1.0);
+    let bar_w = (slot_w * 0.56).clamp(3.0, 28.0).round() as i32;
+    let y_span = (y_bottom.saturating_sub(y_top)).max(1) as f64;
 
-    let mut path = Vec::<(i32, i32)>::with_capacity(values.len());
+    draw_line(
+        img,
+        x_start as i32,
+        y_bottom as i32,
+        x_end as i32,
+        y_bottom as i32,
+        Rgba([75, 247, 181, 138]),
+    );
+
+    let value_scale = if n <= 12 { 3u32 } else { 2u32 };
+    let label_step = if n <= 10 {
+        1
+    } else if n <= 18 {
+        2
+    } else {
+        3
+    };
+
     for (idx, value) in values.iter().enumerate() {
-        let t = if n <= 1 {
-            0.0
-        } else {
-            idx as f64 / (n - 1) as f64
-        };
-        let x = x_start as f64 + (x_end.saturating_sub(x_start)) as f64 * t;
-        let norm = (value - min_value) / span;
-        let y = y_bottom as f64 - (y_bottom.saturating_sub(y_top)) as f64 * norm;
-        path.push((x.round() as i32, y.round() as i32));
-    }
+        if *value == 0 {
+            continue;
+        }
+        let center_x = x_start as f64 + (idx as f64 + 0.5) * slot_w;
+        let h = ((*value as f64 / max_value as f64) * y_span).round() as i32;
+        let h = h.max(1);
+        let x0 = center_x.round() as i32 - bar_w / 2;
+        let y0 = y_bottom as i32 - h;
 
-    for seg in path.windows(2) {
-        let (x0, y0) = seg[0];
-        let (x1, y1) = seg[1];
-        draw_line(img, x0, y0, x1, y1, Rgba([126, 154, 205, 84]));
-        draw_line(img, x0, y0 - 1, x1, y1 - 1, Rgba([126, 154, 205, 34]));
-        let yb0 = y_bottom as i32;
-        draw_line(img, x0, y0, x0, yb0, Rgba([52, 88, 142, 20]));
-    }
-    for seg in path.windows(2) {
-        let (x0, y0) = seg[0];
-        let (x1, y1) = seg[1];
-        draw_line(img, x0, y0, x1, y1, line_color);
-    }
+        draw_rect_clamped_i32(img, x0, y0, bar_w, h, line_color);
+        draw_rect_clamped_i32(img, x0, y0, bar_w, 1, rgba(170, 255, 213));
 
-    if let Some(&(lx, ly)) = path.last() {
-        draw_circle(img, lx, ly, 5, rgba(110, 245, 165));
-        draw_circle(img, lx, ly, 2, rgba(10, 15, 31));
-    }
-    if let Some((peak_idx, _)) = values
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        && let Some(&(px, py)) = path.get(peak_idx)
-    {
-        draw_circle(img, px, py, 4, rgba(248, 196, 114));
+        if idx % label_step != 0 && idx + 1 != n {
+            continue;
+        }
+        let value_text = format_compact_u64(*value);
+        let value_w = text_width(&value_text, value_scale) as i32;
+        let mut tx = center_x.round() as i32 - value_w / 2;
+        let min_x = plot.x as i32 + 4;
+        let max_x = plot.right().saturating_sub(value_w as u32 + 4) as i32;
+        if tx < min_x {
+            tx = min_x;
+        }
+        if tx > max_x {
+            tx = max_x;
+        }
+        let text_h = line_height_px(value_scale).max(1);
+        let ty = (y0 - text_h - 3).max(plot.y as i32 + 3);
+        draw_rect_clamped_i32(
+            img,
+            tx - 2,
+            ty - 1,
+            value_w + 4,
+            text_h + 2,
+            Rgba([6, 14, 27, 220]),
+        );
+        draw_text(img, tx, ty, &value_text, value_scale, rgba(204, 248, 223));
     }
 
     let start_label = points.first().map(|p| p.label.as_str()).unwrap_or("-");
@@ -977,11 +998,7 @@ fn draw_line_chart(
         rgba(145, 167, 217),
     );
 
-    let range_line = format!(
-        "{} -> {}",
-        format_u64(min_value.max(0.0).round() as u64),
-        format_u64(max_value.max(0.0).round() as u64)
-    );
+    let range_line = format!("{} -> {}", format_u64(min_value), format_u64(max_value));
     let range_w = text_width(&range_line, 3) as u32;
     draw_text(
         img,
