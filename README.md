@@ -179,7 +179,7 @@ python3 examples/demo/generate_demo_data.py
 tu daily --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
 tu live --config ./examples/demo/tu.demo.json
 tu gui --config ./examples/demo/tu.demo.json --since 2026-02-09 --until 2026-02-28
-tu img --config ./examples/demo/tu.demo.json --since 2026-02-27 --until 2026-02-27 --output ./docs/images/share-demo.png
+tu img --config ./examples/demo/tu.demo.json --since 2026-02-28 --until 2026-02-28 --output ./docs/images/share-demo.png
 tu img --config ./examples/demo/tu.demo.json --period weekly --since 2026-02-22 --until 2026-02-28 --output ./docs/images/share-week-demo.png
 ```
 
