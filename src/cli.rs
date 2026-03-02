@@ -290,9 +290,13 @@ pub(crate) enum GuiPeriod {
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ImgPeriod {
-    #[default]
+    #[value(alias = "day")]
     Daily,
+    #[value(alias = "week")]
     Weekly,
+    #[default]
+    #[value(hide = true)]
+    Both,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -317,7 +321,7 @@ pub(crate) struct GuiArgs {
 pub(crate) struct ImgArgs {
     #[command(flatten)]
     pub(crate) common: CommonArgs,
-    #[arg(long, value_enum, default_value_t = ImgPeriod::Daily)]
+    #[arg(long, value_enum, default_value_t = ImgPeriod::Both)]
     pub(crate) period: ImgPeriod,
     #[arg(long, short = 'p', help = "Filter specific project (daily mode only)")]
     pub(crate) project: Option<String>,
@@ -344,12 +348,13 @@ pub(crate) struct ImgArgs {
         help = "Brand URL shown on the card"
     )]
     pub(crate) brand_url: String,
-    #[arg(long, help = "Optional logo image path (PNG/JPG/WebP)")]
+    #[arg(long, help = "Optional logo image path (SVG/PNG/JPG/WebP)")]
     pub(crate) logo: Option<String>,
 }
 
 pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     normalize_live_shortcuts(&mut argv);
+    normalize_img_shortcuts(&mut argv);
 
     let first = argv.get(1).map(String::as_str);
     let should_insert_daily = match first {
@@ -395,4 +400,21 @@ fn normalize_live_shortcuts(argv: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+fn normalize_img_shortcuts(argv: &mut Vec<String>) {
+    if argv.get(1).map(String::as_str) != Some("img") {
+        return;
+    }
+    let Some(selector) = argv.get(2).map(String::as_str) else {
+        return;
+    };
+    let period = match selector {
+        "daily" | "day" => "daily",
+        "weekly" | "week" => "weekly",
+        _ => return,
+    };
+    argv.remove(2);
+    argv.insert(2, "--period".to_string());
+    argv.insert(3, period.to_string());
 }

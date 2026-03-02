@@ -443,7 +443,7 @@ fn apply_gui_config(args: &mut GuiArgs, cfg: &GuiConfig) {
 }
 
 fn apply_img_config(args: &mut ImgArgs, cfg: &ImgConfig) {
-    merge_if_default(&mut args.period, cfg.period, ImgPeriod::Daily);
+    merge_if_default(&mut args.period, cfg.period, ImgPeriod::Both);
     merge_if_none(&mut args.project, &cfg.project);
     merge_if_string_default(
         &mut args.output,

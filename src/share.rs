@@ -44,8 +44,53 @@ pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
         bail!("--width/--height too small; minimum edges are 620x960");
     }
 
+    match args.period {
+        ImgPeriod::Daily | ImgPeriod::Weekly => {
+            let output = resolve_output_abs(&args.output)?;
+            let period = args.period;
+            let snapshot =
+                render_share_image_for_period(&args, period, &output, canvas_w, canvas_h).await?;
+            println!(
+                "share image written: {} ({} view)",
+                output.display(),
+                snapshot.period_label
+            );
+        }
+        ImgPeriod::Both => {
+            let (daily_output, weekly_output) = derive_dual_outputs(&args.output)?;
+            render_share_image_for_period(
+                &args,
+                ImgPeriod::Daily,
+                &daily_output,
+                canvas_w,
+                canvas_h,
+            )
+            .await?;
+            render_share_image_for_period(
+                &args,
+                ImgPeriod::Weekly,
+                &weekly_output,
+                canvas_w,
+                canvas_h,
+            )
+            .await?;
+            // Print full generated paths on two lines for easy copy.
+            println!("{}", daily_output.display());
+            println!("{}", weekly_output.display());
+        }
+    }
+    Ok(())
+}
+
+async fn render_share_image_for_period(
+    args: &ImgArgs,
+    period: ImgPeriod,
+    output: &Path,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Result<ShareSnapshot> {
     let mut common = args.common.clone();
-    apply_default_img_range(&mut common, args.period)?;
+    apply_default_img_range(&mut common, period)?;
 
     let mut loaded = collect_usage_snapshot(common.clone()).await?;
     let _ = loaded.stats.files_discovered;
@@ -62,15 +107,11 @@ pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
         bail!("No usage data found in selected range; nothing to render");
     }
 
-    let snapshot = ShareSnapshot::build(
-        &loaded.events,
-        &loaded.timezone,
-        args.period,
-        args.bars,
-        &common,
-    )?;
+    let mut args_for_period = args.clone();
+    args_for_period.period = period;
+    let snapshot =
+        ShareSnapshot::build(&loaded.events, &loaded.timezone, period, args.bars, &common)?;
 
-    let output = expand_user_path(&args.output);
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create output dir: {}", parent.display()))?;
@@ -78,17 +119,35 @@ pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
 
     let mut img: RgbaImage = ImageBuffer::from_pixel(canvas_w, canvas_h, rgba(8, 12, 24));
     draw_gradient_background(&mut img, rgba(8, 12, 24), rgba(16, 26, 52));
-    draw_share_card(&mut img, &snapshot, &args)?;
-
-    img.save(&output)
+    draw_share_card(&mut img, &snapshot, &args_for_period)?;
+    img.save(output)
         .with_context(|| format!("Failed to save image: {}", output.display()))?;
 
-    println!(
-        "share image written: {} ({} view)",
-        output.display(),
-        snapshot.period_label
-    );
-    Ok(())
+    Ok(snapshot)
+}
+
+fn resolve_output_abs(output: &str) -> Result<PathBuf> {
+    let expanded = expand_user_path(output);
+    if expanded.is_absolute() {
+        return Ok(expanded);
+    }
+    Ok(std::env::current_dir()
+        .context("Failed to read current directory")?
+        .join(expanded))
+}
+
+fn derive_dual_outputs(base_output: &str) -> Result<(PathBuf, PathBuf)> {
+    let base = resolve_output_abs(base_output)?;
+    let parent = base.parent().unwrap_or_else(|| Path::new("."));
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("tokenusage");
+    let ext = base.extension().and_then(|s| s.to_str()).unwrap_or("png");
+    let daily = parent.join(format!("{stem}-daily.{ext}"));
+    let weekly = parent.join(format!("{stem}-weekly.{ext}"));
+    Ok((daily, weekly))
 }
 
 #[derive(Clone)]
@@ -146,6 +205,13 @@ impl ShareSnapshot {
                     .unwrap_or(end - chrono::TimeDelta::days(6));
                 aggregate_daily(events, timezone, since, end, max_points)
             }
+            ImgPeriod::Both => {
+                let end =
+                    parse_date(common.until.as_deref())?.unwrap_or_else(|| timezone.now_date());
+                let since = parse_date(common.since.as_deref())?
+                    .unwrap_or(end - chrono::TimeDelta::days(6));
+                aggregate_daily(events, timezone, since, end, max_points)
+            }
         };
 
         if points.is_empty() {
@@ -190,6 +256,16 @@ impl ShareSnapshot {
                 )
             }
             ImgPeriod::Weekly => {
+                let end =
+                    parse_date(common.until.as_deref())?.unwrap_or_else(|| timezone.now_date());
+                let since = parse_date(common.since.as_deref())?
+                    .unwrap_or(end - chrono::TimeDelta::days(6));
+                (
+                    "weekly (daily)".to_string(),
+                    format!("{} -> {}", since.format("%Y-%m-%d"), end.format("%Y-%m-%d")),
+                )
+            }
+            ImgPeriod::Both => {
                 let end =
                     parse_date(common.until.as_deref())?.unwrap_or_else(|| timezone.now_date());
                 let since = parse_date(common.since.as_deref())?
@@ -963,6 +1039,8 @@ fn draw_cyber_grid(img: &mut RgbaImage, area: Rect, spacing: u32, color: Rgba<u8
 }
 
 fn draw_stat_box(img: &mut RgbaImage, rect: Rect, title: &str, value: &str) {
+    let title_pad_x = 12i32;
+    let value_pad_x = 16i32;
     fill_rect(img, rect, rgba(6, 18, 28));
     stroke_rect(img, rect, rgba(83, 245, 179), 1);
     draw_overlay_glow(
@@ -974,7 +1052,7 @@ fn draw_stat_box(img: &mut RgbaImage, rect: Rect, title: &str, value: &str) {
     );
     draw_text(
         img,
-        rect.x as i32 + 10,
+        rect.x as i32 + title_pad_x,
         rect.y as i32 + 8,
         title,
         3,
@@ -982,7 +1060,7 @@ fn draw_stat_box(img: &mut RgbaImage, rect: Rect, title: &str, value: &str) {
     );
     draw_text(
         img,
-        rect.x as i32 + 10,
+        rect.x as i32 + value_pad_x,
         rect.y as i32 + 40,
         &truncate_chars(value, 22),
         5,
@@ -991,6 +1069,8 @@ fn draw_stat_box(img: &mut RgbaImage, rect: Rect, title: &str, value: &str) {
 }
 
 fn draw_models_box(img: &mut RgbaImage, rect: Rect, title: &str, models: &[String]) {
+    let title_pad_x = 12i32;
+    let value_pad_x = 14i32;
     fill_rect(img, rect, rgba(6, 18, 28));
     stroke_rect(img, rect, rgba(83, 245, 179), 1);
     draw_overlay_glow(
@@ -1002,7 +1082,7 @@ fn draw_models_box(img: &mut RgbaImage, rect: Rect, title: &str, models: &[Strin
     );
     draw_text(
         img,
-        rect.x as i32 + 10,
+        rect.x as i32 + title_pad_x,
         rect.y as i32 + 8,
         title,
         3,
@@ -1012,7 +1092,7 @@ fn draw_models_box(img: &mut RgbaImage, rect: Rect, title: &str, models: &[Strin
     if models.is_empty() {
         draw_text(
             img,
-            rect.x as i32 + 10,
+            rect.x as i32 + value_pad_x,
             rect.y as i32 + 40,
             "-",
             4,
@@ -1021,11 +1101,11 @@ fn draw_models_box(img: &mut RgbaImage, rect: Rect, title: &str, models: &[Strin
         return;
     }
 
-    let max_w = rect.w.saturating_sub(20);
+    let max_w = rect.w.saturating_sub(24);
     let max_h = rect.h.saturating_sub(40);
     let mut chosen_scale = 1u32;
     let mut chosen_lines = models.to_vec();
-    for scale in (1u32..=4u32).rev() {
+    for scale in (1u32..=5u32).rev() {
         let Some(lines) = layout_models_lines_limited(models, scale, max_w, 2) else {
             continue;
         };
@@ -1046,7 +1126,7 @@ fn draw_models_box(img: &mut RgbaImage, rect: Rect, title: &str, models: &[Strin
         }
         draw_text(
             img,
-            rect.x as i32 + 10,
+            rect.x as i32 + value_pad_x,
             y,
             line,
             chosen_scale,
@@ -1067,6 +1147,32 @@ fn layout_models_lines_limited(
     }
     if max_lines == 0 {
         return None;
+    }
+
+    if max_lines == 2 {
+        let joined = models.join(" · ");
+        if text_width(&joined, scale) as u32 <= max_w {
+            return Some(vec![joined]);
+        }
+        if models.len() >= 2 {
+            let mut best: Option<(u32, Vec<String>)> = None;
+            for split in 1..models.len() {
+                let left = models[..split].join(" · ");
+                let right = models[split..].join(" · ");
+                let lw = text_width(&left, scale) as u32;
+                let rw = text_width(&right, scale) as u32;
+                if lw <= max_w && rw <= max_w {
+                    let score = lw.max(rw);
+                    match &best {
+                        Some((best_score, _)) if score >= *best_score => {}
+                        _ => best = Some((score, vec![left, right])),
+                    }
+                }
+            }
+            if let Some((_, lines)) = best {
+                return Some(lines);
+            }
+        }
     }
 
     let mut lines = Vec::new();
@@ -1223,6 +1329,24 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
     if count > 18 {
         value_step = 3;
     }
+    let slot_px = (x_plot_w / count as f64).max(1.0);
+    let bar_w_px = (slot_px * 0.40).max(4.0);
+    let bar_bottom = plot.y as f64 + margin_px + y_plot_h;
+    let mut bar_rects = Vec::with_capacity(points.len());
+    for (idx, point) in points.iter().enumerate() {
+        let base = idx as f64 * slot;
+        let center = base + 5.0;
+        let px = plot.x as f64 + margin_px + (center / x_max) * x_plot_w;
+        let py = plot.y as f64 + margin_px + (1.0 - (point.tokens as f64 / upper)) * y_plot_h;
+        let rect = (
+            (px - bar_w_px * 0.5).floor() as i32,
+            py.round() as i32,
+            bar_w_px.ceil().max(1.0) as i32,
+            (bar_bottom - py).ceil().max(1.0) as i32,
+        );
+        bar_rects.push(rect);
+    }
+
     for (idx, point) in points.iter().enumerate() {
         if idx % value_step != 0 && idx + 1 != count {
             continue;
@@ -1245,7 +1369,38 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
         if tx > max_x {
             tx = max_x;
         }
-        let ty = (py.round() as i32 - line_height_px(value_label_scale) - 2).max(plot.y as i32 + 4);
+        let label_h = line_height_px(value_label_scale).max(1);
+        let mut ty = (py.round() as i32 - label_h - 2).max(plot.y as i32 + 4);
+        let top_limit = plot.y as i32 + 2;
+        for _ in 0..10 {
+            let label_rect = (tx - 2, ty - 1, w + 4, label_h + 2);
+            let mut intersects = false;
+            for (bar_idx, bar_rect) in bar_rects.iter().enumerate() {
+                if bar_idx == idx {
+                    continue;
+                }
+                if rects_overlap_i32(label_rect, *bar_rect) {
+                    intersects = true;
+                    break;
+                }
+            }
+            if !intersects {
+                break;
+            }
+            ty -= (label_h / 2).max(2);
+            if ty <= top_limit {
+                ty = top_limit;
+                break;
+            }
+        }
+        draw_rect_clamped_i32(
+            img,
+            tx - 2,
+            ty - 1,
+            w + 4,
+            label_h + 2,
+            Rgba([6, 14, 27, 224]),
+        );
         draw_text(
             img,
             tx + 1,
@@ -1257,6 +1412,44 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
         draw_text(img, tx, ty, &value, value_label_scale, rgba(204, 248, 223));
     }
     Ok(())
+}
+
+fn rects_overlap_i32(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+    let (ax, ay, aw, ah) = a;
+    let (bx, by, bw, bh) = b;
+    if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
+        return false;
+    }
+    let ar = ax + aw;
+    let ab = ay + ah;
+    let br = bx + bw;
+    let bb = by + bh;
+    ax < br && ar > bx && ay < bb && ab > by
+}
+
+fn draw_rect_clamped_i32(img: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, color: Rgba<u8>) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let left = x.max(0) as u32;
+    let top = y.max(0) as u32;
+    let right = (x + w).max(0) as u32;
+    let bottom = (y + h).max(0) as u32;
+    let right = right.min(img.width());
+    let bottom = bottom.min(img.height());
+    if right <= left || bottom <= top {
+        return;
+    }
+    fill_rect(
+        img,
+        Rect {
+            x: left,
+            y: top,
+            w: right - left,
+            h: bottom - top,
+        },
+        color,
+    );
 }
 
 fn draw_overlay_glow(img: &mut RgbaImage, cx: u32, cy: u32, radius: u32, color: Rgba<u8>) {
@@ -1505,6 +1698,7 @@ fn apply_default_img_range(common: &mut crate::cli::CommonArgs, period: ImgPerio
             }
             (Some(_), Some(_)) => {}
         },
+        ImgPeriod::Both => {}
     }
 
     Ok(())
