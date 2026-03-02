@@ -716,7 +716,7 @@ fn draw_header(
     draw_text(
         img,
         area.x as i32,
-        area.y as i32 + if portrait { 112 } else { 112 },
+        area.y as i32 + 112,
         &format!("{:+.2}%", snapshot.trend_delta_percent),
         if portrait { 11 } else { 10 },
         if snapshot.trend_delta_tokens >= 0 {
@@ -1905,7 +1905,15 @@ fn draw_default_logo_mark(img: &mut RgbaImage, x: u32, y: u32, size: u32, bg: Rg
     let u_radius = ((size as f32) * 0.24).max(10.0);
     let u_thickness = ((size as f32) * 0.17).max(4.0).round() as i32;
     // Draw the lower smile arc (∪). 18..162 degrees keeps the arc in the lower half.
-    draw_arc_stroke(img, u_cx, u_cy, u_radius, 18.0, 162.0, u_thickness, accent);
+    draw_arc_stroke(
+        img,
+        (u_cx, u_cy),
+        u_radius,
+        18.0,
+        162.0,
+        u_thickness,
+        accent,
+    );
 }
 
 fn draw_filled_ellipse(img: &mut RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, color: Rgba<u8>) {
@@ -1931,8 +1939,7 @@ fn draw_filled_ellipse(img: &mut RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, 
 
 fn draw_arc_stroke(
     img: &mut RgbaImage,
-    cx: i32,
-    cy: i32,
+    center: (i32, i32),
     radius: f32,
     start_deg: f32,
     end_deg: f32,
@@ -1943,6 +1950,7 @@ fn draw_arc_stroke(
         return;
     }
     let dot_r = (thickness / 2).max(1);
+    let (cx, cy) = center;
     let mut deg = start_deg;
     while deg <= end_deg {
         let rad = deg.to_radians();
