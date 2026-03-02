@@ -43,15 +43,17 @@ tu live claude
 tu gui
 
 # Share image card (for social posting)
-tu img --output tokenusage-share.png
-tu img --period weekly --output tokenusage-week.png
+tu img
+tu img day
+tu img week
 ```
 
 ## Screenshots
 
-![CLI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo.png)
+![CLI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo-padded.png)
 ![GUI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png)
-![Share card demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png)
+![Share card daily demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png)
+![Share card weekly demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-week-demo.png)
 
 ## Why `tu`
 

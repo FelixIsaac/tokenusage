@@ -229,7 +229,7 @@ jobs:
           cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
           test "${RELEASE_VERSION}" = "$cargo_version"
           cd npm/tu
-          npm version "${cargo_version}" --no-git-tag-version
+          npm version "${cargo_version}" --no-git-tag-version --allow-same-version
           NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --access public
 
   publish-homebrew-tap:
