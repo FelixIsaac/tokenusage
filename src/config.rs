@@ -457,7 +457,7 @@ fn apply_img_config(args: &mut ImgArgs, cfg: &ImgConfig) {
     merge_if_string_default(
         &mut args.brand_url,
         cfg.brand_url.as_deref(),
-        "github.com/hanbu97/tokenusage",
+        "https://github.com/hanbu97/tokenusage",
     );
     merge_if_none(&mut args.logo, &cfg.logo);
 }

@@ -50,11 +50,11 @@ tu img week
 
 ## Screenshots
 
-![CLI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo-padded.png)
-![GUI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png)
-![Live demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/live-demo.png)
-![Share card daily demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png)
-![Share card weekly demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-week-demo.png)
+[![CLI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo-padded.png)](https://github.com/hanbu97/tokenusage)
+[![GUI demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png)](https://github.com/hanbu97/tokenusage)
+[![Live demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/live-demo.png)](https://github.com/hanbu97/tokenusage)
+[![Share card daily demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png)](https://github.com/hanbu97/tokenusage)
+[![Share card weekly demo](https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-week-demo.png)](https://github.com/hanbu97/tokenusage)
 
 ## Why `tu`
 

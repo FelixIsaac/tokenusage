@@ -5009,15 +5009,13 @@ fn discover_files_in_root(
     kind: SourceKind,
     root: &Path,
     ignore_rules: &PathIgnoreRules,
-    filter: DateFilter,
+    _filter: DateFilter,
 ) -> Vec<DiscoveredFile> {
-    if kind == SourceKind::Codex
-        && (filter.since.is_some() || filter.until.is_some())
-        && let Some(files) = discover_codex_files_by_date_partition(root, filter, ignore_rules)
-    {
-        return files;
-    }
-
+    // NOTE:
+    // Do not short-circuit Codex discovery by directory date partition.
+    // A Codex session file can continue receiving events on later days while
+    // staying under its original directory (session start date), so partition
+    // pruning can miss valid events and undercount filtered ranges.
     let mut out = Vec::new();
     let rules = ignore_rules.clone();
     let mut builder = WalkBuilder::new(root);
@@ -5052,91 +5050,6 @@ fn discover_files_in_root(
     }
 
     out
-}
-
-fn discover_codex_files_by_date_partition(
-    root: &Path,
-    filter: DateFilter,
-    ignore_rules: &PathIgnoreRules,
-) -> Option<Vec<DiscoveredFile>> {
-    let root_name = root.file_name().and_then(|v| v.to_str())?;
-    if root_name != "sessions" && root_name != "archived_sessions" {
-        return None;
-    }
-
-    let mut since = filter
-        .since
-        .unwrap_or_else(|| filter.until.unwrap_or_else(|| Utc::now().date_naive()));
-    let mut until = filter.until.unwrap_or(since);
-    if since > until {
-        std::mem::swap(&mut since, &mut until);
-    }
-
-    let mut out = Vec::new();
-    let mut day = since;
-    while day <= until {
-        let day_dir = root
-            .join(format!("{:04}", day.year()))
-            .join(format!("{:02}", day.month()))
-            .join(format!("{:02}", day.day()));
-        if let Ok(entries) = std::fs::read_dir(&day_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if ignore_rules.should_skip_path(&path) {
-                    continue;
-                }
-                let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
-                if !is_file {
-                    continue;
-                }
-                if path
-                    .extension()
-                    .and_then(|v| v.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-                {
-                    out.push(DiscoveredFile {
-                        source: SourceKind::Codex,
-                        root: root.to_path_buf(),
-                        path: normalized_discovered_path(&path),
-                    });
-                }
-            }
-        }
-        day = day
-            .checked_add_signed(chrono::TimeDelta::days(1))
-            .unwrap_or(until + chrono::TimeDelta::days(1));
-    }
-
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if ignore_rules.should_skip_path(&path) {
-                continue;
-            }
-            let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
-            if !is_file {
-                continue;
-            }
-            if path
-                .extension()
-                .and_then(|v| v.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-            {
-                out.push(DiscoveredFile {
-                    source: SourceKind::Codex,
-                    root: root.to_path_buf(),
-                    path: normalized_discovered_path(&path),
-                });
-            }
-        }
-    }
-
-    if out.is_empty() {
-        return None;
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    out.dedup_by(|a, b| a.path == b.path);
-    Some(out)
 }
 
 fn parse_files_concurrently(

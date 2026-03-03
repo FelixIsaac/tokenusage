@@ -11,17 +11,44 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/images/cli-demo-padded.png" alt="tu cli demo" width="49%" />
-  <img src="docs/images/gui-demo.png" alt="tu gui demo" width="49%" />
-</p>
-<p align="center">
-  <img src="docs/images/live-demo.png" alt="tu live demo" width="98%" />
-</p>
-<p align="center">
-  <img src="docs/images/share-demo.png" alt="tu img daily demo" width="49%" />
-  <img src="docs/images/share-week-demo.png" alt="tu img weekly demo" width="49%" />
-</p>
+<table align="center" width="100%">
+  <tr>
+    <td valign="top" width="50%">
+      <code>tu</code><br/>
+      <p align="center">
+        <a href="docs/images/cli-demo-padded.png"><img src="docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
+      </p>
+    </td>
+    <td valign="top" width="50%">
+      <code>tu gui</code><br/>
+      <p align="center">
+        <a href="docs/images/gui-demo.png"><img src="docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top" width="50%">
+      <code>tu img day</code><br/>
+      <p align="center">
+        <a href="docs/images/share-demo.png"><img src="docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
+      </p>
+    </td>
+    <td valign="top" width="50%">
+      <code>tu img week</code><br/>
+      <p align="center">
+        <a href="docs/images/share-week-demo.png"><img src="docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top" colspan="2">
+      <code>tu live codex</code><br/>
+      <p align="center">
+        <a href="docs/images/live-demo.png"><img src="docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
+      </p>
+    </td>
+  </tr>
+</table>
 
 ## Install
 
@@ -154,7 +181,7 @@ Example:
       "period": "daily",
       "bars": 24,
       "brand": "tokenusage",
-      "brandUrl": "github.com/hanbu97/tokenusage"
+      "brandUrl": "https://github.com/hanbu97/tokenusage"
     },
     "weekly": {
       "startOfWeek": "monday"

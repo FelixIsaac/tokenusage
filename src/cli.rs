@@ -339,7 +339,7 @@ pub(crate) struct ImgArgs {
     pub(crate) brand: String,
     #[arg(
         long,
-        default_value = "github.com/hanbu97/tokenusage",
+        default_value = "https://github.com/hanbu97/tokenusage",
         help = "Brand URL shown on the card"
     )]
     pub(crate) brand_url: String,
