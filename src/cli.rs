@@ -192,7 +192,7 @@ pub(crate) struct BlocksArgs {
     pub(crate) refresh_interval: u64,
     #[arg(
         long,
-        help = "Fetch official Codex 5h/weekly usage + plan via codex app-server"
+        help = "Fetch official Codex/Claude 5h/weekly usage + plan via OAuth APIs (with CLI fallback)"
     )]
     pub(crate) official_limits: bool,
 }
@@ -214,11 +214,6 @@ pub(crate) struct LiveArgs {
     pub(crate) session_length: u32,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
-    #[arg(
-        long,
-        help = "Fetch official Codex 5h/weekly usage + plan via codex app-server"
-    )]
-    pub(crate) official_limits: bool,
 }
 
 impl From<LiveArgs> for BlocksArgs {
@@ -231,7 +226,7 @@ impl From<LiveArgs> for BlocksArgs {
             session_length: value.session_length,
             live: true,
             refresh_interval: value.refresh_interval,
-            official_limits: value.official_limits,
+            official_limits: true,
         }
     }
 }
@@ -242,7 +237,7 @@ pub(crate) struct StatuslineArgs {
     pub(crate) common: CommonArgs,
     #[arg(
         long,
-        help = "Fetch official Codex 5h/week usage and plan via codex app-server"
+        help = "Fetch official Codex/Claude 5h/week usage and plan via OAuth APIs (with CLI fallback)"
     )]
     pub(crate) official_limits: bool,
     #[arg(long, default_value_t = true, help = "Enable statusline cache")]

@@ -16,6 +16,9 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
   <img src="docs/images/gui-demo.png" alt="tu gui demo" width="49%" />
 </p>
 <p align="center">
+  <img src="docs/images/live-demo.png" alt="tu live demo" width="98%" />
+</p>
+<p align="center">
   <img src="docs/images/share-demo.png" alt="tu img daily demo" width="49%" />
   <img src="docs/images/share-week-demo.png" alt="tu img weekly demo" width="49%" />
 </p>

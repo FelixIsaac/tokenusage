@@ -20,7 +20,7 @@ impl SourceKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceConfig {
     pub(crate) kind: SourceKind,
     pub(crate) roots: Vec<PathBuf>,
@@ -389,7 +389,7 @@ pub(crate) enum ParseLineResult {
     MissingUsage,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct CodexRawUsage {
     pub(crate) input_tokens: u64,
     pub(crate) cached_input_tokens: u64,

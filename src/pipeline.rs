@@ -109,6 +109,31 @@ struct LoadedUsage {
     stats: ParseStats,
 }
 
+#[derive(Debug)]
+struct ParsedUsageOutput {
+    loaded: LoadedUsage,
+    cache_dirty: bool,
+}
+
+#[derive(Debug)]
+struct LiveUsageRuntime {
+    filter: DateFilter,
+    sources: Vec<SourceConfig>,
+    ignore_rules: PathIgnoreRules,
+    pricing: Arc<PricingTable>,
+    worker_count: usize,
+    cache_enabled: bool,
+    cache_store: IncrementalCacheStore,
+    cache_path: Option<PathBuf>,
+    cache_dirty: bool,
+    files_cache: Vec<DiscoveredFile>,
+    last_discovery_at: Instant,
+    discovery_interval: Duration,
+    last_sources_refresh_at: Instant,
+    sources_refresh_interval: Duration,
+    last_cache_flush_at: Instant,
+}
+
 pub(crate) struct UsageSnapshot {
     pub(crate) events: Vec<UsageEvent>,
     pub(crate) stats: ParseStats,
@@ -308,8 +333,9 @@ impl<'a> LiveFrameContext<'a> {
     fn new(
         now: DateTime<Utc>,
         tz: &'a TimeZoneMode,
-        window_secs: i64,
         refresh_every: u64,
+        block_start_unix: i64,
+        block_end_unix: i64,
         limit: LimitDisplayContext<'a>,
         official_codex: Option<&'a OfficialCodexSnapshot>,
         official_claude: Option<&'a OfficialClaudeSnapshot>,
@@ -320,9 +346,10 @@ impl<'a> LiveFrameContext<'a> {
         active: Option<&'a ActiveBlockSummary>,
     ) -> Self {
         let now_unix = now.timestamp();
-        let block_start_unix = now_unix - now_unix.rem_euclid(window_secs);
         let block_start = DateTime::from_timestamp(block_start_unix, 0).unwrap_or(now);
-        let block_end = block_start + chrono::TimeDelta::seconds(window_secs);
+        let block_end = DateTime::from_timestamp(block_end_unix, 0)
+            .unwrap_or(block_start + chrono::TimeDelta::seconds(5 * 3600));
+        let window_secs = (block_end_unix - block_start_unix).max(1);
 
         Self {
             now,
@@ -1437,35 +1464,61 @@ async fn run_blocks_live(
 
     let refresh_every = args.refresh_interval.max(1);
     let mut session = BlocksLiveSession::enter()?;
+    let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every).await?;
     let mut last_official_refresh = Instant::now();
 
     loop {
         let now = Utc::now();
-        let loaded = load_usage(&args.common, tz).await?;
-        if args.official_limits
+        live_runtime.maybe_refresh_sources(&args.common).await?;
+
+        let source_hint = select_live_source(
+            &args.common,
+            None,
+            official_codex.as_ref(),
+            official_claude.as_ref(),
+        );
+        let (block_start_unix, block_end_unix, live_window_secs) = resolve_live_block_bounds(
+            now,
+            window_secs,
+            source_hint,
+            official_codex.as_ref(),
+            official_claude.as_ref(),
+        );
+
+        let should_refresh_official = args.official_limits
             && (official_codex.is_none()
                 || official_claude.is_none()
-                || last_official_refresh.elapsed() >= Duration::from_secs(30))
-        {
-            let (codex, claude, _errors) = fetch_selected_official_limits(&args.common).await;
-            if codex.is_some() {
-                official_codex = codex;
+                || last_official_refresh.elapsed() >= Duration::from_secs(30));
+        let official_task = should_refresh_official.then(|| {
+            let common = args.common.clone();
+            tokio::spawn(async move { fetch_selected_official_limits(&common).await })
+        });
+
+        let loaded = live_runtime.load(tz);
+
+        if let Some(task) = official_task {
+            if let Ok((codex, claude, _errors)) = task.await {
+                if codex.is_some() {
+                    official_codex = codex;
+                }
+                if claude.is_some() {
+                    official_claude = claude;
+                }
+                last_official_refresh = Instant::now();
             }
-            if claude.is_some() {
-                official_claude = claude;
-            }
-            last_official_refresh = Instant::now();
         }
-        let membership_estimate = estimate_membership_from_logs(&loaded.events, now, window_secs);
+        let membership_estimate =
+            estimate_membership_from_logs(&loaded.events, now, live_window_secs);
         let inferred_limit = membership_estimate
             .as_ref()
             .map(|estimate| estimate.estimated_window_tokens);
         let resolved_from_mode =
-            resolve_token_limit(token_limit_mode, &loaded.events, now, window_secs);
+            resolve_token_limit(token_limit_mode, &loaded.events, now, live_window_secs);
         let token_limit = resolved_from_mode.or(inferred_limit);
         let token_limit_source =
             resolve_token_limit_source(token_limit_mode, resolved_from_mode, inferred_limit);
-        let active = active_block_summary(&loaded.events, now, window_secs);
+        let active =
+            active_block_summary_for_bounds(&loaded.events, now, block_start_unix, block_end_unix);
         let selected_source = select_live_source(
             &args.common,
             active.as_ref(),
@@ -1477,8 +1530,9 @@ async fn run_blocks_live(
         let frame_context = LiveFrameContext::new(
             now,
             tz,
-            window_secs,
             refresh_every,
+            block_start_unix,
+            block_end_unix,
             LimitDisplayContext {
                 token_limit,
                 token_limit_source,
@@ -1500,6 +1554,7 @@ async fn run_blocks_live(
         }
     }
 
+    live_runtime.flush_cache(true);
     Ok(())
 }
 
@@ -1525,6 +1580,67 @@ fn select_live_source(
         return Some(SourceKind::Claude);
     }
     None
+}
+
+fn resolve_live_block_bounds(
+    now: DateTime<Utc>,
+    default_window_secs: i64,
+    source_hint: Option<SourceKind>,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    official_claude: Option<&OfficialClaudeSnapshot>,
+) -> (i64, i64, i64) {
+    let fallback = {
+        let now_unix = now.timestamp();
+        let start = now_unix - now_unix.rem_euclid(default_window_secs.max(1));
+        let end = start + default_window_secs.max(1);
+        (start, end, default_window_secs.max(1))
+    };
+
+    let (reset_at, window_secs) = match source_hint {
+        Some(SourceKind::Codex) => {
+            let Some(snapshot) = official_codex else {
+                return fallback;
+            };
+            let reset = snapshot.primary_resets_at;
+            let window = snapshot
+                .primary_window_mins
+                .map(|mins| mins.saturating_mul(60))
+                .unwrap_or(default_window_secs);
+            (reset, window)
+        }
+        Some(SourceKind::Claude) => {
+            let Some(snapshot) = official_claude else {
+                return fallback;
+            };
+            let reset = snapshot.primary_resets_at;
+            let window = snapshot
+                .primary_window_mins
+                .map(|mins| mins.saturating_mul(60))
+                .unwrap_or(default_window_secs);
+            (reset, window)
+        }
+        None => return fallback,
+    };
+
+    let Some(mut end_unix) = reset_at else {
+        return fallback;
+    };
+    let window_secs = window_secs.max(1);
+    let now_unix = now.timestamp();
+
+    if end_unix <= now_unix {
+        let steps = (now_unix - end_unix).div_euclid(window_secs) + 1;
+        end_unix = end_unix.saturating_add(steps.saturating_mul(window_secs));
+    } else if end_unix - now_unix > window_secs {
+        let steps = (end_unix - now_unix - 1).div_euclid(window_secs);
+        end_unix = end_unix.saturating_sub(steps.saturating_mul(window_secs));
+    }
+
+    let start_unix = end_unix.saturating_sub(window_secs);
+    if now_unix < start_unix || now_unix >= end_unix {
+        return fallback;
+    }
+    (start_unix, end_unix, window_secs)
 }
 
 fn aggregate_recent_costs(
@@ -2945,6 +3061,20 @@ fn active_block_summary(
     let block_start_unix = now_unix - now_unix.rem_euclid(block_window_secs);
     let block_end_unix = block_start_unix + block_window_secs;
 
+    active_block_summary_for_bounds(events, now, block_start_unix, block_end_unix)
+}
+
+fn active_block_summary_for_bounds(
+    events: &[UsageEvent],
+    now: DateTime<Utc>,
+    block_start_unix: i64,
+    block_end_unix: i64,
+) -> Option<ActiveBlockSummary> {
+    if block_end_unix <= block_start_unix {
+        return None;
+    }
+    let now_unix = now.timestamp();
+
     let mut selected = events
         .iter()
         .filter(|event| {
@@ -3926,7 +4056,7 @@ fn infer_claude_plan_label(rate_limit_tier: Option<&str>) -> Option<String> {
 }
 
 fn normalize_official_used_percent(raw: f64) -> f64 {
-    if raw <= 1.0 {
+    if raw < 1.0 {
         (raw * 100.0).clamp(0.0, 100.0)
     } else {
         raw.clamp(0.0, 100.0)
@@ -4066,11 +4196,13 @@ fn parse_codex_official_snapshot(raw: &str) -> Result<OfficialCodexSnapshot> {
     let primary_used_percent = limits
         .primary
         .as_ref()
-        .and_then(|window| window.used_percent);
+        .and_then(|window| window.used_percent)
+        .map(normalize_official_used_percent);
     let secondary_used_percent = limits
         .secondary
         .as_ref()
-        .and_then(|window| window.used_percent);
+        .and_then(|window| window.used_percent)
+        .map(normalize_official_used_percent);
     let primary_window_mins = limits
         .primary
         .as_ref()
@@ -4488,56 +4620,42 @@ fn format_usd(value: f64) -> String {
     format!("${value:.2}")
 }
 
-async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<LoadedUsage> {
+fn parse_common_filter(common: &CommonArgs) -> Result<DateFilter> {
     let filter = DateFilter {
         since: parse_date_filter(common.since.as_deref())?,
         until: parse_date_filter(common.until.as_deref())?,
     };
-
     if let (Some(since), Some(until)) = (filter.since, filter.until)
         && since > until
     {
         bail!("--since must be earlier than or equal to --until");
     }
+    Ok(filter)
+}
 
-    let sources = build_sources(common).await?;
-    if sources.is_empty() {
-        bail!(
-            "No valid source directories found. Please provide --claude-projects-dir/--codex-sessions-dir."
-        );
-    }
-
-    let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
-    let ignore_rules = PathIgnoreRules::from_common(common);
-
-    let files = discover_files(&sources, &ignore_rules, filter);
-    let worker_count = common.workers.unwrap_or_else(|| {
+fn worker_count_from_common(common: &CommonArgs) -> usize {
+    common.workers.unwrap_or_else(|| {
         thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
-    });
+    })
+}
 
+#[allow(clippy::too_many_arguments)]
+fn parse_files_with_cache(
+    files: &[DiscoveredFile],
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: Arc<PricingTable>,
+    worker_count: usize,
+    cache_enabled: bool,
+    cache_store: &mut IncrementalCacheStore,
+    sort_events: bool,
+) -> ParsedUsageOutput {
     let stats = Arc::new(ParseStatsAtomic::default());
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
-    let pricing_key = pricing_cache_key(&pricing);
-    let cache_path = incremental_cache_path();
-    let cache_enabled = !common.no_incremental_cache;
-
-    let mut cache_store = if cache_enabled {
-        match cache_path.as_ref() {
-            Some(path) => load_incremental_cache(path, &pricing_key),
-            None => IncrementalCacheStore::new(pricing_key.clone()),
-        }
-    } else {
-        IncrementalCacheStore::new(pricing_key.clone())
-    };
-
-    if common.rebuild_cache {
-        cache_store = IncrementalCacheStore::new(pricing_key.clone());
-    }
-
-    let mut cache_dirty = common.rebuild_cache;
+    let mut cache_dirty = false;
     let mut seen_cache_keys = HashSet::with_capacity(files.len());
     let mut parse_jobs = Vec::new();
     let mut events = Vec::new();
@@ -4548,7 +4666,7 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
 
         let Some(fingerprint) = read_file_fingerprint(&file.path) else {
             parse_jobs.push(FileParseJob {
-                file,
+                file: file.clone(),
                 cache_key: key,
                 fingerprint: FileFingerprint {
                     size: 0,
@@ -4563,13 +4681,13 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
         if cache_enabled && let Some(cached) = cache_store.files.get(&key) {
             if cached.fingerprint == fingerprint {
                 events.extend(hydrate_cached_events(
-                    &file, cached, filter, timezone, &stats,
+                    file, cached, filter, timezone, &stats,
                 ));
                 continue;
             }
             if can_incremental_parse(cached, fingerprint) {
                 parse_jobs.push(FileParseJob {
-                    file,
+                    file: file.clone(),
                     cache_key: key,
                     fingerprint,
                     strategy: ParseStrategy::Incremental {
@@ -4581,7 +4699,7 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
         }
 
         parse_jobs.push(FileParseJob {
-            file,
+            file: file.clone(),
             cache_key: key,
             fingerprint,
             strategy: ParseStrategy::Full,
@@ -4611,18 +4729,179 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
         if cache_store.files.len() != before {
             cache_dirty = true;
         }
-
-        if cache_dirty && let Some(path) = cache_path.as_ref() {
-            save_incremental_cache(path, &cache_store);
-        }
     }
 
-    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    if sort_events {
+        events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    }
 
-    Ok(LoadedUsage {
-        events,
-        stats: stats.snapshot(),
-    })
+    ParsedUsageOutput {
+        loaded: LoadedUsage {
+            events,
+            stats: stats.snapshot(),
+        },
+        cache_dirty,
+    }
+}
+
+impl LiveUsageRuntime {
+    async fn new(common: &CommonArgs, refresh_every: u64) -> Result<Self> {
+        let filter = parse_common_filter(common)?;
+        let sources = build_sources(common).await?;
+        if sources.is_empty() {
+            bail!(
+                "No valid source directories found. Please provide --claude-projects-dir/--codex-sessions-dir."
+            );
+        }
+
+        let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
+        let pricing_key = pricing_cache_key(&pricing);
+        let ignore_rules = PathIgnoreRules::from_common(common);
+        let worker_count = worker_count_from_common(common);
+
+        let cache_enabled = !common.no_incremental_cache;
+        let cache_path = incremental_cache_path();
+        let mut cache_store = if cache_enabled {
+            match cache_path.as_ref() {
+                Some(path) => load_incremental_cache(path, &pricing_key),
+                None => IncrementalCacheStore::new(pricing_key.clone()),
+            }
+        } else {
+            IncrementalCacheStore::new(pricing_key.clone())
+        };
+        if common.rebuild_cache {
+            cache_store = IncrementalCacheStore::new(pricing_key);
+        }
+
+        let files_cache = discover_files(&sources, &ignore_rules, filter);
+        let now = Instant::now();
+        let discovery_interval =
+            Duration::from_secs((refresh_every.saturating_mul(3)).clamp(2, 12));
+
+        Ok(Self {
+            filter,
+            sources,
+            ignore_rules,
+            pricing,
+            worker_count,
+            cache_enabled,
+            cache_store,
+            cache_path,
+            cache_dirty: common.rebuild_cache,
+            files_cache,
+            last_discovery_at: now,
+            discovery_interval,
+            last_sources_refresh_at: now,
+            sources_refresh_interval: Duration::from_secs(60),
+            last_cache_flush_at: now,
+        })
+    }
+
+    async fn maybe_refresh_sources(&mut self, common: &CommonArgs) -> Result<()> {
+        if self.last_sources_refresh_at.elapsed() < self.sources_refresh_interval {
+            return Ok(());
+        }
+        self.last_sources_refresh_at = Instant::now();
+        let refreshed = build_sources(common).await?;
+        if refreshed.is_empty() || refreshed == self.sources {
+            return Ok(());
+        }
+
+        self.sources = refreshed;
+        self.files_cache.clear();
+        self.last_discovery_at = Instant::now() - self.discovery_interval;
+        Ok(())
+    }
+
+    fn maybe_refresh_discovery(&mut self) {
+        if !self.files_cache.is_empty()
+            && self.last_discovery_at.elapsed() < self.discovery_interval
+        {
+            return;
+        }
+        self.files_cache = discover_files(&self.sources, &self.ignore_rules, self.filter);
+        self.last_discovery_at = Instant::now();
+    }
+
+    fn load(&mut self, timezone: &TimeZoneMode) -> LoadedUsage {
+        self.maybe_refresh_discovery();
+        let parsed = parse_files_with_cache(
+            &self.files_cache,
+            self.filter,
+            timezone,
+            self.pricing.clone(),
+            self.worker_count,
+            self.cache_enabled,
+            &mut self.cache_store,
+            false,
+        );
+        self.cache_dirty |= parsed.cache_dirty;
+        self.flush_cache(false);
+        parsed.loaded
+    }
+
+    fn flush_cache(&mut self, force: bool) {
+        if !self.cache_enabled || !self.cache_dirty {
+            return;
+        }
+        if !force && self.last_cache_flush_at.elapsed() < Duration::from_secs(10) {
+            return;
+        }
+        if let Some(path) = self.cache_path.as_ref() {
+            save_incremental_cache(path, &self.cache_store);
+            self.cache_dirty = false;
+            self.last_cache_flush_at = Instant::now();
+        }
+    }
+}
+
+async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<LoadedUsage> {
+    let filter = parse_common_filter(common)?;
+    let sources = build_sources(common).await?;
+    if sources.is_empty() {
+        bail!(
+            "No valid source directories found. Please provide --claude-projects-dir/--codex-sessions-dir."
+        );
+    }
+
+    let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
+    let ignore_rules = PathIgnoreRules::from_common(common);
+    let files = discover_files(&sources, &ignore_rules, filter);
+    let worker_count = worker_count_from_common(common);
+    let pricing_key = pricing_cache_key(&pricing);
+    let cache_enabled = !common.no_incremental_cache;
+    let cache_path = incremental_cache_path();
+
+    let mut cache_store = if cache_enabled {
+        match cache_path.as_ref() {
+            Some(path) => load_incremental_cache(path, &pricing_key),
+            None => IncrementalCacheStore::new(pricing_key.clone()),
+        }
+    } else {
+        IncrementalCacheStore::new(pricing_key.clone())
+    };
+    if common.rebuild_cache {
+        cache_store = IncrementalCacheStore::new(pricing_key);
+    }
+
+    let parsed = parse_files_with_cache(
+        &files,
+        filter,
+        timezone,
+        pricing,
+        worker_count,
+        cache_enabled,
+        &mut cache_store,
+        true,
+    );
+    if cache_enabled
+        && (parsed.cache_dirty || common.rebuild_cache)
+        && let Some(path) = cache_path.as_ref()
+    {
+        save_incremental_cache(path, &cache_store);
+    }
+
+    Ok(parsed.loaded)
 }
 
 async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfig>> {
@@ -5892,5 +6171,117 @@ fn normalized_discovered_path(path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         normalize_path(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn utc_dt(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
+            .single()
+            .unwrap()
+    }
+
+    fn test_event(ts: DateTime<Utc>, source: SourceKind, total_tokens: u64) -> UsageEvent {
+        UsageEvent {
+            timestamp: ts,
+            source,
+            model: "gpt-5.3-codex".to_string(),
+            session: "s".to_string(),
+            project: None,
+            file_path: "/tmp/log.jsonl".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: total_tokens,
+                ..UsageAccumulator::default()
+            },
+        }
+    }
+
+    #[test]
+    fn normalize_official_percent_treats_one_as_percent_not_ratio() {
+        assert!((normalize_official_used_percent(0.82) - 82.0).abs() < f64::EPSILON);
+        assert!((normalize_official_used_percent(82.0) - 82.0).abs() < f64::EPSILON);
+        assert!((normalize_official_used_percent(1.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_live_bounds_aligns_to_official_reset_window() {
+        let now = utc_dt(2026, 3, 3, 16, 7, 36);
+        let official = OfficialCodexSnapshot {
+            plan_type: Some("pro".to_string()),
+            primary_used_percent: Some(99.0),
+            secondary_used_percent: Some(82.0),
+            primary_window_mins: Some(300),
+            secondary_window_mins: Some(10080),
+            primary_resets_at: Some(utc_dt(2026, 3, 3, 20, 59, 47).timestamp()),
+            secondary_resets_at: Some(utc_dt(2026, 3, 10, 10, 59, 47).timestamp()),
+        };
+
+        let (start, end, window_secs) = resolve_live_block_bounds(
+            now,
+            5 * 3600,
+            Some(SourceKind::Codex),
+            Some(&official),
+            None,
+        );
+
+        assert_eq!(window_secs, 5 * 3600);
+        assert_eq!(start, utc_dt(2026, 3, 3, 15, 59, 47).timestamp());
+        assert_eq!(end, utc_dt(2026, 3, 3, 20, 59, 47).timestamp());
+        assert!(now.timestamp() >= start && now.timestamp() < end);
+    }
+
+    #[test]
+    fn resolve_live_bounds_rolls_old_reset_forward_to_current_session() {
+        let now = utc_dt(2026, 3, 3, 16, 7, 36);
+        let stale = OfficialCodexSnapshot {
+            plan_type: Some("pro".to_string()),
+            primary_used_percent: Some(99.0),
+            secondary_used_percent: Some(82.0),
+            primary_window_mins: Some(300),
+            secondary_window_mins: Some(10080),
+            // previous session boundary; function should advance it.
+            primary_resets_at: Some(utc_dt(2026, 3, 3, 10, 59, 47).timestamp()),
+            secondary_resets_at: None,
+        };
+
+        let (start, end, window_secs) =
+            resolve_live_block_bounds(now, 5 * 3600, Some(SourceKind::Codex), Some(&stale), None);
+
+        assert_eq!(window_secs, 5 * 3600);
+        assert_eq!(start, utc_dt(2026, 3, 3, 15, 59, 47).timestamp());
+        assert_eq!(end, utc_dt(2026, 3, 3, 20, 59, 47).timestamp());
+    }
+
+    #[test]
+    fn active_block_summary_for_bounds_only_counts_events_in_current_window() {
+        let now = utc_dt(2026, 3, 3, 16, 30, 0);
+        let block_start = utc_dt(2026, 3, 3, 15, 59, 47).timestamp();
+        let block_end = utc_dt(2026, 3, 3, 20, 59, 47).timestamp();
+
+        let events = vec![
+            // previous window event, must be excluded
+            test_event(utc_dt(2026, 3, 3, 15, 30, 0), SourceKind::Codex, 900),
+            // current window events
+            test_event(utc_dt(2026, 3, 3, 16, 0, 0), SourceKind::Codex, 100),
+            test_event(utc_dt(2026, 3, 3, 16, 10, 0), SourceKind::Codex, 300),
+        ];
+
+        let summary = active_block_summary_for_bounds(&events, now, block_start, block_end)
+            .expect("expected active summary for current window");
+
+        assert_eq!(summary.totals.total_tokens, 400);
+        assert_eq!(summary.dominant_source, Some(SourceKind::Codex));
+        assert!(summary.remaining_minutes >= 0);
     }
 }
