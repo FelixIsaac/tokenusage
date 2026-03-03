@@ -73,11 +73,32 @@ cargo binstall tokenusage --no-confirm
 ## Quick Start
 
 ```bash
+# Daily report (default)
 tu
+
+# Source-specific
+tu codex
+tu claude
+
+# Date filter
+tu --since 2026-02-01 --until 2026-02-28
+
+# Weekly / monthly
+tu weekly --start-of-week monday
+tu monthly
+
+# Live monitor
 tu live
+tu live codex
+tu live claude
+
+# GUI dashboard
 tu gui
-tu img --output tokenusage-share.png                 # daily view (today, hourly bars)
-tu img --period weekly --output tokenusage-week.png  # weekly view (daily bars)
+
+# Share image card (for social posting)
+tu img
+tu img day
+tu img week
 ```
 
 ## Why tokenusage
