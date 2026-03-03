@@ -1735,6 +1735,7 @@ fn render_live_progress_bars(
     ]));
     frame.render_widget(time_title, time_label_area);
     let time_gauge = Gauge::default()
+        .style(live_gauge_track_style())
         .gauge_style(
             Style::default()
                 .fg(TuiColor::Cyan)
@@ -1760,6 +1761,7 @@ fn render_live_progress_bars(
             primary_label.push_str(&format!(" | resets in {eta_text} ({local_reset})"));
         }
         let primary_gauge = Gauge::default()
+            .style(live_gauge_track_style())
             .gauge_style(
                 Style::default()
                     .fg(used_gauge_color(primary_used))
@@ -1783,6 +1785,7 @@ fn render_live_progress_bars(
                 weekly_label.push_str(&format!(" | resets in {eta_text} ({local_reset})"));
             }
             let weekly_gauge = Gauge::default()
+                .style(live_gauge_track_style())
                 .gauge_style(
                     Style::default()
                         .fg(used_gauge_color(weekly_used))
@@ -1871,6 +1874,7 @@ fn render_live_progress_bars(
     frame.render_widget(limit_title, rows[2]);
 
     let limit_gauge = Gauge::default()
+        .style(live_gauge_track_style())
         .gauge_style(
             Style::default()
                 .fg(limit_color)
@@ -1970,6 +1974,10 @@ fn used_gauge_color(used_percent: f64) -> TuiColor {
     } else {
         TuiColor::Green
     }
+}
+
+fn live_gauge_track_style() -> Style {
+    Style::default().bg(TuiColor::Rgb(42, 46, 64))
 }
 
 fn render_live_body(
