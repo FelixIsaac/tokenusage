@@ -35,3 +35,23 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace --all-targets --all-features
+
+  npm-package-check:
+    name: npm package dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate npm package can be published
+        run: |
+          set -euxo pipefail
+          cargo_version=$(grep -E '^version[[:space:]]*=[[:space:]]*\"' Cargo.toml | head -n1 | cut -d'"' -f2)
+          cd npm/tu
+          npm version "${cargo_version}" --no-git-tag-version --allow-same-version
+          npm pack --dry-run --ignore-scripts

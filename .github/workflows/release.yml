@@ -44,11 +44,12 @@ jobs:
             if git ls-remote --tags origin "refs/tags/${tag}" | grep -q "refs/tags/${tag}$"; then
               should_release=false
             else
-              should_release=true
               git config user.name "github-actions[bot]"
               git config user.email "github-actions[bot]@users.noreply.github.com"
               git tag "${tag}"
               git push origin "refs/tags/${tag}"
+              # Publishing should happen on the tag-triggered run only.
+              should_release=false
             fi
           fi
 
