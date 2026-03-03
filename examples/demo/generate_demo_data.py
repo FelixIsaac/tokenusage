@@ -7,6 +7,33 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO_ROOT = ROOT / "examples" / "demo" / "data"
+DEMO_LOCAL_UTC_OFFSET = 8
+HOUR_WEIGHTS = [
+    0.08,
+    0.10,
+    0.12,
+    0.11,
+    0.13,
+    0.15,
+    0.17,
+    0.20,
+    0.23,
+    0.26,
+    0.30,
+    0.34,
+    0.40,
+    0.46,
+    0.54,
+    0.62,
+    0.57,
+    0.52,
+    0.47,
+    0.43,
+    0.39,
+    0.34,
+    0.28,
+    0.22,
+]
 
 
 def ensure(path: Path) -> None:
@@ -18,6 +45,12 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def local_hour_to_utc(base_day_utc: datetime, local_hour: int) -> datetime:
+    # Map local-hour buckets (Asia/Shanghai in demo config) back to UTC timestamp,
+    # so daily(hourly) charts on the demo day fill 00-23 without spilling to neighbors.
+    return base_day_utc + timedelta(hours=local_hour - DEMO_LOCAL_UTC_OFFSET)
 
 
 def make_claude_rows(project: str, model: str, start_day: datetime) -> list[dict]:
@@ -32,19 +65,43 @@ def make_claude_rows(project: str, model: str, start_day: datetime) -> list[dict
         cache_read = 120_000 + i * 36_000 + spike * 90_000
         output_tokens = 3200 + i * 300 + spike * 2200
 
-        rows.append(
-            {
-                "timestamp": (day + timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-                "model": model,
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "cache_creation_input_tokens": cache_create,
-                    "cache_read_input_tokens": cache_read,
-                    "output_tokens": output_tokens,
-                },
-                "project": project,
-            }
-        )
+        # For the last demo day, spread usage across all 24 hours so `tu img day`
+        # generates a meaningful hourly chart (instead of one spike + many zeros).
+        if i == 19:
+            for hour, weight in enumerate(HOUR_WEIGHTS):
+                rows.append(
+                    {
+                        "timestamp": local_hour_to_utc(day, hour)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "model": model,
+                        "usage": {
+                            "input_tokens": max(120, int(input_tokens * weight * 0.22)),
+                            "cache_creation_input_tokens": max(
+                                30, int(cache_create * (0.75 + hour * 0.01))
+                            ),
+                            "cache_read_input_tokens": max(
+                                2000, int(cache_read * weight * 0.12)
+                            ),
+                            "output_tokens": max(80, int(output_tokens * weight * 0.28)),
+                        },
+                        "project": project,
+                    }
+                )
+        else:
+            rows.append(
+                {
+                    "timestamp": (day + timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+                    "model": model,
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "cache_creation_input_tokens": cache_create,
+                        "cache_read_input_tokens": cache_read,
+                        "output_tokens": output_tokens,
+                    },
+                    "project": project,
+                }
+            )
     return rows
 
 
@@ -59,33 +116,69 @@ def make_codex_rows(model: str, start_day: datetime, step: int) -> list[dict]:
         input_tokens = total + cached
         output_tokens = 3600 + i * 360 + spike * 1500
 
-        rows.append(
-            {
-                "timestamp": (day + timedelta(hours=6)).isoformat().replace("+00:00", "Z"),
-                "type": "turn_context",
-                "payload": {"model": model},
-            }
-        )
-        rows.append(
-            {
-                "timestamp": (day + timedelta(hours=6, minutes=step)).isoformat().replace(
-                    "+00:00", "Z"
-                ),
-                "type": "event_msg",
-                "payload": {
-                    "type": "token_count",
-                    "info": {
-                        "last_token_usage": {
-                            "input_tokens": input_tokens,
-                            "cached_input_tokens": cached,
-                            "output_tokens": output_tokens,
-                            "reasoning_output_tokens": int(output_tokens * 0.15),
-                            "total_tokens": input_tokens + output_tokens,
-                        }
+        if i == 19:
+            for hour, weight in enumerate(HOUR_WEIGHTS):
+                hour_input = max(180, int(input_tokens * weight * 0.20))
+                hour_cached = max(80, int(cached * weight * 0.22))
+                hour_output = max(90, int(output_tokens * weight * 0.32))
+                rows.append(
+                    {
+                        "timestamp": local_hour_to_utc(day, hour)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "type": "turn_context",
+                        "payload": {"model": model},
+                    }
+                )
+                rows.append(
+                    {
+                        "timestamp": local_hour_to_utc(day, hour)
+                        .replace(minute=step)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "last_token_usage": {
+                                    "input_tokens": hour_input,
+                                    "cached_input_tokens": hour_cached,
+                                    "output_tokens": hour_output,
+                                    "reasoning_output_tokens": int(hour_output * 0.15),
+                                    "total_tokens": hour_input + hour_output,
+                                }
+                            },
+                        },
+                    }
+                )
+        else:
+            rows.append(
+                {
+                    "timestamp": (day + timedelta(hours=6)).isoformat().replace("+00:00", "Z"),
+                    "type": "turn_context",
+                    "payload": {"model": model},
+                }
+            )
+            rows.append(
+                {
+                    "timestamp": (day + timedelta(hours=6, minutes=step)).isoformat().replace(
+                        "+00:00", "Z"
+                    ),
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": input_tokens,
+                                "cached_input_tokens": cached,
+                                "output_tokens": output_tokens,
+                                "reasoning_output_tokens": int(output_tokens * 0.15),
+                                "total_tokens": input_tokens + output_tokens,
+                            }
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
     return rows
 
 
