@@ -42,14 +42,23 @@ jobs:
             should_release=true
           elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             if git ls-remote --tags origin "refs/tags/${tag}" | grep -q "refs/tags/${tag}$"; then
-              should_release=false
+              # If the tag exists but no GitHub release exists yet, continue publishing.
+              # This can happen when the tag was created by GITHUB_TOKEN in a workflow run.
+              if curl -sfL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" >/dev/null; then
+                should_release=false
+              else
+                should_release=true
+              fi
             else
               git config user.name "github-actions[bot]"
               git config user.email "github-actions[bot]@users.noreply.github.com"
               git tag "${tag}"
               git push origin "refs/tags/${tag}"
-              # Publishing should happen on the tag-triggered run only.
-              should_release=false
+              # Continue publishing in this run; tag push via GITHUB_TOKEN won't retrigger workflows.
+              should_release=true
             fi
           fi
 
