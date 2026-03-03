@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -185,6 +185,7 @@ struct BlockJsonReport {
     token_limit_source: TokenLimitSource,
     membership_estimate: Option<MembershipEstimate>,
     official_codex: Option<OfficialCodexSnapshot>,
+    official_claude: Option<OfficialClaudeSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -197,11 +198,23 @@ struct BlockReportBuildOptions {
     token_limit_source: TokenLimitSource,
     membership_estimate: Option<MembershipEstimate>,
     official_codex: Option<OfficialCodexSnapshot>,
+    official_claude: Option<OfficialClaudeSnapshot>,
     now: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct OfficialCodexSnapshot {
+    plan_type: Option<String>,
+    primary_used_percent: Option<f64>,
+    secondary_used_percent: Option<f64>,
+    primary_window_mins: Option<i64>,
+    secondary_window_mins: Option<i64>,
+    primary_resets_at: Option<i64>,
+    secondary_resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OfficialClaudeSnapshot {
     plan_type: Option<String>,
     primary_used_percent: Option<f64>,
     secondary_used_percent: Option<f64>,
@@ -260,6 +273,7 @@ struct ActiveBlockSummary {
     totals: TokenCounts,
     remaining_minutes: i64,
     burn: Option<BurnRateSummary>,
+    dominant_source: Option<SourceKind>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -269,16 +283,9 @@ struct LimitDisplayContext<'a> {
     membership_estimate: Option<&'a MembershipEstimate>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ProjectionTotals {
-    current_tokens: u64,
-    projected_tokens: u64,
-    current_cost: f64,
-    projected_cost: f64,
-}
-
 #[derive(Debug)]
 struct LiveFrameContext<'a> {
+    now: DateTime<Utc>,
     refresh_every: u64,
     window_secs: i64,
     elapsed_secs: i64,
@@ -288,8 +295,12 @@ struct LiveFrameContext<'a> {
     block_end_text: String,
     limit: LimitDisplayContext<'a>,
     official_codex: Option<&'a OfficialCodexSnapshot>,
+    official_claude: Option<&'a OfficialClaudeSnapshot>,
+    selected_source: Option<SourceKind>,
+    today_totals: TokenCounts,
+    last_30d_totals: TokenCounts,
+    last_30d_active_days: u32,
     active: Option<&'a ActiveBlockSummary>,
-    stats: &'a ParseStats,
 }
 
 impl<'a> LiveFrameContext<'a> {
@@ -301,8 +312,12 @@ impl<'a> LiveFrameContext<'a> {
         refresh_every: u64,
         limit: LimitDisplayContext<'a>,
         official_codex: Option<&'a OfficialCodexSnapshot>,
+        official_claude: Option<&'a OfficialClaudeSnapshot>,
+        selected_source: Option<SourceKind>,
+        today_totals: TokenCounts,
+        last_30d_totals: TokenCounts,
+        last_30d_active_days: u32,
         active: Option<&'a ActiveBlockSummary>,
-        stats: &'a ParseStats,
     ) -> Self {
         let now_unix = now.timestamp();
         let block_start_unix = now_unix - now_unix.rem_euclid(window_secs);
@@ -310,6 +325,7 @@ impl<'a> LiveFrameContext<'a> {
         let block_end = block_start + chrono::TimeDelta::seconds(window_secs);
 
         Self {
+            now,
             refresh_every,
             window_secs,
             elapsed_secs: (now_unix - block_start_unix).clamp(0, window_secs.max(1)),
@@ -319,8 +335,12 @@ impl<'a> LiveFrameContext<'a> {
             block_end_text: format_display_datetime(block_end, tz),
             limit,
             official_codex,
+            official_claude,
+            selected_source,
+            today_totals,
+            last_30d_totals,
+            last_30d_active_days,
             active,
-            stats,
         }
     }
 }
@@ -361,10 +381,13 @@ const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".venv",
     "venv",
 ];
-const INCREMENTAL_CACHE_VERSION: u32 = 1;
+const INCREMENTAL_CACHE_VERSION: u32 = 2;
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_PRICING_CACHE_VERSION: u32 = 1;
 const OPENROUTER_PRICING_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
+const CLAUDE_RECENT_DEDUPE_KEYS_LIMIT: usize = 8192;
+const CLAUDE_OAUTH_REFRESH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 
 #[derive(Debug, Clone, Copy)]
 enum TokenLimitMode {
@@ -441,7 +464,7 @@ struct CachedUsageEvent {
     usage: UsageAccumulator,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CachedFileStats {
     lines_total: usize,
     lines_invalid_json: usize,
@@ -454,6 +477,14 @@ struct CachedFileEntry {
     fingerprint: FileFingerprint,
     stats: CachedFileStats,
     events: Vec<CachedUsageEvent>,
+    #[serde(default)]
+    parsed_offset: u64,
+    #[serde(default)]
+    codex_last_model: Option<String>,
+    #[serde(default)]
+    codex_last_totals: Option<CodexRawUsage>,
+    #[serde(default)]
+    claude_recent_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -515,6 +546,13 @@ struct FileParseJob {
     file: DiscoveredFile,
     cache_key: String,
     fingerprint: FileFingerprint,
+    strategy: ParseStrategy,
+}
+
+#[derive(Debug, Clone)]
+enum ParseStrategy {
+    Full,
+    Incremental { base_cache: CachedFileEntry },
 }
 
 #[derive(Debug, Default)]
@@ -527,6 +565,39 @@ struct WorkerParseOutput {
 struct ParsedFileOutput {
     events: Vec<UsageEvent>,
     cache_entry: CachedFileEntry,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeDedupeState {
+    seen_keys: HashSet<String>,
+    insertion_order: VecDeque<String>,
+}
+
+impl ClaudeDedupeState {
+    fn with_seed(seed: Vec<String>) -> Self {
+        let mut out = Self::default();
+        for key in seed {
+            out.insert(key);
+        }
+        out
+    }
+
+    fn insert(&mut self, key: String) -> bool {
+        if !self.seen_keys.insert(key.clone()) {
+            return false;
+        }
+        self.insertion_order.push_back(key);
+        while self.insertion_order.len() > CLAUDE_RECENT_DEDUPE_KEYS_LIMIT {
+            if let Some(old) = self.insertion_order.pop_front() {
+                self.seen_keys.remove(&old);
+            }
+        }
+        true
+    }
+
+    fn snapshot(&self) -> Vec<String> {
+        self.insertion_order.iter().cloned().collect()
+    }
 }
 
 pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
@@ -757,20 +828,26 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
-    let official_codex = if args.official_limits {
-        match fetch_codex_official_limits().await {
-            Ok(snapshot) => Some(snapshot),
-            Err(error) => {
-                eprintln!("official: failed to fetch Codex limits ({error})");
-                None
-            }
+    let (official_codex, official_claude) = if args.official_limits {
+        let (codex, claude, errors) = fetch_selected_official_limits(&args.common).await;
+        for error in errors {
+            eprintln!("{error}");
         }
+        (codex, claude)
     } else {
-        None
+        (None, None)
     };
 
     if args.live {
-        return run_blocks_live(&args, &tz, window_secs, token_limit_mode, official_codex).await;
+        return run_blocks_live(
+            &args,
+            &tz,
+            window_secs,
+            token_limit_mode,
+            official_codex,
+            official_claude,
+        )
+        .await;
     }
 
     let loaded = load_usage(&args.common, &tz).await?;
@@ -796,6 +873,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             token_limit_source,
             membership_estimate: membership_estimate.clone(),
             official_codex: official_codex.clone(),
+            official_claude: official_claude.clone(),
             now,
         },
     );
@@ -826,11 +904,61 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             resolved_limit,
             token_limit_source,
             json_report.official_codex.as_ref(),
+            json_report.official_claude.as_ref(),
             &tz,
         );
         print_debug(&show.stats, &args.common);
         Ok(())
     }
+}
+
+async fn fetch_selected_official_limits(
+    common: &CommonArgs,
+) -> (
+    Option<OfficialCodexSnapshot>,
+    Option<OfficialClaudeSnapshot>,
+    Vec<String>,
+) {
+    let codex_enabled = !common.no_codex;
+    let claude_enabled = !common.no_claude;
+    let (codex_result, claude_result) = tokio::join!(
+        async {
+            if codex_enabled {
+                Some(fetch_codex_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if claude_enabled {
+                Some(fetch_claude_official_limits().await)
+            } else {
+                None
+            }
+        }
+    );
+
+    let mut errors = Vec::new();
+
+    let codex = match codex_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch Codex limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    let claude = match claude_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch Claude limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    (codex, claude, errors)
 }
 
 fn parse_token_limit_mode(raw: Option<&str>) -> Result<Option<TokenLimitMode>> {
@@ -1216,6 +1344,7 @@ fn build_block_json_report(
         token_limit_source,
         membership_estimate,
         official_codex,
+        official_claude,
         now,
     } = options;
     let mut grouped: HashMap<i64, GroupAggregate> = HashMap::new();
@@ -1290,6 +1419,7 @@ fn build_block_json_report(
         token_limit_source,
         membership_estimate,
         official_codex,
+        official_claude,
     }
 }
 
@@ -1299,6 +1429,7 @@ async fn run_blocks_live(
     window_secs: i64,
     token_limit_mode: Option<TokenLimitMode>,
     mut official_codex: Option<OfficialCodexSnapshot>,
+    mut official_claude: Option<OfficialClaudeSnapshot>,
 ) -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("--live requires an interactive terminal");
@@ -1313,17 +1444,17 @@ async fn run_blocks_live(
         let loaded = load_usage(&args.common, tz).await?;
         if args.official_limits
             && (official_codex.is_none()
+                || official_claude.is_none()
                 || last_official_refresh.elapsed() >= Duration::from_secs(30))
         {
-            match fetch_codex_official_limits().await {
-                Ok(snapshot) => {
-                    official_codex = Some(snapshot);
-                    last_official_refresh = Instant::now();
-                }
-                Err(_) => {
-                    last_official_refresh = Instant::now();
-                }
+            let (codex, claude, _errors) = fetch_selected_official_limits(&args.common).await;
+            if codex.is_some() {
+                official_codex = codex;
             }
+            if claude.is_some() {
+                official_claude = claude;
+            }
+            last_official_refresh = Instant::now();
         }
         let membership_estimate = estimate_membership_from_logs(&loaded.events, now, window_secs);
         let inferred_limit = membership_estimate
@@ -1335,6 +1466,14 @@ async fn run_blocks_live(
         let token_limit_source =
             resolve_token_limit_source(token_limit_mode, resolved_from_mode, inferred_limit);
         let active = active_block_summary(&loaded.events, now, window_secs);
+        let selected_source = select_live_source(
+            &args.common,
+            active.as_ref(),
+            official_codex.as_ref(),
+            official_claude.as_ref(),
+        );
+        let (today_totals, last_30d_totals, last_30d_active_days) =
+            aggregate_recent_costs(&loaded.events, now, tz, selected_source);
         let frame_context = LiveFrameContext::new(
             now,
             tz,
@@ -1346,8 +1485,12 @@ async fn run_blocks_live(
                 membership_estimate: membership_estimate.as_ref(),
             },
             official_codex.as_ref(),
+            official_claude.as_ref(),
+            selected_source,
+            today_totals,
+            last_30d_totals,
+            last_30d_active_days,
             active.as_ref(),
-            &loaded.stats,
         );
 
         render_blocks_live_frame(&mut session, &frame_context)?;
@@ -1358,6 +1501,64 @@ async fn run_blocks_live(
     }
 
     Ok(())
+}
+
+fn select_live_source(
+    common: &CommonArgs,
+    active: Option<&ActiveBlockSummary>,
+    official_codex: Option<&OfficialCodexSnapshot>,
+    official_claude: Option<&OfficialClaudeSnapshot>,
+) -> Option<SourceKind> {
+    if common.no_codex && !common.no_claude {
+        return Some(SourceKind::Claude);
+    }
+    if common.no_claude && !common.no_codex {
+        return Some(SourceKind::Codex);
+    }
+    if let Some(source) = active.and_then(|v| v.dominant_source) {
+        return Some(source);
+    }
+    if official_codex.is_some() {
+        return Some(SourceKind::Codex);
+    }
+    if official_claude.is_some() {
+        return Some(SourceKind::Claude);
+    }
+    None
+}
+
+fn aggregate_recent_costs(
+    events: &[UsageEvent],
+    now: DateTime<Utc>,
+    tz: &TimeZoneMode,
+    source: Option<SourceKind>,
+) -> (TokenCounts, TokenCounts, u32) {
+    let today = local_date(now, tz);
+    let last_30d_start = today
+        .checked_sub_signed(chrono::TimeDelta::days(29))
+        .unwrap_or(today);
+    let mut today_totals = TokenCounts::default();
+    let mut last_30d_totals = TokenCounts::default();
+    let mut active_days = HashSet::new();
+
+    for event in events {
+        if source.is_some_and(|selected| event.source != selected) {
+            continue;
+        }
+        let day = local_date(event.timestamp, tz);
+        let counts = event.usage.to_counts();
+        if day == today {
+            today_totals.add_assign(counts.clone());
+        }
+        if day >= last_30d_start && day <= today {
+            if counts.total_tokens > 0 {
+                active_days.insert(day);
+            }
+            last_30d_totals.add_assign(counts);
+        }
+    }
+
+    (today_totals, last_30d_totals, active_days.len() as u32)
 }
 
 struct BlocksLiveSession {
@@ -1396,15 +1597,36 @@ fn render_blocks_live_frame(
 
 fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameContext<'_>) {
     let root = frame.area();
+    let preferred_official = preferred_official_for_live(context);
+    let progress_height = if preferred_official
+        .and_then(LiveOfficialRef::secondary_used_percent)
+        .is_some()
+    {
+        6
+    } else {
+        4
+    };
     let header_height = if root.width >= 112 { 2 } else { 4 };
-    let [header_area, progress_area, body_area, stats_area] = Layout::vertical([
+    let [header_area, progress_area, body_area] = Layout::vertical([
         Constraint::Length(header_height),
-        Constraint::Length(4),
+        Constraint::Length(progress_height),
         Constraint::Min(4),
-        Constraint::Length(1),
     ])
     .margin(1)
     .areas(root);
+
+    let mode_text = if preferred_official.is_some() {
+        "official"
+    } else {
+        "estimated"
+    };
+    let source_text = context
+        .selected_source
+        .map(SourceKind::as_str)
+        .unwrap_or("all");
+    let plan_text = preferred_official
+        .and_then(LiveOfficialRef::plan_type)
+        .unwrap_or("unknown");
 
     let header_lines = if root.width >= 112 {
         vec![
@@ -1416,15 +1638,13 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    "  refresh {}s  |  {}  |  {}h window",
+                    "  {source_text}  |  {mode_text}  |  plan {plan_text}  |  updated just now  |  refresh {}s",
                     context.refresh_every,
-                    context.now_text,
-                    context.window_secs / 3600
                 )),
             ]),
             Line::from(format!(
-                "block {} -> {}  |  q / Esc / Ctrl+C exit",
-                context.block_start_text, context.block_end_text
+                "{}  |  block {} -> {}  |  q / Esc / Ctrl+C exit",
+                context.now_text, context.block_start_text, context.block_end_text
             )),
         ]
     } else {
@@ -1437,10 +1657,13 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    "  refresh {}s  |  {}",
-                    context.refresh_every, context.now_text
+                    "  {source_text}  |  {mode_text}  |  plan {plan_text}",
                 )),
             ]),
+            Line::from(format!(
+                "{}  |  refresh {}s",
+                context.now_text, context.refresh_every
+            )),
             Line::from(format!("{}h window", context.window_secs / 3600)),
             Line::from(format!(
                 "block {} -> {}",
@@ -1454,44 +1677,7 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
     frame.render_widget(header, header_area);
 
     render_live_progress_bars(frame, progress_area, context);
-
-    let mut body_lines = Vec::new();
-    body_lines.push(Line::from(vec![Span::styled(
-        "Current",
-        Style::default()
-            .fg(TuiColor::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )]));
-    body_lines.extend(live_usage_lines(context.active));
-    body_lines.push(Line::from(""));
-    body_lines.push(Line::from(vec![Span::styled(
-        "Projection / Limit",
-        Style::default()
-            .fg(TuiColor::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )]));
-    body_lines.extend(live_projection_lines(
-        context.active,
-        context.limit.token_limit,
-        context.limit.token_limit_source,
-        context.limit.membership_estimate,
-        context.official_codex,
-        context.tz,
-    ));
-    let body_widget = Paragraph::new(body_lines).wrap(Wrap { trim: true });
-    frame.render_widget(body_widget, body_area);
-
-    let stats_line = format!(
-        "files={} parsed={} filtered={} invalid={} missing={} unknown_pricing={}",
-        context.stats.files_discovered,
-        context.stats.lines_parsed,
-        context.stats.lines_filtered,
-        context.stats.lines_invalid_json,
-        context.stats.lines_missing_usage,
-        context.stats.lines_unknown_pricing
-    );
-    let stats_widget = Paragraph::new(Line::from(stats_line)).wrap(Wrap { trim: true });
-    frame.render_widget(stats_widget, stats_area);
+    render_live_body(frame, body_area, context);
 }
 
 fn render_live_progress_bars(
@@ -1499,13 +1685,30 @@ fn render_live_progress_bars(
     area: ratatui::layout::Rect,
     context: &LiveFrameContext<'_>,
 ) {
-    let [time_label_area, time_area, limit_label_area, limit_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let preferred_official = preferred_official_for_live(context);
+    let show_weekly = preferred_official
+        .and_then(LiveOfficialRef::secondary_used_percent)
+        .is_some();
+    let constraints = if show_weekly {
+        vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    };
+    let rows = Layout::vertical(constraints).split(area);
+    let time_label_area = rows[0];
+    let time_area = rows[1];
 
     let time_ratio = if context.window_secs > 0 {
         (context.elapsed_secs as f64 / context.window_secs as f64).clamp(0.0, 1.0)
@@ -1541,13 +1744,70 @@ fn render_live_progress_bars(
         .label(time_label);
     frame.render_widget(time_gauge, time_area);
 
-    let (current_tokens, projected_tokens) = context
+    if let Some(official) = preferred_official
+        && let Some(primary_used) = official.primary_used_percent()
+    {
+        let primary_title = Paragraph::new(Line::from(vec![Span::styled(
+            format!("Session ({})", official.provider_label()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+        frame.render_widget(primary_title, rows[2]);
+
+        let mut primary_label = format!("{primary_used:.1}% used");
+        if let Some(resets_at) = official.primary_resets_at() {
+            let eta_text = format_time_until_reset_short(resets_at, Utc::now());
+            let local_reset = format_reset_timestamp(resets_at, context.tz);
+            primary_label.push_str(&format!(" | resets in {eta_text} ({local_reset})"));
+        }
+        let primary_gauge = Gauge::default()
+            .gauge_style(
+                Style::default()
+                    .fg(used_gauge_color(primary_used))
+                    .add_modifier(Modifier::BOLD),
+            )
+            .ratio((primary_used / 100.0).clamp(0.0, 1.0))
+            .label(primary_label);
+        frame.render_widget(primary_gauge, rows[3]);
+
+        if show_weekly && let Some(weekly_used) = official.secondary_used_percent() {
+            let weekly_title = Paragraph::new(Line::from(vec![Span::styled(
+                format!("Weekly ({})", official.provider_label()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )]));
+            frame.render_widget(weekly_title, rows[4]);
+
+            let mut weekly_label = format!("{weekly_used:.1}% used");
+            if let Some(resets_at) = official.secondary_resets_at() {
+                let eta_text = format_time_until_reset_short(resets_at, Utc::now());
+                let local_reset = format_reset_timestamp(resets_at, context.tz);
+                weekly_label.push_str(&format!(" | resets in {eta_text} ({local_reset})"));
+            }
+            let weekly_gauge = Gauge::default()
+                .gauge_style(
+                    Style::default()
+                        .fg(used_gauge_color(weekly_used))
+                        .add_modifier(Modifier::BOLD),
+                )
+                .ratio((weekly_used / 100.0).clamp(0.0, 1.0))
+                .label(weekly_label);
+            frame.render_widget(weekly_gauge, rows[5]);
+        }
+        return;
+    }
+
+    let blended = blended_projection(context);
+    let current_tokens = context
         .active
-        .map(|active_block| {
-            let (projected_tokens, _) = projected_end(active_block);
-            (active_block.totals.total_tokens, projected_tokens)
+        .map(|active_block| active_block.totals.total_tokens)
+        .unwrap_or(0);
+    let projected_tokens = blended
+        .map(|projection| projection.projected_tokens_end)
+        .or_else(|| {
+            context
+                .active
+                .map(|active_block| projected_end(active_block).0)
         })
-        .unwrap_or((0, 0));
+        .unwrap_or(0);
 
     let (limit_ratio, limit_label, limit_color, promoted) = match context.limit.token_limit {
         Some(0) => (0.0, "disabled (0)".to_string(), TuiColor::DarkGray, false),
@@ -1598,8 +1858,8 @@ fn render_live_progress_bars(
         ),
     };
     let limit_title_text = match context.limit.token_limit_source {
-        TokenLimitSource::EstimatedFromLogs if promoted => "Limit (estimated + tiered)",
-        TokenLimitSource::EstimatedFromLogs => "Limit (estimated from logs)",
+        TokenLimitSource::EstimatedFromLogs if promoted => "Estimated limit (tiered)",
+        TokenLimitSource::EstimatedFromLogs => "Estimated limit (from logs)",
         TokenLimitSource::HistoricalMax => "Limit (historical max)",
         TokenLimitSource::Explicit => "Limit (explicit)",
         TokenLimitSource::Unset => "Limit",
@@ -1608,7 +1868,7 @@ fn render_live_progress_bars(
         limit_title_text,
         Style::default().add_modifier(Modifier::BOLD),
     )]));
-    frame.render_widget(limit_title, limit_label_area);
+    frame.render_widget(limit_title, rows[2]);
 
     let limit_gauge = Gauge::default()
         .gauge_style(
@@ -1618,222 +1878,720 @@ fn render_live_progress_bars(
         )
         .ratio(limit_ratio)
         .label(limit_label);
-    frame.render_widget(limit_gauge, limit_area);
+    frame.render_widget(limit_gauge, rows[3]);
 }
 
-fn live_usage_lines(active: Option<&ActiveBlockSummary>) -> Vec<Line<'static>> {
-    let Some(active_block) = active else {
-        return vec![
-            Line::from("No active block usage in current window."),
-            Line::from("Waiting for token events..."),
-        ];
+#[derive(Clone, Copy)]
+enum LiveOfficialRef<'a> {
+    Codex(&'a OfficialCodexSnapshot),
+    Claude(&'a OfficialClaudeSnapshot),
+}
+
+impl<'a> LiveOfficialRef<'a> {
+    fn provider_label(self) -> &'static str {
+        match self {
+            LiveOfficialRef::Codex(_) => "Codex",
+            LiveOfficialRef::Claude(_) => "Claude",
+        }
+    }
+
+    fn plan_type(self) -> Option<&'a str> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.plan_type.as_deref(),
+            LiveOfficialRef::Claude(snapshot) => snapshot.plan_type.as_deref(),
+        }
+    }
+
+    fn primary_used_percent(self) -> Option<f64> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.primary_used_percent,
+            LiveOfficialRef::Claude(snapshot) => snapshot.primary_used_percent,
+        }
+    }
+
+    fn secondary_used_percent(self) -> Option<f64> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.secondary_used_percent,
+            LiveOfficialRef::Claude(snapshot) => snapshot.secondary_used_percent,
+        }
+    }
+
+    fn secondary_window_mins(self) -> Option<i64> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.secondary_window_mins,
+            LiveOfficialRef::Claude(snapshot) => snapshot.secondary_window_mins,
+        }
+    }
+
+    fn primary_resets_at(self) -> Option<i64> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.primary_resets_at,
+            LiveOfficialRef::Claude(snapshot) => snapshot.primary_resets_at,
+        }
+    }
+
+    fn secondary_resets_at(self) -> Option<i64> {
+        match self {
+            LiveOfficialRef::Codex(snapshot) => snapshot.secondary_resets_at,
+            LiveOfficialRef::Claude(snapshot) => snapshot.secondary_resets_at,
+        }
+    }
+}
+
+fn preferred_official_for_live<'a>(
+    context: &'a LiveFrameContext<'a>,
+) -> Option<LiveOfficialRef<'a>> {
+    if let Some(source) = context.selected_source {
+        return match source {
+            SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
+            SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
+        };
+    }
+
+    match (context.official_codex, context.official_claude) {
+        (Some(codex), None) => Some(LiveOfficialRef::Codex(codex)),
+        (None, Some(claude)) => Some(LiveOfficialRef::Claude(claude)),
+        (Some(codex), Some(claude)) => {
+            match context.active.and_then(|active| active.dominant_source) {
+                Some(SourceKind::Claude) => Some(LiveOfficialRef::Claude(claude)),
+                Some(SourceKind::Codex) => Some(LiveOfficialRef::Codex(codex)),
+                None => Some(LiveOfficialRef::Codex(codex)),
+            }
+        }
+        (None, None) => None,
+    }
+}
+
+fn used_gauge_color(used_percent: f64) -> TuiColor {
+    if used_percent >= 85.0 {
+        TuiColor::Red
+    } else if used_percent >= 60.0 {
+        TuiColor::Yellow
+    } else {
+        TuiColor::Green
+    }
+}
+
+fn render_live_body(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    if area.width >= 128 {
+        let [left_area, right_area] =
+            Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)])
+                .spacing(2)
+                .areas(area);
+        let left = Paragraph::new(live_current_lines(context)).wrap(Wrap { trim: true });
+        let right = Paragraph::new(live_limit_lines(context)).wrap(Wrap { trim: true });
+        frame.render_widget(left, left_area);
+        frame.render_widget(right, right_area);
+        return;
+    }
+
+    let mut lines = live_current_lines(context);
+    lines.push(Line::from(""));
+    lines.extend(live_limit_lines(context));
+    let body = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(body, area);
+}
+
+#[derive(Clone, Copy)]
+struct TodayProjection {
+    tokens_per_hour: f64,
+    cost_per_hour: f64,
+    projected_tokens_end_of_day: u64,
+    projected_cost_end_of_day: f64,
+}
+
+fn day_elapsed_seconds(now: DateTime<Utc>, tz: &TimeZoneMode) -> f64 {
+    match tz {
+        TimeZoneMode::Local => {
+            let local = now.with_timezone(&Local);
+            (i64::from(local.hour()) * 3600
+                + i64::from(local.minute()) * 60
+                + i64::from(local.second()))
+            .max(1) as f64
+        }
+        TimeZoneMode::Utc => {
+            (i64::from(now.hour()) * 3600 + i64::from(now.minute()) * 60 + i64::from(now.second()))
+                .max(1) as f64
+        }
+        TimeZoneMode::Named(zone) => {
+            let zoned = now.with_timezone(zone);
+            (i64::from(zoned.hour()) * 3600
+                + i64::from(zoned.minute()) * 60
+                + i64::from(zoned.second()))
+            .max(1) as f64
+        }
+    }
+}
+
+fn day_progress_ratio(now: DateTime<Utc>, tz: &TimeZoneMode) -> f64 {
+    (day_elapsed_seconds(now, tz) / (24.0 * 3600.0)).clamp(0.0, 1.0)
+}
+
+const LIVE_KEY_COL_WIDTH: usize = 18;
+
+fn live_key_label(key: &str) -> String {
+    format!("{:<width$}", format!("{key}:"), width = LIVE_KEY_COL_WIDTH)
+}
+
+fn today_projection(context: &LiveFrameContext<'_>) -> Option<TodayProjection> {
+    let elapsed_secs = day_elapsed_seconds(context.now, context.tz);
+    if elapsed_secs < 10.0 * 60.0 {
+        return None;
+    }
+
+    let tokens_per_sec = context.today_totals.total_tokens as f64 / elapsed_secs;
+    let cost_per_sec = context.today_totals.cost_usd / elapsed_secs;
+    let full_day_secs = 24.0 * 3600.0;
+    Some(TodayProjection {
+        tokens_per_hour: tokens_per_sec * 3600.0,
+        cost_per_hour: cost_per_sec * 3600.0,
+        projected_tokens_end_of_day: (tokens_per_sec * full_day_secs)
+            .round()
+            .max(context.today_totals.total_tokens as f64)
+            as u64,
+        projected_cost_end_of_day: (cost_per_sec * full_day_secs)
+            .max(context.today_totals.cost_usd),
+    })
+}
+
+#[derive(Clone, Copy)]
+struct BlendedProjection {
+    tokens_per_minute: f64,
+    cost_per_hour: f64,
+    projected_tokens_end: u64,
+    projected_cost_end: f64,
+    short_weight: f64,
+    today_weight: f64,
+    long_weight: f64,
+}
+
+#[derive(Clone, Copy)]
+struct RateComponent {
+    tokens_per_minute: f64,
+    cost_per_minute: f64,
+}
+
+fn blended_projection(context: &LiveFrameContext<'_>) -> Option<BlendedProjection> {
+    let block_ratio = if context.window_secs > 0 {
+        (context.elapsed_secs as f64 / context.window_secs as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let day_ratio = day_progress_ratio(context.now, context.tz);
+
+    let short_component = context.active.and_then(|active| {
+        active.burn.as_ref().map(|burn| RateComponent {
+            tokens_per_minute: burn.tokens_per_minute.max(0.0),
+            cost_per_minute: (burn.cost_per_hour / 60.0).max(0.0),
+        })
+    });
+    let short_score = if short_component.is_some() {
+        0.15 + 1.35 * block_ratio
+    } else {
+        0.0
     };
 
-    vec![
-        Line::from(format!(
-            "Current: {} tokens | {}",
-            format_u64(active_block.totals.total_tokens),
-            format_usd(active_block.totals.cost_usd)
-        )),
-        Line::from(format!(
-            "Input {} | Output {}",
-            format_u64(active_block.totals.input_tokens),
-            format_u64(active_block.totals.output_tokens)
-        )),
-        Line::from(format!(
-            "Cache Create {} | Cache Read {}",
-            format_u64(active_block.totals.cache_creation_input_tokens),
-            format_u64(active_block.totals.cache_read_input_tokens),
-        )),
-        Line::from(format!(
-            "Remaining: {}",
-            format_remaining_minutes(active_block.remaining_minutes)
-        )),
-    ]
+    let today_component = today_projection(context).map(|projection| RateComponent {
+        tokens_per_minute: (projection.tokens_per_hour / 60.0).max(0.0),
+        cost_per_minute: (projection.cost_per_hour / 60.0).max(0.0),
+    });
+    let today_score = if today_component.is_some() {
+        0.25 + 0.85 * day_ratio.sqrt()
+    } else {
+        0.0
+    };
+
+    let active_days = context.last_30d_active_days.max(1) as f64;
+    let long_tokens_per_day = context.last_30d_totals.total_tokens as f64 / active_days;
+    let long_cost_per_day = context.last_30d_totals.cost_usd / active_days;
+    let long_component = if long_tokens_per_day > 0.0 || long_cost_per_day > 0.0 {
+        Some(RateComponent {
+            tokens_per_minute: (long_tokens_per_day / 1440.0).max(0.0),
+            cost_per_minute: (long_cost_per_day / 1440.0).max(0.0),
+        })
+    } else {
+        None
+    };
+    let long_score = if long_component.is_some() {
+        (1.20 - 0.95 * block_ratio).clamp(0.10, 2.0)
+    } else {
+        0.0
+    };
+
+    let total_score = short_score + today_score + long_score;
+    if total_score <= f64::EPSILON {
+        return None;
+    }
+
+    let short_weight = short_score / total_score;
+    let today_weight = today_score / total_score;
+    let long_weight = long_score / total_score;
+
+    let (short_tokens, short_cost) = short_component
+        .map(|component| (component.tokens_per_minute, component.cost_per_minute))
+        .unwrap_or((0.0, 0.0));
+    let (today_tokens, today_cost) = today_component
+        .map(|component| (component.tokens_per_minute, component.cost_per_minute))
+        .unwrap_or((0.0, 0.0));
+    let (long_tokens, long_cost) = long_component
+        .map(|component| (component.tokens_per_minute, component.cost_per_minute))
+        .unwrap_or((0.0, 0.0));
+
+    let blended_tokens_per_minute =
+        short_tokens * short_weight + today_tokens * today_weight + long_tokens * long_weight;
+    let blended_cost_per_minute =
+        short_cost * short_weight + today_cost * today_weight + long_cost * long_weight;
+
+    let (current_tokens, current_cost, remaining_minutes) = context
+        .active
+        .map(|active| {
+            (
+                active.totals.total_tokens,
+                active.totals.cost_usd,
+                active.remaining_minutes.max(0),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                0,
+                0.0,
+                ((context.window_secs - context.elapsed_secs).max(0) / 60),
+            )
+        });
+
+    let projected_tokens_end = (current_tokens as f64
+        + blended_tokens_per_minute * remaining_minutes as f64)
+        .round()
+        .max(current_tokens as f64) as u64;
+    let projected_cost_end =
+        (current_cost + blended_cost_per_minute * remaining_minutes as f64).max(current_cost);
+
+    Some(BlendedProjection {
+        tokens_per_minute: blended_tokens_per_minute,
+        cost_per_hour: blended_cost_per_minute * 60.0,
+        projected_tokens_end,
+        projected_cost_end,
+        short_weight,
+        today_weight,
+        long_weight,
+    })
 }
 
-fn live_projection_lines(
-    active: Option<&ActiveBlockSummary>,
-    token_limit: Option<u64>,
-    token_limit_source: TokenLimitSource,
-    membership_estimate: Option<&MembershipEstimate>,
-    official_codex: Option<&OfficialCodexSnapshot>,
-    tz: &TimeZoneMode,
-) -> Vec<Line<'static>> {
-    let Some(active_block) = active else {
-        let mut lines = match token_limit {
-            Some(limit) if limit > 0 => {
-                let label = if token_limit_source == TokenLimitSource::EstimatedFromLogs {
-                    "Estimated token limit"
-                } else {
-                    "Token limit"
-                };
-                vec![Line::from(format!("{label}: {}", format_u64(limit)))]
-            }
-            Some(_) => vec![Line::from("Token limit: 0 (disabled)")],
-            None => {
-                if let Some(estimate) = membership_estimate {
-                    vec![
-                        Line::from(format!(
-                            "Estimated plan: {} ({:.0}% confidence)",
-                            display_plan_label(&estimate.estimated_plan),
-                            estimate.confidence * 100.0
-                        )),
-                        Line::from(format!(
-                            "Estimated window limit: {} tokens",
-                            format_u64(estimate.estimated_window_tokens)
-                        )),
-                    ]
-                } else {
-                    vec![Line::from("Token limit: not set")]
-                }
-            }
-        };
-        append_official_codex_lines(&mut lines, official_codex, tz);
+fn live_key_value_line(
+    key: impl AsRef<str>,
+    value: impl Into<String>,
+    value_color: TuiColor,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(live_key_label(key.as_ref())),
+        Span::styled(
+            value.into(),
+            Style::default()
+                .fg(value_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+fn live_current_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![Span::styled(
+        "Current",
+        Style::default()
+            .fg(TuiColor::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )])];
+    let source_label = context
+        .selected_source
+        .map(SourceKind::as_str)
+        .unwrap_or("all");
+    lines.push(live_key_value_line(
+        "Source",
+        source_label,
+        TuiColor::LightCyan,
+    ));
+
+    let Some(active_block) = context.active else {
+        lines.push(Line::from("No active usage in this 5h window yet."));
+        lines.push(live_key_value_line(
+            "Today",
+            format!(
+                "{} · {} tokens",
+                format_usd(context.today_totals.cost_usd),
+                format_u64(context.today_totals.total_tokens)
+            ),
+            TuiColor::Green,
+        ));
         return lines;
     };
 
-    let current_tokens = active_block.totals.total_tokens;
-    let current_cost = active_block.totals.cost_usd;
-    let mut lines = Vec::new();
+    lines.push(live_key_value_line(
+        "5h now",
+        format!(
+            "{} tokens | {}",
+            format_u64(active_block.totals.total_tokens),
+            format_usd(active_block.totals.cost_usd)
+        ),
+        TuiColor::LightCyan,
+    ));
 
     if let Some(burn) = active_block.burn.as_ref() {
-        let status_text = burn_status_text(burn.status);
-        lines.push(Line::from(format!(
-            "Burn: {} tokens/min | {}/hr",
-            format_u64(burn.tokens_per_minute.round().max(0.0) as u64),
-            format_usd(burn.cost_per_hour)
-        )));
         lines.push(Line::from(vec![
-            Span::raw("Burn status: "),
+            Span::raw(live_key_label("Burn avg")),
             Span::styled(
-                status_text,
+                format!(
+                    "{} tokens/min | {}/hr",
+                    format_u64(burn.tokens_per_minute.round().max(0.0) as u64),
+                    format_usd(burn.cost_per_hour)
+                ),
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" | "),
+            Span::styled(
+                burn_status_text(burn.status),
                 Style::default()
                     .fg(burn_status_color(burn.status))
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
-
-        let (projected_tokens, projected_cost) = projected_end(active_block);
-        lines.push(Line::from(format!(
-            "Projected end: {} | {}",
-            format_u64(projected_tokens),
-            format_usd(projected_cost)
-        )));
-
-        append_limit_lines(
-            &mut lines,
-            LimitDisplayContext {
-                token_limit,
-                token_limit_source,
-                membership_estimate,
-            },
-            ProjectionTotals {
-                current_tokens,
-                projected_tokens,
-                current_cost,
-                projected_cost,
-            },
-        );
-    } else {
-        lines.push(Line::from("Burn: waiting for more activity..."));
-        append_limit_lines(
-            &mut lines,
-            LimitDisplayContext {
-                token_limit,
-                token_limit_source,
-                membership_estimate,
-            },
-            ProjectionTotals {
-                current_tokens,
-                projected_tokens: current_tokens,
-                current_cost,
-                projected_cost: current_cost,
-            },
-        );
     }
 
-    if let Some(estimate) = membership_estimate {
-        lines.push(Line::from(format!(
-            "Estimated plan: {} ({:.0}% confidence)",
-            display_plan_label(&estimate.estimated_plan),
-            estimate.confidence * 100.0
-        )));
+    if let Some(projection) = today_projection(context) {
+        lines.push(live_key_value_line(
+            "Today EOD(avg)",
+            format!(
+                "{} tokens | {}",
+                format_u64(projection.projected_tokens_end_of_day),
+                format_usd(projection.projected_cost_end_of_day)
+            ),
+            TuiColor::LightCyan,
+        ));
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label("Today avg rate")),
+            Span::styled(
+                format!(
+                    "{}/hr | {}/hr",
+                    format_u64(projection.tokens_per_hour.round().max(0.0) as u64),
+                    format_usd(projection.cost_per_hour)
+                ),
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
     }
-    append_official_codex_lines(&mut lines, official_codex, tz);
+
+    lines.push(live_key_value_line(
+        "Today",
+        format!(
+            "{} · {} tokens",
+            format_usd(context.today_totals.cost_usd),
+            format_u64(context.today_totals.total_tokens)
+        ),
+        TuiColor::Green,
+    ));
+    lines.push(live_key_value_line(
+        "Last 30d",
+        format!(
+            "{} · {} tokens",
+            format_usd(context.last_30d_totals.cost_usd),
+            format_u64(context.last_30d_totals.total_tokens)
+        ),
+        TuiColor::Green,
+    ));
 
     lines
 }
 
-fn append_limit_lines(
-    lines: &mut Vec<Line<'static>>,
-    limit_ctx: LimitDisplayContext<'_>,
-    projection: ProjectionTotals,
-) {
-    let ProjectionTotals {
-        current_tokens,
-        projected_tokens,
-        current_cost,
-        projected_cost,
-    } = projection;
+fn live_limit_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![Span::styled(
+        "Forecast",
+        Style::default()
+            .fg(TuiColor::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )])];
 
-    match limit_ctx.token_limit {
-        Some(0) => lines.push(Line::from("Token limit: 0 (disabled)")),
-        Some(limit) => {
-            let (effective_limit, promotions) = resolve_display_limit(
+    if let Some(official) = preferred_official_for_live(context) {
+        if let Some(secondary_used) = official.secondary_used_percent() {
+            if let Some((pace_line, pace_color)) = weekly_pace_line(
+                secondary_used,
+                official.secondary_window_mins(),
+                official.secondary_resets_at(),
+                context.now,
+            ) {
+                lines.push(live_key_value_line("Pace", pace_line, pace_color));
+            }
+
+            if let Some((runout_line, runout_color)) = weekly_runout_local_line(
+                secondary_used,
+                official.secondary_window_mins(),
+                official.secondary_resets_at(),
+                context.now,
+                context.tz,
+            ) {
+                lines.push(live_key_value_line(
+                    "Weekly runout",
+                    runout_line,
+                    runout_color,
+                ));
+            }
+        } else if let Some(primary_used) = official.primary_used_percent() {
+            let session_color = used_gauge_color(primary_used);
+            lines.push(live_key_value_line(
+                "Session trend",
+                format!("{:.1}% used", primary_used),
+                session_color,
+            ));
+        }
+    } else {
+        lines.push(live_key_value_line(
+            "Official",
+            "limits unavailable",
+            TuiColor::Yellow,
+        ));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "Projection",
+        Style::default()
+            .fg(TuiColor::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )]));
+
+    let limit_ctx = LimitDisplayContext {
+        token_limit: context.limit.token_limit,
+        token_limit_source: context.limit.token_limit_source,
+        membership_estimate: context.limit.membership_estimate,
+    };
+    let blended = blended_projection(context).unwrap_or_else(|| {
+        let (current_tokens, current_cost) = context
+            .active
+            .map(|active| (active.totals.total_tokens, active.totals.cost_usd))
+            .unwrap_or((0, 0.0));
+        BlendedProjection {
+            tokens_per_minute: 0.0,
+            cost_per_hour: 0.0,
+            projected_tokens_end: current_tokens,
+            projected_cost_end: current_cost,
+            short_weight: 0.0,
+            today_weight: 0.0,
+            long_weight: 1.0,
+        }
+    });
+
+    lines.push(Line::from(vec![
+        Span::raw(live_key_label("Rate blend")),
+        Span::styled(
+            format!(
+                "{} tokens/min | {}/hr",
+                format_u64(blended.tokens_per_minute.round().max(0.0) as u64),
+                format_usd(blended.cost_per_hour)
+            ),
+            Style::default()
+                .fg(TuiColor::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw(live_key_label("Weights")),
+        Span::raw("short "),
+        Span::styled(
+            format!("{:.0}%", blended.short_weight * 100.0),
+            Style::default()
+                .fg(TuiColor::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" · today "),
+        Span::styled(
+            format!("{:.0}%", blended.today_weight * 100.0),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" · 30d "),
+        Span::styled(
+            format!("{:.0}%", blended.long_weight * 100.0),
+            Style::default()
+                .fg(TuiColor::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(live_key_value_line(
+        "5h projected end",
+        format!(
+            "{} | {}",
+            format_u64(blended.projected_tokens_end),
+            format_usd(blended.projected_cost_end)
+        ),
+        TuiColor::LightCyan,
+    ));
+
+    let current_tokens = context
+        .active
+        .map(|active_block| active_block.totals.total_tokens)
+        .unwrap_or(0);
+    if let Some(limit) = limit_ctx.token_limit {
+        if limit > 0 {
+            let (effective_limit, _promotions) = resolve_display_limit(
                 limit,
-                projected_tokens,
+                blended.projected_tokens_end,
                 limit_ctx.token_limit_source,
                 limit_ctx.membership_estimate,
             );
             let current_pct = (current_tokens as f64 / effective_limit as f64) * 100.0;
-            let projected_pct = (projected_tokens as f64 / effective_limit as f64) * 100.0;
+            let projected_pct =
+                (blended.projected_tokens_end as f64 / effective_limit as f64) * 100.0;
             let (status, status_color) = limit_status(projected_pct);
-            let remaining_tokens = effective_limit.saturating_sub(current_tokens);
-            let remaining_cost = (projected_cost - current_cost).max(0.0);
-            let label = if limit_ctx.token_limit_source == TokenLimitSource::EstimatedFromLogs {
-                "Estimated limit"
-            } else {
-                "Limit"
-            };
-
-            if promotions.is_empty() {
-                lines.push(Line::from(format!(
-                    "{label}: {} | current {:.1}% | projected {:.1}%",
-                    format_u64(effective_limit),
-                    current_pct,
-                    projected_pct
-                )));
-            } else {
-                lines.push(Line::from(format!(
-                    "{label}: {} (auto-upgraded from {}) | current {:.1}% | projected {:.1}%",
-                    format_u64(effective_limit),
-                    format_u64(limit),
-                    current_pct,
-                    projected_pct
-                )));
-                lines.push(Line::from(format!(
-                    "Auto tier path: {}",
-                    promotions.join(" -> ")
-                )));
-            }
             lines.push(Line::from(vec![
-                Span::raw("Status: "),
+                Span::raw(live_key_label("5h limit")),
+                Span::styled(
+                    format_u64(effective_limit),
+                    Style::default()
+                        .fg(TuiColor::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" | current "),
+                Span::styled(
+                    format!("{current_pct:.1}%"),
+                    Style::default()
+                        .fg(used_gauge_color(current_pct))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" | projected "),
+                Span::styled(
+                    format!("{projected_pct:.1}%"),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" | "),
                 Span::styled(
                     status,
                     Style::default()
                         .fg(status_color)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!(
-                    " | remaining {} tokens | +{}",
-                    format_u64(remaining_tokens),
-                    format_usd(remaining_cost)
-                )),
             ]));
         }
-        None => lines.push(Line::from("Token limit: not set (--token-limit <n|max>)")),
+    } else if let Some(estimate) = limit_ctx.membership_estimate {
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label("Est. 5h limit")),
+            Span::styled(
+                format_u64(estimate.estimated_window_tokens),
+                Style::default()
+                    .fg(TuiColor::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ("),
+            Span::styled(
+                format!("{:.0}%", estimate.confidence * 100.0),
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" confidence)"),
+        ]));
     }
+
+    lines
+}
+
+fn weekly_pace_line(
+    used_percent: f64,
+    window_mins: Option<i64>,
+    resets_at: Option<i64>,
+    now: DateTime<Utc>,
+) -> Option<(String, TuiColor)> {
+    let window_secs = window_mins?.max(1) * 60;
+    let reset_unix = resets_at?;
+    let reset_dt = DateTime::from_timestamp(reset_unix, 0)?;
+    let remaining_secs = (reset_dt - now).num_seconds().clamp(0, window_secs);
+    let elapsed_secs = (window_secs - remaining_secs).clamp(0, window_secs);
+    let elapsed_secs_f = elapsed_secs.max(1) as f64;
+    let elapsed_pct = (elapsed_secs_f / window_secs as f64) * 100.0;
+    let delta = used_percent - elapsed_pct;
+    if delta.abs() < 3.0 {
+        return Some(("On pace · Lasts to reset".to_string(), TuiColor::Green));
+    }
+
+    if delta > 0.0 {
+        let mut suffix = String::new();
+        if used_percent > 0.0 {
+            let used_per_sec = used_percent / elapsed_secs as f64;
+            if used_per_sec.is_finite() && used_per_sec > 0.0 {
+                let secs_to_full = ((100.0 - used_percent).max(0.0) / used_per_sec).round() as i64;
+                if secs_to_full > 0 && secs_to_full < remaining_secs {
+                    suffix = format!(" · Runs out in {}", format_hours_minutes(secs_to_full / 60));
+                } else if remaining_secs > 0 {
+                    suffix = " · Lasts to reset".to_string();
+                }
+            }
+        }
+        let color = if delta >= 20.0 {
+            TuiColor::Red
+        } else {
+            TuiColor::Yellow
+        };
+        Some((format!("Behind (-{:.1}%){}", delta.abs(), suffix), color))
+    } else {
+        Some((
+            format!("Ahead (+{:.1}%) · Lasts to reset", delta.abs(),),
+            TuiColor::Green,
+        ))
+    }
+}
+
+fn weekly_runout_local_line(
+    used_percent: f64,
+    window_mins: Option<i64>,
+    resets_at: Option<i64>,
+    now: DateTime<Utc>,
+    tz: &TimeZoneMode,
+) -> Option<(String, TuiColor)> {
+    let window_secs = window_mins?.max(1) * 60;
+    let reset_unix = resets_at?;
+    let reset_dt = DateTime::from_timestamp(reset_unix, 0)?;
+    let remaining_secs = (reset_dt - now).num_seconds().clamp(0, window_secs);
+    let elapsed_secs = (window_secs - remaining_secs).clamp(0, window_secs);
+    let elapsed_secs_f = elapsed_secs.max(1) as f64;
+    let observed_used_per_sec = (used_percent / elapsed_secs_f).max(0.0);
+    let baseline_used_per_sec = 100.0 / window_secs as f64;
+    let observed_weight = (elapsed_secs_f / (6.0 * 3600.0)).clamp(0.15, 0.9);
+    let blended_used_per_sec =
+        baseline_used_per_sec * (1.0 - observed_weight) + observed_used_per_sec * observed_weight;
+    if !blended_used_per_sec.is_finite() || blended_used_per_sec <= 0.0 {
+        return Some(("Lasts to reset".to_string(), TuiColor::Green));
+    }
+    let secs_to_full = ((100.0 - used_percent).max(0.0) / blended_used_per_sec).round() as i64;
+    if secs_to_full <= 0 {
+        return Some(("Now".to_string(), TuiColor::Red));
+    }
+
+    let predicted = now + chrono::TimeDelta::seconds(secs_to_full);
+    if predicted < reset_dt {
+        let local = format_display_datetime(predicted, tz);
+        let eta = format_hours_minutes((secs_to_full / 60).max(0));
+        let color = if secs_to_full <= 24 * 3600 {
+            TuiColor::Red
+        } else {
+            TuiColor::Yellow
+        };
+        return Some((format!("{local} (in {eta})"), color));
+    }
+
+    Some((
+        format!(
+            "Lasts to reset ({})",
+            format_reset_timestamp(reset_unix, tz)
+        ),
+        TuiColor::Green,
+    ))
 }
 
 fn projected_end(active_block: &ActiveBlockSummary) -> (u64, f64) {
@@ -1953,16 +2711,14 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
 
     let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
     let block_summary = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
-    let official_codex = if args.official_limits {
-        match fetch_codex_official_limits().await {
-            Ok(snapshot) => Some(snapshot),
-            Err(error) => {
-                eprintln!("official: failed to fetch Codex limits ({error})");
-                None
-            }
+    let (official_codex, official_claude) = if args.official_limits {
+        let (codex, claude, errors) = fetch_selected_official_limits(&args.common).await;
+        for error in errors {
+            eprintln!("{error}");
         }
+        (codex, claude)
     } else {
-        None
+        (None, None)
     };
     let line = build_statusline_line(
         &args,
@@ -1971,6 +2727,7 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
         &today_totals,
         block_summary.as_ref(),
         official_codex.as_ref(),
+        official_claude.as_ref(),
         &tz,
     );
 
@@ -2201,6 +2958,16 @@ fn active_block_summary(
             acc
         });
 
+    let mut source_totals: HashMap<SourceKind, u64> = HashMap::new();
+    for event in &selected {
+        let entry = source_totals.entry(event.source).or_insert(0);
+        *entry = entry.saturating_add(event.usage.to_counts().total_tokens);
+    }
+    let dominant_source = source_totals
+        .into_iter()
+        .max_by_key(|(_, tokens)| *tokens)
+        .map(|(source, _)| source);
+
     let burn = {
         let first = selected.first().map(|event| event.timestamp);
         let last = selected.last().map(|event| event.timestamp);
@@ -2237,9 +3004,11 @@ fn active_block_summary(
         totals,
         remaining_minutes: ((block_end_unix - now_unix) / 60).max(0),
         burn,
+        dominant_source,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_statusline_line(
     args: &StatuslineArgs,
     hook: Option<&StatuslineHookInput>,
@@ -2247,6 +3016,7 @@ fn build_statusline_line(
     today_totals: &TokenCounts,
     block: Option<&ActiveBlockSummary>,
     official_codex: Option<&OfficialCodexSnapshot>,
+    official_claude: Option<&OfficialClaudeSnapshot>,
     tz: &TimeZoneMode,
 ) -> String {
     let model_name = hook
@@ -2334,19 +3104,55 @@ fn build_statusline_line(
     }
 
     if let Some(official) = official_codex {
-        parts.push(build_statusline_official_segment(official, tz));
+        parts.push(build_statusline_official_codex_segment(official, tz));
+    }
+    if let Some(official) = official_claude {
+        parts.push(build_statusline_official_claude_segment(official, tz));
     }
 
     parts.join(" | ")
 }
 
-fn build_statusline_official_segment(
+fn build_statusline_official_codex_segment(
     official: &OfficialCodexSnapshot,
     tz: &TimeZoneMode,
 ) -> String {
     let plan = official.plan_type.as_deref().unwrap_or("unknown");
     let now = Utc::now();
     let mut parts = vec![format!("official {plan}")];
+
+    if let Some(primary_used) = official.primary_used_percent {
+        let remaining = (100.0 - primary_used).clamp(0.0, 100.0);
+        let mut entry = format!("5h {:.1}% left", remaining);
+        if let Some(resets_at) = official.primary_resets_at {
+            let reset_text = format_reset_timestamp(resets_at, tz);
+            let eta_text = format_time_until_reset_short(resets_at, now);
+            entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+        }
+        parts.push(entry);
+    }
+
+    if let Some(secondary_used) = official.secondary_used_percent {
+        let remaining = (100.0 - secondary_used).clamp(0.0, 100.0);
+        let mut entry = format!("wk {:.1}% left", remaining);
+        if let Some(resets_at) = official.secondary_resets_at {
+            let reset_text = format_reset_timestamp(resets_at, tz);
+            let eta_text = format_time_until_reset_short(resets_at, now);
+            entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+        }
+        parts.push(entry);
+    }
+
+    parts.join(" ")
+}
+
+fn build_statusline_official_claude_segment(
+    official: &OfficialClaudeSnapshot,
+    tz: &TimeZoneMode,
+) -> String {
+    let plan = official.plan_type.as_deref().unwrap_or("unknown");
+    let now = Utc::now();
+    let mut parts = vec![format!("official claude {plan}")];
 
     if let Some(primary_used) = official.primary_used_percent {
         let remaining = (100.0 - primary_used).clamp(0.0, 100.0);
@@ -2388,66 +3194,6 @@ fn format_hours_minutes(minutes: i64) -> String {
     }
 }
 
-fn append_official_codex_lines(
-    lines: &mut Vec<Line<'static>>,
-    official_codex: Option<&OfficialCodexSnapshot>,
-    tz: &TimeZoneMode,
-) {
-    let Some(official) = official_codex else {
-        return;
-    };
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "Official Codex",
-        Style::default()
-            .fg(TuiColor::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )]));
-    lines.push(Line::from(format!(
-        "Plan: {}",
-        official.plan_type.as_deref().unwrap_or("unknown")
-    )));
-    if let Some(primary) = official.primary_used_percent {
-        lines.push(Line::from(format_official_window_line(
-            "5h",
-            primary,
-            official.primary_window_mins,
-            official.primary_resets_at,
-            tz,
-        )));
-    }
-    if let Some(weekly) = official.secondary_used_percent {
-        lines.push(Line::from(format_official_window_line(
-            "Weekly",
-            weekly,
-            official.secondary_window_mins,
-            official.secondary_resets_at,
-            tz,
-        )));
-    }
-}
-
-fn format_official_window_line(
-    label: &str,
-    used_percent: f64,
-    window_mins: Option<i64>,
-    resets_at: Option<i64>,
-    tz: &TimeZoneMode,
-) -> String {
-    let mut text = format!(
-        "{label}: used {:.1}% | remaining {:.1}%",
-        used_percent,
-        (100.0 - used_percent).clamp(0.0, 100.0)
-    );
-    let details = official_window_details(window_mins, resets_at, tz);
-    if !details.is_empty() {
-        text.push_str(" | ");
-        text.push_str(&details.join(" | "));
-    }
-    text
-}
-
 fn official_window_details(
     window_mins: Option<i64>,
     resets_at: Option<i64>,
@@ -2483,6 +3229,122 @@ fn format_time_until_reset_short(resets_at: i64, now: DateTime<Utc>) -> String {
     } else {
         format_hours_minutes(minutes)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthFile {
+    #[serde(rename = "OPENAI_API_KEY")]
+    openai_api_key: Option<String>,
+    #[serde(default)]
+    tokens: Option<CodexAuthTokens>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexAuthTokens {
+    #[serde(default)]
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexUsageResponse {
+    #[serde(default)]
+    plan_type: Option<String>,
+    #[serde(default)]
+    rate_limit: Option<CodexRateLimitDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexRateLimitDetails {
+    #[serde(default)]
+    primary_window: Option<CodexUsageWindow>,
+    #[serde(default)]
+    secondary_window: Option<CodexUsageWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexUsageWindow {
+    #[serde(default)]
+    used_percent: Option<f64>,
+    #[serde(default)]
+    reset_at: Option<i64>,
+    #[serde(default)]
+    limit_window_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexRefreshResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+}
+
+#[derive(Debug)]
+enum CodexOAuthFetchError {
+    Unauthorized,
+    Other(anyhow::Error),
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeCredentialsFile {
+    #[serde(rename = "claudeAiOauth", alias = "claude_ai_oauth")]
+    claude_ai_oauth: Option<ClaudeOAuthTokens>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaudeOAuthTokens {
+    #[serde(rename = "accessToken", alias = "access_token")]
+    access_token: Option<String>,
+    #[serde(rename = "refreshToken", alias = "refresh_token")]
+    refresh_token: Option<String>,
+    #[serde(rename = "expiresAt", alias = "expires_at")]
+    expires_at: Option<f64>,
+    #[serde(rename = "rateLimitTier", alias = "rate_limit_tier")]
+    rate_limit_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeOAuthUsageResponse {
+    #[serde(default)]
+    five_hour: Option<ClaudeOAuthWindow>,
+    #[serde(default)]
+    seven_day: Option<ClaudeOAuthWindow>,
+    #[serde(default)]
+    seven_day_oauth_apps: Option<ClaudeOAuthWindow>,
+    #[serde(default)]
+    seven_day_opus: Option<ClaudeOAuthWindow>,
+    #[serde(default)]
+    seven_day_sonnet: Option<ClaudeOAuthWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeOAuthWindow {
+    #[serde(default)]
+    utilization: Option<f64>,
+    #[serde(default)]
+    resets_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeRefreshResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+}
+
+#[derive(Debug)]
+enum ClaudeOAuthFetchError {
+    Unauthorized,
+    Other(anyhow::Error),
 }
 
 #[derive(Debug, Deserialize)]
@@ -2533,9 +3395,578 @@ struct RpcAccount {
 }
 
 async fn fetch_codex_official_limits() -> Result<OfficialCodexSnapshot> {
-    tokio::task::spawn_blocking(fetch_codex_official_limits_blocking)
+    match fetch_codex_official_limits_via_oauth().await {
+        Ok(snapshot) => Ok(snapshot),
+        Err(oauth_error) => {
+            let fallback = tokio::task::spawn_blocking(fetch_codex_official_limits_blocking)
+                .await
+                .context("codex app-server task join failed")?;
+            fallback.with_context(|| format!("oauth failed first: {oauth_error}"))
+        }
+    }
+}
+
+async fn fetch_codex_official_limits_via_oauth() -> Result<OfficialCodexSnapshot> {
+    let (auth_path, mut tokens) = load_codex_auth_tokens()?;
+
+    match fetch_codex_usage_with_access_token(&tokens.access_token, tokens.account_id.as_deref())
         .await
-        .context("codex app-server task join failed")?
+    {
+        Ok(snapshot) => Ok(snapshot),
+        Err(CodexOAuthFetchError::Unauthorized) => {
+            let refresh = tokens
+                .refresh_token
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .context("Codex OAuth token unauthorized and no refresh token available")?;
+            let refreshed = refresh_codex_access_token(refresh).await?;
+            tokens.access_token = refreshed.0;
+            tokens.refresh_token = Some(refreshed.1);
+            tokens.id_token = refreshed.2;
+            let _ = save_codex_auth_tokens(&auth_path, &tokens);
+            fetch_codex_usage_with_access_token(&tokens.access_token, tokens.account_id.as_deref())
+                .await
+                .map_err(|err| match err {
+                    CodexOAuthFetchError::Unauthorized => {
+                        anyhow::anyhow!("Codex OAuth remained unauthorized after refresh")
+                    }
+                    CodexOAuthFetchError::Other(error) => error,
+                })
+        }
+        Err(CodexOAuthFetchError::Other(error)) => Err(error),
+    }
+}
+
+fn load_codex_auth_tokens() -> Result<(PathBuf, CodexAuthTokens)> {
+    let auth_path = codex_auth_path().context("Failed to resolve Codex auth path")?;
+    let raw = std::fs::read(&auth_path)
+        .with_context(|| format!("Failed to read Codex auth file: {}", auth_path.display()))?;
+    let parsed: CodexAuthFile =
+        serde_json::from_slice(&raw).context("Invalid Codex auth.json format")?;
+
+    if let Some(api_key) = parsed.openai_api_key {
+        let trimmed = api_key.trim();
+        if !trimmed.is_empty() {
+            return Ok((
+                auth_path,
+                CodexAuthTokens {
+                    access_token: trimmed.to_string(),
+                    refresh_token: None,
+                    id_token: None,
+                    account_id: None,
+                },
+            ));
+        }
+    }
+
+    let Some(tokens) = parsed.tokens else {
+        bail!("Codex auth.json missing tokens");
+    };
+    if tokens.access_token.trim().is_empty() {
+        bail!("Codex auth.json missing access_token");
+    }
+    Ok((auth_path, tokens))
+}
+
+fn save_codex_auth_tokens(path: &Path, tokens: &CodexAuthTokens) -> Result<()> {
+    let existing = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut root = existing;
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let obj = root
+        .as_object_mut()
+        .context("Codex auth root must be object")?;
+    let tokens_value = obj
+        .entry("tokens".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !tokens_value.is_object() {
+        *tokens_value = serde_json::json!({});
+    }
+    let token_obj = tokens_value
+        .as_object_mut()
+        .context("Codex auth tokens must be object")?;
+    token_obj.insert(
+        "access_token".to_string(),
+        serde_json::Value::String(tokens.access_token.clone()),
+    );
+    if let Some(refresh) = tokens.refresh_token.as_ref().filter(|v| !v.is_empty()) {
+        token_obj.insert(
+            "refresh_token".to_string(),
+            serde_json::Value::String(refresh.clone()),
+        );
+    }
+    if let Some(id_token) = tokens.id_token.as_ref().filter(|v| !v.is_empty()) {
+        token_obj.insert(
+            "id_token".to_string(),
+            serde_json::Value::String(id_token.clone()),
+        );
+    }
+    if let Some(account_id) = tokens.account_id.as_ref().filter(|v| !v.is_empty()) {
+        token_obj.insert(
+            "account_id".to_string(),
+            serde_json::Value::String(account_id.clone()),
+        );
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let bytes = serde_json::to_vec_pretty(&root).context("Failed to serialize Codex auth file")?;
+    std::fs::write(path, bytes)
+        .with_context(|| format!("Failed to write Codex auth file: {}", path.display()))?;
+    Ok(())
+}
+
+fn codex_auth_path() -> Option<PathBuf> {
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        let trimmed = codex_home.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed).join("auth.json"));
+        }
+    }
+    Some(dirs::home_dir()?.join(".codex").join("auth.json"))
+}
+
+fn codex_config_path() -> Option<PathBuf> {
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        let trimmed = codex_home.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed).join("config.toml"));
+        }
+    }
+    Some(dirs::home_dir()?.join(".codex").join("config.toml"))
+}
+
+fn resolve_codex_usage_base_url() -> String {
+    let mut base = "https://chatgpt.com/backend-api".to_string();
+    if let Some(config_path) = codex_config_path()
+        && let Ok(contents) = std::fs::read_to_string(config_path)
+        && let Some(parsed) = parse_chatgpt_base_url(&contents)
+    {
+        base = parsed;
+    }
+
+    while base.ends_with('/') {
+        base.pop();
+    }
+    if (base.starts_with("https://chatgpt.com") || base.starts_with("https://chat.openai.com"))
+        && !base.contains("/backend-api")
+    {
+        base.push_str("/backend-api");
+    }
+    base
+}
+
+fn parse_chatgpt_base_url(contents: &str) -> Option<String> {
+    for raw_line in contents.lines() {
+        let line = raw_line
+            .split('#')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, '=');
+        let key = parts.next()?.trim();
+        let value = parts.next()?.trim();
+        if key != "chatgpt_base_url" {
+            continue;
+        }
+        let unquoted = value
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string();
+        if !unquoted.is_empty() {
+            return Some(unquoted);
+        }
+    }
+    None
+}
+
+async fn fetch_codex_usage_with_access_token(
+    access_token: &str,
+    account_id: Option<&str>,
+) -> std::result::Result<OfficialCodexSnapshot, CodexOAuthFetchError> {
+    let base = resolve_codex_usage_base_url();
+    let path = if base.contains("/backend-api") {
+        "/wham/usage"
+    } else {
+        "/api/codex/usage"
+    };
+    let url = format!("{base}{path}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| CodexOAuthFetchError::Other(anyhow::Error::new(error)))?;
+
+    let mut request = client
+        .get(url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .header("User-Agent", "tokenusage");
+    if let Some(account_id) = account_id.filter(|v| !v.is_empty()) {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CodexOAuthFetchError::Other(anyhow::Error::new(error)))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(CodexOAuthFetchError::Unauthorized);
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(CodexOAuthFetchError::Other(anyhow::anyhow!(
+            "Codex usage API returned {status}: {body}"
+        )));
+    }
+
+    let usage: CodexUsageResponse = response
+        .json()
+        .await
+        .map_err(|error| CodexOAuthFetchError::Other(anyhow::Error::new(error)))?;
+    Ok(OfficialCodexSnapshot {
+        plan_type: usage.plan_type,
+        primary_used_percent: usage.rate_limit.as_ref().and_then(|r| {
+            r.primary_window
+                .as_ref()
+                .and_then(|window| window.used_percent)
+                .map(normalize_official_used_percent)
+        }),
+        secondary_used_percent: usage.rate_limit.as_ref().and_then(|r| {
+            r.secondary_window
+                .as_ref()
+                .and_then(|window| window.used_percent)
+                .map(normalize_official_used_percent)
+        }),
+        primary_window_mins: usage.rate_limit.as_ref().and_then(|r| {
+            r.primary_window
+                .as_ref()
+                .and_then(|window| window.limit_window_seconds)
+                .map(|secs| secs / 60)
+        }),
+        secondary_window_mins: usage.rate_limit.as_ref().and_then(|r| {
+            r.secondary_window
+                .as_ref()
+                .and_then(|window| window.limit_window_seconds)
+                .map(|secs| secs / 60)
+        }),
+        primary_resets_at: usage
+            .rate_limit
+            .as_ref()
+            .and_then(|r| r.primary_window.as_ref().and_then(|window| window.reset_at)),
+        secondary_resets_at: usage.rate_limit.as_ref().and_then(|r| {
+            r.secondary_window
+                .as_ref()
+                .and_then(|window| window.reset_at)
+        }),
+    })
+}
+
+async fn refresh_codex_access_token(
+    refresh_token: &str,
+) -> Result<(String, String, Option<String>)> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("Failed to build HTTP client for Codex refresh")?;
+    let response = client
+        .post("https://auth.openai.com/oauth/token")
+        .json(&serde_json::json!({
+            "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email"
+        }))
+        .send()
+        .await
+        .context("Codex refresh request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Codex refresh failed ({status}): {body}");
+    }
+    let payload: CodexRefreshResponse = response
+        .json()
+        .await
+        .context("Invalid Codex refresh response")?;
+    Ok((
+        payload.access_token,
+        payload
+            .refresh_token
+            .unwrap_or_else(|| refresh_token.to_string()),
+        payload.id_token,
+    ))
+}
+
+async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnapshot> {
+    let (credentials_path, mut tokens) = load_claude_oauth_tokens()?;
+    let current_access_token = tokens.access_token.clone().unwrap_or_default();
+    match fetch_claude_usage_with_access_token(
+        &current_access_token,
+        tokens.rate_limit_tier.as_deref(),
+    )
+    .await
+    {
+        Ok(snapshot) => Ok(snapshot),
+        Err(ClaudeOAuthFetchError::Unauthorized) => {
+            let refresh = tokens
+                .refresh_token
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .context("Claude OAuth token unauthorized and no refresh token available")?;
+            let refreshed = refresh_claude_access_token(refresh).await?;
+            tokens.access_token = Some(refreshed.0);
+            if let Some(refresh_token) = refreshed.1 {
+                tokens.refresh_token = Some(refresh_token);
+            }
+            if let Some(expires_at) = refreshed.2 {
+                tokens.expires_at = Some(expires_at as f64);
+            }
+            let _ = save_claude_oauth_tokens(&credentials_path, &tokens);
+            let refreshed_access_token = tokens.access_token.clone().unwrap_or_default();
+            fetch_claude_usage_with_access_token(
+                &refreshed_access_token,
+                tokens.rate_limit_tier.as_deref(),
+            )
+            .await
+            .map_err(|err| match err {
+                ClaudeOAuthFetchError::Unauthorized => {
+                    anyhow::anyhow!("Claude OAuth remained unauthorized after refresh")
+                }
+                ClaudeOAuthFetchError::Other(error) => error,
+            })
+        }
+        Err(ClaudeOAuthFetchError::Other(error)) => Err(error),
+    }
+}
+
+fn load_claude_oauth_tokens() -> Result<(PathBuf, ClaudeOAuthTokens)> {
+    let path = dirs::home_dir()
+        .map(|home| home.join(".claude").join(".credentials.json"))
+        .context("Failed to resolve Claude credentials path")?;
+    let body = std::fs::read(&path)
+        .with_context(|| format!("Failed to read Claude credentials file: {}", path.display()))?;
+    let parsed: ClaudeCredentialsFile =
+        serde_json::from_slice(&body).context("Invalid Claude .credentials.json format")?;
+    let Some(tokens) = parsed.claude_ai_oauth else {
+        bail!("Claude credentials missing claudeAiOauth payload");
+    };
+    let access_token = tokens
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if access_token.is_empty() {
+        bail!("Claude credentials missing access token");
+    }
+    Ok((
+        path,
+        ClaudeOAuthTokens {
+            access_token: Some(access_token.to_string()),
+            ..tokens
+        },
+    ))
+}
+
+fn save_claude_oauth_tokens(path: &Path, tokens: &ClaudeOAuthTokens) -> Result<()> {
+    let existing = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut root = existing;
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let obj = root
+        .as_object_mut()
+        .context("Claude credentials root must be object")?;
+    let oauth_value = obj
+        .entry("claudeAiOauth".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !oauth_value.is_object() {
+        *oauth_value = serde_json::json!({});
+    }
+    let oauth = oauth_value
+        .as_object_mut()
+        .context("claudeAiOauth must be object")?;
+
+    if let Some(access) = tokens.access_token.as_ref().filter(|v| !v.is_empty()) {
+        oauth.insert(
+            "accessToken".to_string(),
+            serde_json::Value::String(access.clone()),
+        );
+    }
+    if let Some(refresh) = tokens.refresh_token.as_ref().filter(|v| !v.is_empty()) {
+        oauth.insert(
+            "refreshToken".to_string(),
+            serde_json::Value::String(refresh.clone()),
+        );
+    }
+    if let Some(expires_at) = tokens.expires_at {
+        if let Some(number) = serde_json::Number::from_f64(expires_at) {
+            oauth.insert("expiresAt".to_string(), serde_json::Value::Number(number));
+        }
+    }
+    if let Some(tier) = tokens.rate_limit_tier.as_ref().filter(|v| !v.is_empty()) {
+        oauth.insert(
+            "rateLimitTier".to_string(),
+            serde_json::Value::String(tier.clone()),
+        );
+    }
+
+    let bytes =
+        serde_json::to_vec_pretty(&root).context("Failed to serialize Claude credentials file")?;
+    std::fs::write(path, bytes).with_context(|| {
+        format!(
+            "Failed to write Claude credentials file: {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+async fn fetch_claude_usage_with_access_token(
+    access_token: &str,
+    rate_limit_tier: Option<&str>,
+) -> std::result::Result<OfficialClaudeSnapshot, ClaudeOAuthFetchError> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| ClaudeOAuthFetchError::Other(anyhow::Error::new(error)))?;
+    let response = client
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", "tokenusage")
+        .send()
+        .await
+        .map_err(|error| ClaudeOAuthFetchError::Other(anyhow::Error::new(error)))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(ClaudeOAuthFetchError::Unauthorized);
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ClaudeOAuthFetchError::Other(anyhow::anyhow!(
+            "Claude usage API returned {status}: {body}"
+        )));
+    }
+
+    let usage: ClaudeOAuthUsageResponse = response
+        .json()
+        .await
+        .map_err(|error| ClaudeOAuthFetchError::Other(anyhow::Error::new(error)))?;
+
+    let weekly = usage
+        .seven_day
+        .or(usage.seven_day_oauth_apps)
+        .or(usage.seven_day_opus)
+        .or(usage.seven_day_sonnet);
+    Ok(OfficialClaudeSnapshot {
+        plan_type: infer_claude_plan_label(rate_limit_tier),
+        primary_used_percent: usage
+            .five_hour
+            .as_ref()
+            .and_then(|window| window.utilization)
+            .map(normalize_official_used_percent),
+        secondary_used_percent: weekly
+            .as_ref()
+            .and_then(|window| window.utilization)
+            .map(normalize_official_used_percent),
+        primary_window_mins: Some(5 * 60),
+        secondary_window_mins: Some(7 * 24 * 60),
+        primary_resets_at: usage
+            .five_hour
+            .as_ref()
+            .and_then(|window| parse_iso8601_to_unix(window.resets_at.as_deref())),
+        secondary_resets_at: weekly
+            .as_ref()
+            .and_then(|window| parse_iso8601_to_unix(window.resets_at.as_deref())),
+    })
+}
+
+fn infer_claude_plan_label(rate_limit_tier: Option<&str>) -> Option<String> {
+    let tier = rate_limit_tier?.trim();
+    if tier.is_empty() {
+        return None;
+    }
+    let normalized = tier.to_ascii_lowercase();
+    let label = if normalized.contains("enterprise") {
+        "Claude Enterprise"
+    } else if normalized.contains("team") {
+        "Claude Team"
+    } else if normalized.contains("max") {
+        "Claude Max"
+    } else if normalized.contains("pro") {
+        "Claude Pro"
+    } else {
+        tier
+    };
+    Some(label.to_string())
+}
+
+fn normalize_official_used_percent(raw: f64) -> f64 {
+    if raw <= 1.0 {
+        (raw * 100.0).clamp(0.0, 100.0)
+    } else {
+        raw.clamp(0.0, 100.0)
+    }
+}
+
+fn parse_iso8601_to_unix(raw: Option<&str>) -> Option<i64> {
+    let text = raw?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .or_else(|| DateTime::parse_from_str(text, "%+").ok())
+        .map(|ts| ts.timestamp())
+}
+
+async fn refresh_claude_access_token(
+    refresh_token: &str,
+) -> Result<(String, Option<String>, Option<i64>)> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("Failed to build HTTP client for Claude refresh")?;
+    let response = client
+        .post(CLAUDE_OAUTH_REFRESH_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", CLAUDE_OAUTH_REFRESH_CLIENT_ID),
+        ])
+        .send()
+        .await
+        .context("Claude refresh request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Claude refresh failed ({status}): {body}");
+    }
+    let payload: ClaudeRefreshResponse = response
+        .json()
+        .await
+        .context("Invalid Claude refresh response")?;
+    let expires_at_ms = payload
+        .expires_in
+        .map(|seconds| (Utc::now().timestamp() + seconds).saturating_mul(1000));
+    Ok((payload.access_token, payload.refresh_token, expires_at_ms))
 }
 
 fn fetch_codex_official_limits_blocking() -> Result<OfficialCodexSnapshot> {
@@ -2727,9 +4158,10 @@ fn print_membership_estimate(
     token_limit: Option<u64>,
     token_limit_source: TokenLimitSource,
     official_codex: Option<&OfficialCodexSnapshot>,
+    official_claude: Option<&OfficialClaudeSnapshot>,
     tz: &TimeZoneMode,
 ) {
-    if estimate.is_none() && official_codex.is_none() {
+    if estimate.is_none() && official_codex.is_none() && official_claude.is_none() {
         return;
     }
 
@@ -2775,7 +4207,7 @@ fn print_membership_estimate(
     if let Some(official) = official_codex {
         println!();
         let plan = official.plan_type.as_deref().unwrap_or("unknown");
-        println!("official: codex app-server plan={plan}");
+        println!("official: codex plan={plan}");
         if let Some(primary_used) = official.primary_used_percent {
             let details = official_window_details(
                 official.primary_window_mins,
@@ -2807,6 +4239,48 @@ fn print_membership_estimate(
             };
             println!(
                 "official: weekly used={:.1}% remaining={:.1}%{}",
+                secondary_used,
+                (100.0 - secondary_used).clamp(0.0, 100.0),
+                detail_text
+            );
+        }
+    }
+
+    if let Some(official) = official_claude {
+        println!();
+        let plan = official.plan_type.as_deref().unwrap_or("unknown");
+        println!("official: claude plan={plan}");
+        if let Some(primary_used) = official.primary_used_percent {
+            let details = official_window_details(
+                official.primary_window_mins,
+                official.primary_resets_at,
+                tz,
+            );
+            let detail_text = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", details.join(" "))
+            };
+            println!(
+                "official: claude 5h used={:.1}% remaining={:.1}%{}",
+                primary_used,
+                (100.0 - primary_used).clamp(0.0, 100.0),
+                detail_text
+            );
+        }
+        if let Some(secondary_used) = official.secondary_used_percent {
+            let details = official_window_details(
+                official.secondary_window_mins,
+                official.secondary_resets_at,
+                tz,
+            );
+            let detail_text = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", details.join(" "))
+            };
+            println!(
+                "official: claude weekly used={:.1}% remaining={:.1}%{}",
                 secondary_used,
                 (100.0 - secondary_used).clamp(0.0, 100.0),
                 detail_text
@@ -3028,7 +4502,7 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
     let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
     let ignore_rules = PathIgnoreRules::from_common(common);
 
-    let files = discover_files(&sources, &ignore_rules);
+    let files = discover_files(&sources, &ignore_rules, filter);
     let worker_count = common.workers.unwrap_or_else(|| {
         thread::available_parallelism()
             .map(|n| n.get())
@@ -3073,24 +4547,36 @@ async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<Load
                     modified_unix_secs: 0,
                     modified_unix_nanos: 0,
                 },
+                strategy: ParseStrategy::Full,
             });
             continue;
         };
 
-        if cache_enabled
-            && let Some(cached) = cache_store.files.get(&key)
-            && cached.fingerprint == fingerprint
-        {
-            events.extend(hydrate_cached_events(
-                &file, cached, filter, timezone, &stats,
-            ));
-            continue;
+        if cache_enabled && let Some(cached) = cache_store.files.get(&key) {
+            if cached.fingerprint == fingerprint {
+                events.extend(hydrate_cached_events(
+                    &file, cached, filter, timezone, &stats,
+                ));
+                continue;
+            }
+            if can_incremental_parse(cached, fingerprint) {
+                parse_jobs.push(FileParseJob {
+                    file,
+                    cache_key: key,
+                    fingerprint,
+                    strategy: ParseStrategy::Incremental {
+                        base_cache: cached.clone(),
+                    },
+                });
+                continue;
+            }
         }
 
         parse_jobs.push(FileParseJob {
             file,
             cache_key: key,
             fingerprint,
+            strategy: ParseStrategy::Full,
         });
     }
 
@@ -3163,14 +4649,22 @@ async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfig>> {
         let roots = if common.codex_sessions_dir.is_empty() {
             vec![
                 home.join(".codex").join("sessions"),
+                home.join(".codex").join("archived_sessions"),
                 home.join(".config").join("codex").join("sessions"),
+                home.join(".config").join("codex").join("archived_sessions"),
             ]
         } else {
-            common
-                .codex_sessions_dir
-                .iter()
-                .map(|p| expand_user_path(p))
-                .collect()
+            let mut out = Vec::new();
+            for raw in &common.codex_sessions_dir {
+                let path = expand_user_path(raw);
+                out.push(path.clone());
+                if path.file_name().and_then(|s| s.to_str()) == Some("sessions")
+                    && let Some(parent) = path.parent()
+                {
+                    out.push(parent.join("archived_sessions"));
+                }
+            }
+            out
         };
 
         let existing = filter_existing_dirs(roots).await;
@@ -3205,14 +4699,17 @@ async fn filter_existing_dirs(input: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-fn discover_files(sources: &[SourceConfig], ignore_rules: &PathIgnoreRules) -> Vec<DiscoveredFile> {
+fn discover_files(
+    sources: &[SourceConfig],
+    ignore_rules: &PathIgnoreRules,
+    filter: DateFilter,
+) -> Vec<DiscoveredFile> {
     let mut files: Vec<DiscoveredFile> = sources
         .par_iter()
         .flat_map_iter(|source| {
-            source
-                .roots
-                .iter()
-                .flat_map(move |root| discover_files_in_root(source.kind, root, ignore_rules))
+            source.roots.iter().flat_map(move |root| {
+                discover_files_in_root(source.kind, root, ignore_rules, filter)
+            })
         })
         .collect();
 
@@ -3225,7 +4722,15 @@ fn discover_files_in_root(
     kind: SourceKind,
     root: &Path,
     ignore_rules: &PathIgnoreRules,
+    filter: DateFilter,
 ) -> Vec<DiscoveredFile> {
+    if kind == SourceKind::Codex
+        && (filter.since.is_some() || filter.until.is_some())
+        && let Some(files) = discover_codex_files_by_date_partition(root, filter, ignore_rules)
+    {
+        return files;
+    }
+
     let mut out = Vec::new();
     let rules = ignore_rules.clone();
     let mut builder = WalkBuilder::new(root);
@@ -3260,6 +4765,91 @@ fn discover_files_in_root(
     }
 
     out
+}
+
+fn discover_codex_files_by_date_partition(
+    root: &Path,
+    filter: DateFilter,
+    ignore_rules: &PathIgnoreRules,
+) -> Option<Vec<DiscoveredFile>> {
+    let root_name = root.file_name().and_then(|v| v.to_str())?;
+    if root_name != "sessions" && root_name != "archived_sessions" {
+        return None;
+    }
+
+    let mut since = filter
+        .since
+        .unwrap_or_else(|| filter.until.unwrap_or_else(|| Utc::now().date_naive()));
+    let mut until = filter.until.unwrap_or(since);
+    if since > until {
+        std::mem::swap(&mut since, &mut until);
+    }
+
+    let mut out = Vec::new();
+    let mut day = since;
+    while day <= until {
+        let day_dir = root
+            .join(format!("{:04}", day.year()))
+            .join(format!("{:02}", day.month()))
+            .join(format!("{:02}", day.day()));
+        if let Ok(entries) = std::fs::read_dir(&day_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if ignore_rules.should_skip_path(&path) {
+                    continue;
+                }
+                let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+                if !is_file {
+                    continue;
+                }
+                if path
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+                {
+                    out.push(DiscoveredFile {
+                        source: SourceKind::Codex,
+                        root: root.to_path_buf(),
+                        path: normalized_discovered_path(&path),
+                    });
+                }
+            }
+        }
+        day = day
+            .checked_add_signed(chrono::TimeDelta::days(1))
+            .unwrap_or(until + chrono::TimeDelta::days(1));
+    }
+
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if ignore_rules.should_skip_path(&path) {
+                continue;
+            }
+            let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+            if !is_file {
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|v| v.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            {
+                out.push(DiscoveredFile {
+                    source: SourceKind::Codex,
+                    root: root.to_path_buf(),
+                    path: normalized_discovered_path(&path),
+                });
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.dedup_by(|a, b| a.path == b.path);
+    Some(out)
 }
 
 fn parse_files_concurrently(
@@ -3342,11 +4932,11 @@ fn parse_single_file(
     let (session, project) = derive_session_meta(&job.file);
     let file_path = job.file.path.display().to_string();
 
-    let reader = BufReader::new(input);
+    let mut reader = BufReader::new(input);
     let mut codex_state = CodexParseState::default();
+    let mut claude_state = ClaudeDedupeState::default();
     let mut local_events = Vec::new();
     let mut cached_events = Vec::new();
-    let mut reader = reader;
     let mut line = String::new();
     let mut lines_total = 0usize;
     let mut lines_invalid_json = 0usize;
@@ -3354,6 +4944,39 @@ fn parse_single_file(
     let mut lines_unknown_pricing = 0usize;
     let mut lines_filtered = 0usize;
     let mut lines_parsed = 0usize;
+    let mut base_stats = CachedFileStats::default();
+    let mut parsed_offset = 0u64;
+
+    if let ParseStrategy::Incremental { base_cache } = job.strategy {
+        let fallback_offset = base_cache.fingerprint.size;
+        let seek_offset = base_cache
+            .parsed_offset
+            .max(fallback_offset)
+            .min(job.fingerprint.size);
+        if seek_offset > 0 && reader.seek(SeekFrom::Start(seek_offset)).is_ok() {
+            parsed_offset = seek_offset;
+            base_stats = base_cache.stats.clone();
+            cached_events.extend(base_cache.events.iter().cloned());
+            local_events.extend(hydrate_cached_events(
+                &job.file,
+                &base_cache,
+                filter,
+                timezone,
+                stats,
+            ));
+            match job.file.source {
+                SourceKind::Codex => {
+                    codex_state.current_model = base_cache.codex_last_model.clone();
+                    codex_state.previous_totals = base_cache.codex_last_totals;
+                }
+                SourceKind::Claude => {
+                    claude_state = ClaudeDedupeState::with_seed(base_cache.claude_recent_keys);
+                }
+            }
+        } else {
+            let _ = reader.seek(SeekFrom::Start(0));
+        }
+    }
 
     loop {
         line.clear();
@@ -3373,8 +4996,13 @@ fn parse_single_file(
 
         lines_total += 1;
 
+        if should_skip_parse_by_line_prefix(job.file.source, &line) {
+            lines_missing_usage += 1;
+            continue;
+        }
+
         let parsed = match job.file.source {
-            SourceKind::Claude => parse_claude_usage_line(&line, pricing),
+            SourceKind::Claude => parse_claude_usage_line(&line, pricing, &mut claude_state),
             SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
         };
 
@@ -3434,18 +5062,36 @@ fn parse_single_file(
     let cache_entry = CachedFileEntry {
         fingerprint: job.fingerprint,
         stats: CachedFileStats {
-            lines_total,
-            lines_invalid_json,
-            lines_missing_usage,
-            lines_unknown_pricing,
+            lines_total: base_stats.lines_total + lines_total,
+            lines_invalid_json: base_stats.lines_invalid_json + lines_invalid_json,
+            lines_missing_usage: base_stats.lines_missing_usage + lines_missing_usage,
+            lines_unknown_pricing: base_stats.lines_unknown_pricing + lines_unknown_pricing,
         },
         events: cached_events,
+        parsed_offset: job.fingerprint.size.max(parsed_offset),
+        codex_last_model: codex_state.current_model,
+        codex_last_totals: codex_state.previous_totals,
+        claude_recent_keys: claude_state.snapshot(),
     };
 
     Some(ParsedFileOutput {
         events: local_events,
         cache_entry,
     })
+}
+
+fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -> bool {
+    match source {
+        SourceKind::Codex => {
+            !(line.contains("\"type\":\"event_msg\"")
+                || line.contains("\"type\": \"event_msg\"")
+                || line.contains("\"type\":\"turn_context\"")
+                || line.contains("\"type\": \"turn_context\""))
+        }
+        SourceKind::Claude => {
+            !(line.contains("\"type\":\"assistant\"") || line.contains("\"type\": \"assistant\""))
+        }
+    }
 }
 
 fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<String>) {
@@ -3469,11 +5115,22 @@ fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<String>) {
     (session, project)
 }
 
-fn parse_claude_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
+fn parse_claude_usage_line(
+    line: &str,
+    pricing: &PricingTable,
+    dedupe_state: &mut ClaudeDedupeState,
+) -> ParseLineResult {
     let value: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => return ParseLineResult::InvalidJson,
     };
+
+    if get_value(&value, "type")
+        .and_then(Value::as_str)
+        .is_some_and(|entry_type| entry_type != "assistant")
+    {
+        return ParseLineResult::MissingUsage;
+    }
 
     let Some(timestamp) = extract_timestamp(&value) else {
         return ParseLineResult::MissingUsage;
@@ -3481,6 +5138,19 @@ fn parse_claude_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResul
     let Some(model) = extract_model(&value, SourceKind::Claude) else {
         return ParseLineResult::MissingUsage;
     };
+
+    let message_id = get_value(&value, "message.id")
+        .and_then(Value::as_str)
+        .or_else(|| get_value(&value, "messageId").and_then(Value::as_str));
+    let request_id = get_value(&value, "requestId")
+        .and_then(Value::as_str)
+        .or_else(|| get_value(&value, "request_id").and_then(Value::as_str));
+    if let (Some(message_id), Some(request_id)) = (message_id, request_id) {
+        let key = format!("{message_id}:{request_id}");
+        if !dedupe_state.insert(key) {
+            return ParseLineResult::MissingUsage;
+        }
+    }
 
     let usage = UsageAccumulator {
         input_tokens: extract_u64(
@@ -4037,7 +5707,7 @@ fn normalize_ignore_fragment(input: &str) -> Option<String> {
 
 fn incremental_cache_path() -> Option<PathBuf> {
     let base = dirs::cache_dir()?;
-    Some(base.join("tokenusage").join("parse-cache-v1.json"))
+    Some(base.join("tokenusage").join("parse-cache-v2.json"))
 }
 
 fn load_incremental_cache(path: &Path, pricing_key: &str) -> IncrementalCacheStore {
@@ -4080,6 +5750,14 @@ fn read_file_fingerprint(path: &Path) -> Option<FileFingerprint> {
         modified_unix_secs: dur.as_secs() as i64,
         modified_unix_nanos: dur.subsec_nanos(),
     })
+}
+
+fn can_incremental_parse(cached: &CachedFileEntry, current: FileFingerprint) -> bool {
+    if current.size <= cached.fingerprint.size {
+        return false;
+    }
+    let start_offset = cached.parsed_offset.max(cached.fingerprint.size);
+    start_offset > 0 && start_offset <= current.size
 }
 
 fn hydrate_cached_events(
