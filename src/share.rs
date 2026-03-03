@@ -28,26 +28,12 @@ pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
     if args.bars < 7 {
         bail!("--bars must be >= 7");
     }
-    let mut canvas_w = args.width;
-    let mut canvas_h = args.height;
-    if args.portrait {
-        if args.width == 1600 && args.height == 900 {
-            canvas_w = 1080;
-            canvas_h = 1920;
-        } else if canvas_w >= canvas_h {
-            std::mem::swap(&mut canvas_w, &mut canvas_h);
-        }
-    }
-    let short_edge = canvas_w.min(canvas_h);
-    let long_edge = canvas_w.max(canvas_h);
-    if short_edge < 620 || long_edge < 960 {
-        bail!("--width/--height too small; minimum edges are 620x960");
-    }
-
     match args.period {
         ImgPeriod::Daily | ImgPeriod::Weekly => {
             let output = resolve_output_abs(&args.output)?;
             let period = args.period;
+            let (canvas_w, canvas_h) = canvas_for_period(&args, period);
+            validate_canvas_size(canvas_w, canvas_h)?;
             let snapshot =
                 render_share_image_for_period(&args, period, &output, canvas_w, canvas_h).await?;
             println!(
@@ -58,26 +44,53 @@ pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
         }
         ImgPeriod::Both => {
             let (daily_output, weekly_output) = derive_dual_outputs(&args.output)?;
-            render_share_image_for_period(
-                &args,
-                ImgPeriod::Daily,
-                &daily_output,
-                canvas_w,
-                canvas_h,
-            )
-            .await?;
+            let (daily_w, daily_h) = canvas_for_period(&args, ImgPeriod::Daily);
+            validate_canvas_size(daily_w, daily_h)?;
+            render_share_image_for_period(&args, ImgPeriod::Daily, &daily_output, daily_w, daily_h)
+                .await?;
+            let (weekly_w, weekly_h) = canvas_for_period(&args, ImgPeriod::Weekly);
+            validate_canvas_size(weekly_w, weekly_h)?;
             render_share_image_for_period(
                 &args,
                 ImgPeriod::Weekly,
                 &weekly_output,
-                canvas_w,
-                canvas_h,
+                weekly_w,
+                weekly_h,
             )
             .await?;
             // Print full generated paths on two lines for easy copy.
             println!("{}", daily_output.display());
             println!("{}", weekly_output.display());
         }
+    }
+    Ok(())
+}
+
+fn canvas_for_period(args: &ImgArgs, period: ImgPeriod) -> (u32, u32) {
+    let mut w = args.width.max(1);
+    let mut h = args.height.max(1);
+    let default_canvas = args.width == 1600 && args.height == 900;
+    let force_portrait = args.portrait || matches!(period, ImgPeriod::Weekly);
+
+    if force_portrait {
+        if default_canvas {
+            return (1080, 1920);
+        }
+        if w >= h {
+            std::mem::swap(&mut w, &mut h);
+        }
+    } else if w < h {
+        std::mem::swap(&mut w, &mut h);
+    }
+
+    (w, h)
+}
+
+fn validate_canvas_size(width: u32, height: u32) -> Result<()> {
+    let short_edge = width.min(height);
+    let long_edge = width.max(height);
+    if short_edge < 620 || long_edge < 960 {
+        bail!("--width/--height too small; minimum edges are 620x960");
     }
     Ok(())
 }
@@ -858,7 +871,7 @@ fn draw_line_chart(
     let y_top = plot.y + 14;
     let x_span = (x_end.saturating_sub(x_start)).max(1) as f64;
     let slot_w = (x_span / n as f64).max(1.0);
-    let bar_w = (slot_w * 0.56).clamp(3.0, 28.0).round() as i32;
+    let bar_w = (slot_w * 0.74).clamp(5.0, 36.0).round() as i32;
     let y_span = (y_bottom.saturating_sub(y_top)).max(1) as f64;
 
     draw_line(
@@ -870,19 +883,15 @@ fn draw_line_chart(
         Rgba([75, 247, 181, 138]),
     );
 
-    let value_scale = if n <= 12 { 3u32 } else { 2u32 };
-    let label_step = if n <= 10 {
-        1
-    } else if n <= 18 {
-        2
+    let value_scale = if n <= 12 {
+        3u32
+    } else if n <= 28 {
+        2u32
     } else {
-        3
+        1u32
     };
 
     for (idx, value) in values.iter().enumerate() {
-        if *value == 0 {
-            continue;
-        }
         let center_x = x_start as f64 + (idx as f64 + 0.5) * slot_w;
         let h = ((*value as f64 / max_value as f64) * y_span).round() as i32;
         let h = h.max(1);
@@ -892,9 +901,6 @@ fn draw_line_chart(
         draw_rect_clamped_i32(img, x0, y0, bar_w, h, line_color);
         draw_rect_clamped_i32(img, x0, y0, bar_w, 1, rgba(170, 255, 213));
 
-        if idx % label_step != 0 && idx + 1 != n {
-            continue;
-        }
         let value_text = format_compact_u64(*value);
         let value_w = text_width(&value_text, value_scale) as i32;
         let mut tx = center_x.round() as i32 - value_w / 2;
@@ -907,7 +913,8 @@ fn draw_line_chart(
             tx = max_x;
         }
         let text_h = line_height_px(value_scale).max(1);
-        let ty = (y0 - text_h - 3).max(plot.y as i32 + 3);
+        let lane_offset = if idx % 2 == 0 { 0 } else { (text_h / 2).max(2) };
+        let ty = (y0 - text_h - 3 - lane_offset).max(plot.y as i32 + 3);
         draw_rect_clamped_i32(
             img,
             tx - 2,
@@ -1195,8 +1202,8 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
             let max_value = points.iter().map(|p| p.tokens).max().unwrap_or(1).max(1) as f64;
             let n = points.len() as u32;
             let slot_w = (plot.w.saturating_sub(20) / n.max(1)).max(6);
-            let bar_w = ((slot_w as f32) * 0.62).round() as u32;
-            let bar_w = bar_w.clamp(4, 22);
+            let bar_w = ((slot_w as f32) * 0.78).round() as u32;
+            let bar_w = bar_w.clamp(6, 34);
             let base_y = plot.bottom().saturating_sub(18);
             let max_h = plot.h.saturating_sub(30);
             let start_x = plot.x + 10;
@@ -1280,15 +1287,8 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
     let x_plot_w = (plot.w as f64 - margin_px * 2.0).max(1.0);
     let y_plot_h = (plot.h as f64 - margin_px * 2.0).max(1.0);
     let value_label_scale = if count <= 10 { 4u32 } else { 3u32 };
-    let mut value_step = 1usize;
-    if count > 10 {
-        value_step = 2;
-    }
-    if count > 18 {
-        value_step = 3;
-    }
     let slot_px = (x_plot_w / count as f64).max(1.0);
-    let bar_w_px = (slot_px * 0.40).max(4.0);
+    let bar_w_px = (slot_px * 0.62).max(6.0);
     let bar_bottom = plot.y as f64 + margin_px + y_plot_h;
     let mut bar_rects = Vec::with_capacity(points.len());
     for (idx, point) in points.iter().enumerate() {
@@ -1306,12 +1306,6 @@ fn draw_plotters_chart_panel(img: &mut RgbaImage, area: Rect, points: &[SharePoi
     }
 
     for (idx, point) in points.iter().enumerate() {
-        if idx % value_step != 0 && idx + 1 != count {
-            continue;
-        }
-        if point.tokens == 0 {
-            continue;
-        }
         let base = idx as f64 * slot;
         let center = base + 5.0;
         let px = plot.x as f64 + margin_px + (center / x_max) * x_plot_w;
@@ -1466,8 +1460,8 @@ fn render_chart_bitmap(points: &[SharePoint], width: u32, height: u32) -> Result
 
         chart.draw_series(points.iter().enumerate().map(|(i, p)| {
             let base = i as i32 * slot;
-            let x0 = base + 3;
-            let x1 = base + 7;
+            let x0 = base + 2;
+            let x1 = base + 8;
             Rectangle::new(
                 [(x0, 0u64), (x1, p.tokens)],
                 RGBColor(98, 245, 154).filled(),
