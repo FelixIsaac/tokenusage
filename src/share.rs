@@ -19,7 +19,7 @@ use crate::types::{TokenCounts, UsageEvent};
 const POSTER_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Audiowide-Regular.ttf");
 const DEFAULT_LOGO_SVG_BYTES: &[u8] = include_bytes!("../assets/branding/tokenusage-logomark.svg");
 static POSTER_FONT: OnceLock<Option<FontArc>> = OnceLock::new();
-const CHART_HEADROOM: f64 = 1.28;
+const CHART_HEADROOM: f64 = 1.14;
 
 pub(crate) async fn run_share(args: ImgArgs) -> Result<()> {
     if args.common.json || args.common.jq.is_some() {
@@ -477,25 +477,51 @@ fn draw_share_card_portrait(
 
     let big_number = format_compact_u64(snapshot.total_tokens);
     let big_color = rgba(112, 241, 166);
+    let big_scale = 10u32;
+    let big_x = layout.x as i32 + 14;
+    let big_y = (meta_y + 42) as i32;
+    draw_text(img, big_x, big_y, &big_number, big_scale, big_color);
+
+    // Keep TOTAL USAGE on the same visual row as the compact total to save one line.
+    let total_scale = 5u32;
+    let total_label = "TOTAL USAGE";
+    let big_w = text_width(&big_number, big_scale) as i32;
+    let big_bottom_off = text_visual_bottom_offset(&big_number, big_scale);
+    let total_w = text_width(total_label, total_scale) as i32;
+    let total_bottom_off = text_visual_bottom_offset(total_label, total_scale);
+    let mut total_usage_x = big_x + big_w + 18;
+    let max_total_x = layout.right() as i32 - total_w - 8;
+    if total_usage_x > max_total_x {
+        total_usage_x = max_total_x.max(big_x + big_w + 8);
+    }
+    // Align visual bottoms using glyph bounds instead of nominal line-height.
+    let total_usage_y = big_y + (big_bottom_off - total_bottom_off).max(0);
     draw_text(
         img,
-        layout.x as i32 + 14,
-        (meta_y + 42) as i32,
-        &big_number,
-        10,
-        big_color,
-    );
-    let total_usage_y = (meta_y + 42) as i32 + line_height_px(10) + 4;
-    draw_text(
-        img,
-        layout.x as i32 + 14,
+        total_usage_x,
         total_usage_y,
-        "TOTAL USAGE",
-        5,
+        total_label,
+        total_scale,
         rgba(204, 220, 242),
     );
 
-    let cards_top = (total_usage_y + line_height_px(5) + 14).max(layout.y as i32) as u32;
+    let row_bottom = (big_y + big_bottom_off).max(total_usage_y + total_bottom_off);
+    let mut cards_anchor_y = row_bottom + 14;
+    if !snapshot.period_label.starts_with("daily") {
+        let exact_scale = 4u32;
+        let exact_y = row_bottom + 10;
+        draw_text(
+            img,
+            big_x + 2,
+            exact_y,
+            &format!("exact tokens {}", format_u64(snapshot.total_tokens)),
+            exact_scale,
+            rgba(182, 204, 232),
+        );
+        cards_anchor_y = exact_y + line_height_px(exact_scale) + 12;
+    }
+
+    let cards_top = cards_anchor_y.max(layout.y as i32) as u32;
     let cards_h = ((layout.h as f32) * 0.145) as u32;
     let card_gap = 16u32;
     let card_w = (layout.w.saturating_sub(card_gap)) / 2;
@@ -629,6 +655,8 @@ fn draw_header(
     portrait: bool,
 ) -> Result<()> {
     let area = area.inset(2);
+    let peak_bucket_label =
+        format_peak_bucket_label(&snapshot.period_label, &snapshot.peak_tokens.0);
     let logo_size = if portrait {
         ((area.h as f32) * 0.14).round() as u32
     } else {
@@ -743,7 +771,7 @@ fn draw_header(
             base_y + 68,
             &format!(
                 "peak  {} ({})",
-                snapshot.peak_tokens.0,
+                peak_bucket_label,
                 format_u64(snapshot.peak_tokens.1)
             ),
             3,
@@ -792,7 +820,7 @@ fn draw_header(
             area.y as i32 + 252,
             &format!(
                 "peak  {} ({})",
-                snapshot.peak_tokens.0,
+                peak_bucket_label,
                 format_u64(snapshot.peak_tokens.1)
             ),
             3,
@@ -926,38 +954,60 @@ fn draw_line_chart(
         draw_text(img, tx, ty, &value_text, value_scale, rgba(204, 248, 223));
     }
 
-    let start_label = points.first().map(|p| p.label.as_str()).unwrap_or("-");
-    let end_label = points.last().map(|p| p.label.as_str()).unwrap_or("-");
-    draw_text(
-        img,
-        plot.x as i32 + 6,
-        plot.bottom() as i32 - 22,
-        start_label,
-        3,
-        rgba(145, 167, 217),
-    );
-    let end_w = text_width(end_label, 3) as u32;
-    draw_text(
-        img,
-        plot.right().saturating_sub(end_w + 6) as i32,
-        plot.bottom() as i32 - 22,
-        end_label,
-        3,
-        rgba(145, 167, 217),
-    );
+    let axis_y = plot.bottom() as i32 - 22;
+    if is_hourly_axis(points) {
+        // Show every 2 hours: 00, 02, ..., 22.
+        for (idx, point) in points.iter().enumerate() {
+            let hour = point.label.parse::<usize>().ok().unwrap_or(0);
+            if !hour.is_multiple_of(2) {
+                continue;
+            }
+            let label_w = text_width(&point.label, 3) as u32;
+            let center_x = x_start as f64 + (idx as f64 + 0.5) * slot_w;
+            let mut label_x = center_x.round() as i32 - (label_w as i32 / 2);
+            let min_x = plot.x as i32 + 4;
+            let max_x = plot.right().saturating_sub(label_w + 4) as i32;
+            if label_x < min_x {
+                label_x = min_x;
+            }
+            if label_x > max_x {
+                label_x = max_x;
+            }
+            draw_text(img, label_x, axis_y, &point.label, 3, rgba(145, 167, 217));
+        }
+    } else {
+        let start_label = points.first().map(|p| p.label.as_str()).unwrap_or("-");
+        let end_label = points.last().map(|p| p.label.as_str()).unwrap_or("-");
+        draw_text(
+            img,
+            plot.x as i32 + 6,
+            axis_y,
+            start_label,
+            3,
+            rgba(145, 167, 217),
+        );
+        let end_w = text_width(end_label, 3) as u32;
+        draw_text(
+            img,
+            plot.right().saturating_sub(end_w + 6) as i32,
+            axis_y,
+            end_label,
+            3,
+            rgba(145, 167, 217),
+        );
+    }
+}
 
-    let range_line = format_u64(max_value);
-    let range_w = text_width(&range_line, 3) as u32;
-    draw_text(
-        img,
-        plot.x
-            .saturating_add(plot.w.saturating_sub(range_w) / 2)
-            .saturating_sub(2) as i32,
-        plot.bottom() as i32 - 22,
-        &range_line,
-        3,
-        rgba(145, 167, 217),
-    );
+fn is_hourly_axis(points: &[SharePoint]) -> bool {
+    if points.len() != 24 {
+        return false;
+    }
+    points.iter().all(|p| {
+        p.label
+            .parse::<u32>()
+            .map(|hour| hour < 24)
+            .unwrap_or(false)
+    })
 }
 
 fn draw_footer(img: &mut RgbaImage, area: Rect, args: &ImgArgs) {
@@ -2093,6 +2143,38 @@ fn text_width_ttf(font: &FontArc, text: &str, scale: u32) -> usize {
         prev = Some(id);
     }
     width.max(0.0).round() as usize
+}
+
+fn text_visual_bottom_offset(text: &str, scale: u32) -> i32 {
+    if let Some(font) = poster_font() {
+        let px = font_px(scale);
+        let scale_px = PxScale::from(px);
+        let scaled = font.as_scaled(scale_px);
+        let baseline_y = scaled.ascent();
+        let mut caret_x = 0.0f32;
+        let mut prev = None;
+        let mut max_y: Option<f32> = None;
+
+        for ch in text.chars() {
+            let glyph_id = scaled.glyph_id(ch);
+            if let Some(prev_id) = prev {
+                caret_x += scaled.kern(prev_id, glyph_id);
+            }
+            let glyph = glyph_id.with_scale_and_position(scale_px, point(caret_x, baseline_y));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let b = outline.px_bounds();
+                max_y = Some(max_y.map_or(b.max.y, |m| m.max(b.max.y)));
+            }
+            caret_x += scaled.h_advance(glyph_id);
+            prev = Some(glyph_id);
+        }
+
+        if let Some(max_y) = max_y {
+            return max_y.ceil().max(0.0) as i32;
+        }
+    }
+
+    (8 * scale.max(1)) as i32
 }
 
 fn blend_pixel(img: &mut RgbaImage, x: i32, y: i32, src: Rgba<u8>) {
