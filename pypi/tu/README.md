@@ -64,12 +64,6 @@ cargo install tokenusage --bin tu
 npm install -g tokenusage
 ```
 
-### pip (PyPI)
-
-```bash
-pip install tokenusage
-```
-
 ### cargo-binstall (prebuilt binary)
 
 ```bash

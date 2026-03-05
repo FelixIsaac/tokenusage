@@ -1,4 +1,7 @@
 /target
 npm/tu/*.tgz
 npm/tu/vendor/
+pypi/tu/dist/
+pypi/tu/*.egg-info/
+__pycache__/
 docs/reports/
