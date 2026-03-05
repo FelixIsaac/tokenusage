@@ -231,7 +231,7 @@ struct BlockReportBuildOptions {
     now: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OfficialCodexSnapshot {
     plan_type: Option<String>,
     primary_used_percent: Option<f64>,
@@ -242,7 +242,7 @@ struct OfficialCodexSnapshot {
     secondary_resets_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OfficialClaudeSnapshot {
     plan_type: Option<String>,
     primary_used_percent: Option<f64>,
@@ -253,7 +253,7 @@ struct OfficialClaudeSnapshot {
     secondary_resets_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AntigravityModelQuotaSnapshot {
     label: String,
     model_id: String,
@@ -261,7 +261,7 @@ struct AntigravityModelQuotaSnapshot {
     reset_time: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OfficialAntigravitySnapshot {
     plan_type: Option<String>,
     account_email: Option<String>,
@@ -1645,11 +1645,77 @@ async fn run_blocks_live(
 
     let refresh_every = args.refresh_interval.max(1);
     let mut session = BlocksLiveSession::enter()?;
-    let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every, true).await?;
-    let mut last_official_refresh = Instant::now();
     let mut active_tab = LiveTab::Overview;
+
+    // Render an instant first frame using cached data from the previous
+    // session so the TUI shows real-looking values immediately.  Falls back
+    // to zeros if no cache exists.
+    {
+        let now = Utc::now();
+        let block_start_unix = now.timestamp() - window_secs;
+        let block_end_unix = now.timestamp();
+        let cached = load_live_frame_cache();
+        let today_str = tz.now_date().to_string();
+        // Only use cached today_totals if the date matches; otherwise zero.
+        let (cached_today, cached_30d, cached_30d_days) = match cached.as_ref() {
+            Some(c) if c.cached_date == today_str => {
+                (c.today_totals.clone(), c.last_30d_totals.clone(), c.last_30d_active_days)
+            }
+            Some(c) => (TokenCounts::default(), c.last_30d_totals.clone(), c.last_30d_active_days),
+            None => (TokenCounts::default(), TokenCounts::default(), 0),
+        };
+        // Use cached official snapshots if the caller didn't provide them.
+        if official_codex.is_none() {
+            if let Some(ref c) = cached {
+                official_codex = c.official_codex.clone();
+            }
+        }
+        if official_claude.is_none() {
+            if let Some(ref c) = cached {
+                official_claude = c.official_claude.clone();
+            }
+        }
+        if official_antigravity.is_none() {
+            if let Some(ref c) = cached {
+                official_antigravity = c.official_antigravity.clone();
+            }
+        }
+        let skeleton = LiveFrameContext::new(
+            now,
+            tz,
+            block_start_unix,
+            block_end_unix,
+            LimitDisplayContext {
+                token_limit: None,
+                token_limit_source: TokenLimitSource::Unset,
+                membership_estimate: None,
+            },
+            official_codex.as_ref(),
+            official_claude.as_ref(),
+            official_antigravity.as_ref(),
+            None,
+            cached_today,
+            cached_30d,
+            cached_30d_days,
+            None,
+            active_tab,
+        );
+        render_blocks_live_frame(&mut session, &skeleton)?;
+    }
+
+    // Spawn runtime initialisation in the background so the event loop
+    // starts immediately and the cached frame stays responsive.
+    let common_for_init = args.common.clone();
+    let mut pending_runtime_task: Option<tokio::task::JoinHandle<Result<LiveUsageRuntime>>> =
+        Some(tokio::spawn(async move {
+            LiveUsageRuntime::new(&common_for_init, refresh_every, true).await
+        }));
+    let mut live_runtime: Option<LiveUsageRuntime> = None;
+
+    let mut last_official_refresh = Instant::now();
     #[allow(unused_assignments)]
     let mut last_data_refresh = Instant::now();
+    let mut first_real_frame_done = false;
     let mut pending_official_task: Option<
         tokio::task::JoinHandle<(
             Option<OfficialCodexSnapshot>,
@@ -1658,10 +1724,67 @@ async fn run_blocks_live(
             Vec<String>,
         )>,
     > = None;
+    // Cooldown for official limits refresh.  Starts at 30s, doubles on
+    // failure (caps at 5 minutes) so we don't hammer Claude's /usage
+    // endpoint when it is rate-limited or broken.
+    let mut official_refresh_interval = Duration::from_secs(30);
+    let official_refresh_interval_base = Duration::from_secs(30);
+    let official_refresh_interval_max = Duration::from_secs(300);
 
     loop {
         let now = Utc::now();
-        live_runtime.maybe_refresh_sources(&args.common).await?;
+
+        // Check if background runtime init has completed.
+        if live_runtime.is_none() {
+            if let Some(ref task) = pending_runtime_task {
+                if task.is_finished() {
+                    if let Some(task) = pending_runtime_task.take() {
+                        match task.await {
+                            Ok(Ok(rt)) => live_runtime = Some(rt),
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => return Err(anyhow::anyhow!("runtime init task failed: {e}")),
+                        }
+                    }
+                }
+            }
+        }
+
+        // If runtime isn't ready yet, just handle input on the cached frame.
+        let Some(ref mut live_rt) = live_runtime else {
+            last_data_refresh = Instant::now();
+            loop {
+                let poll_for = Duration::from_millis(50);
+                match poll_live_input(poll_for, active_tab)? {
+                    LiveInputEvent::Exit => {
+                        if let Some(task) = pending_runtime_task.take() {
+                            task.abort();
+                        }
+                        return Ok(());
+                    }
+                    LiveInputEvent::SwitchTab(_tab) => {
+                        // Can't re-render with different source data yet,
+                        // but we still accept the input so it takes effect
+                        // once the runtime is ready.
+                        active_tab = _tab;
+                    }
+                    LiveInputEvent::Tick => {}
+                }
+                // Break out to re-check runtime readiness.
+                if last_data_refresh.elapsed() >= Duration::from_millis(100) {
+                    break;
+                }
+            }
+            continue;
+        };
+
+        // After the first (fast, Codex-only) frame has been rendered and
+        // shown to the user, merge deferred Claude files.  This blocks but
+        // the user already has a visible TUI with Codex data.
+        if first_real_frame_done && live_rt.has_deferred_claude() {
+            live_rt.merge_deferred_claude();
+        }
+
+        live_rt.maybe_refresh_sources(&args.common).await?;
 
         let source_hint = select_live_source(
             &args.common,
@@ -1677,14 +1800,13 @@ async fn run_blocks_live(
             official_claude.as_ref(),
         );
 
-        // Non-blocking official limits fetch: spawn a background task and check
-        // completion on each frame instead of blocking the render loop.
+        // Non-blocking official limits fetch with exponential backoff on failure.
         let should_refresh_official = args.official_limits
             && pending_official_task.is_none()
             && (official_codex.is_none()
                 || official_claude.is_none()
                 || official_antigravity.is_none()
-                || last_official_refresh.elapsed() >= Duration::from_secs(30));
+                || last_official_refresh.elapsed() >= official_refresh_interval);
         if should_refresh_official {
             let common = args.common.clone();
             pending_official_task =
@@ -1697,7 +1819,8 @@ async fn run_blocks_live(
         if let Some(ref task) = pending_official_task {
             if task.is_finished() {
                 if let Some(task) = pending_official_task.take() {
-                    if let Ok((codex, claude, antigravity, _errors)) = task.await {
+                    if let Ok((codex, claude, antigravity, errors)) = task.await {
+                        let any_new = codex.is_some() || claude.is_some() || antigravity.is_some();
                         if codex.is_some() {
                             official_codex = codex;
                         }
@@ -1708,12 +1831,20 @@ async fn run_blocks_live(
                             official_antigravity = antigravity;
                         }
                         last_official_refresh = Instant::now();
+
+                        // Adjust cooldown: reset on success, backoff on failure.
+                        if any_new || errors.is_empty() {
+                            official_refresh_interval = official_refresh_interval_base;
+                        } else {
+                            official_refresh_interval = (official_refresh_interval * 2)
+                                .min(official_refresh_interval_max);
+                        }
                     }
                 }
             }
         }
 
-        let loaded = live_runtime.load(tz);
+        let loaded = live_rt.load(tz);
         let membership_estimate =
             estimate_membership_from_logs(&loaded.events, now, live_window_secs);
         let inferred_limit = membership_estimate
@@ -1758,6 +1889,19 @@ async fn run_blocks_live(
         frame_context.active_tab = active_tab;
         render_blocks_live_frame(&mut session, &frame_context)?;
         last_data_refresh = Instant::now();
+        first_real_frame_done = true;
+
+        // Persist frame data so the next `tu live` startup is instant.
+        save_live_frame_cache(&LiveFrameCache {
+            cached_at_unix: unix_now_secs(),
+            cached_date: tz.now_date().to_string(),
+            today_totals: frame_context.today_totals.clone(),
+            last_30d_totals: frame_context.last_30d_totals.clone(),
+            last_30d_active_days: frame_context.last_30d_active_days,
+            official_codex: official_codex.clone(),
+            official_claude: official_claude.clone(),
+            official_antigravity: official_antigravity.clone(),
+        });
 
         // Fast inner loop: poll input at ~50ms intervals, re-render on tab switch
         // immediately. Only break out to refresh data when the refresh timer fires.
@@ -1770,8 +1914,12 @@ async fn run_blocks_live(
             let poll_for = until_refresh.min(Duration::from_millis(50));
             match poll_live_input(poll_for, active_tab)? {
                 LiveInputEvent::Exit => {
-                    live_runtime.flush_cache(true);
-                    return Ok(()); // Exit directly with cache flush
+                    // Abort any pending background task before exiting.
+                    if let Some(task) = pending_official_task.take() {
+                        task.abort();
+                    }
+                    live_rt.flush_cache(true);
+                    return Ok(());
                 }
                 LiveInputEvent::SwitchTab(tab) => {
                     active_tab = tab;
@@ -1784,7 +1932,9 @@ async fn run_blocks_live(
                     if let Some(ref task) = pending_official_task {
                         if task.is_finished() {
                             if let Some(task) = pending_official_task.take() {
-                                if let Ok((codex, claude, antigravity, _errors)) = task.await {
+                                if let Ok((codex, claude, antigravity, errors)) = task.await {
+                                    let any_new =
+                                        codex.is_some() || claude.is_some() || antigravity.is_some();
                                     if codex.is_some() {
                                         official_codex = codex;
                                     }
@@ -1795,6 +1945,12 @@ async fn run_blocks_live(
                                         official_antigravity = antigravity;
                                     }
                                     last_official_refresh = Instant::now();
+                                    if any_new || errors.is_empty() {
+                                        official_refresh_interval = official_refresh_interval_base;
+                                    } else {
+                                        official_refresh_interval = (official_refresh_interval * 2)
+                                            .min(official_refresh_interval_max);
+                                    }
                                 }
                             }
                             // Official data changed — force an immediate data refresh.
@@ -1932,6 +2088,15 @@ struct BlocksLiveSession {
 
 impl BlocksLiveSession {
     fn enter() -> Result<Self> {
+        // Install a panic hook that restores the terminal so a panic during
+        // TUI mode doesn't leave the user's shell in raw/alternate-screen.
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            original_hook(info);
+        }));
+
         enable_raw_mode()?;
         let mut out = io::stdout();
         execute!(out, EnterAlternateScreen)?;
@@ -4713,52 +4878,168 @@ async fn refresh_codex_access_token(
 async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnapshot> {
     // Primary approach: CLI PTY probe (run `claude`, send `/usage`, parse output).
     match fetch_claude_limits_via_cli().await {
-        Ok(snapshot) => return Ok(snapshot),
-        Err(cli_err) => {
-            eprintln!("claude cli probe failed: {cli_err:#}");
+        Ok(snapshot) => {
+            save_claude_snapshot_cache(&snapshot);
+            return Ok(snapshot);
+        }
+        Err(_cli_err) => {
+            // Silently fall through to OAuth fallback.
         }
     }
 
     // Fallback: OAuth via ~/.claude/.credentials.json (may not exist on newer installs).
-    let (credentials_path, mut tokens) = load_claude_oauth_tokens()?;
-    let current_access_token = tokens.access_token.clone().unwrap_or_default();
-    match fetch_claude_usage_with_access_token(
-        &current_access_token,
-        tokens.rate_limit_tier.as_deref(),
-    )
-    .await
-    {
-        Ok(snapshot) => Ok(snapshot),
-        Err(ClaudeOAuthFetchError::Unauthorized) => {
-            let refresh = tokens
-                .refresh_token
-                .as_deref()
-                .filter(|v| !v.is_empty())
-                .context("Claude OAuth token unauthorized and no refresh token available")?;
-            let refreshed = refresh_claude_access_token(refresh).await?;
-            tokens.access_token = Some(refreshed.0);
-            if let Some(refresh_token) = refreshed.1 {
-                tokens.refresh_token = Some(refresh_token);
-            }
-            if let Some(expires_at) = refreshed.2 {
-                tokens.expires_at = Some(expires_at as f64);
-            }
-            let _ = save_claude_oauth_tokens(&credentials_path, &tokens);
-            let refreshed_access_token = tokens.access_token.clone().unwrap_or_default();
-            fetch_claude_usage_with_access_token(
-                &refreshed_access_token,
-                tokens.rate_limit_tier.as_deref(),
-            )
-            .await
-            .map_err(|err| match err {
-                ClaudeOAuthFetchError::Unauthorized => {
-                    anyhow::anyhow!("Claude OAuth remained unauthorized after refresh")
+    let oauth_result: Result<OfficialClaudeSnapshot> = async {
+        let (credentials_path, mut tokens) = load_claude_oauth_tokens()?;
+        let current_access_token = tokens.access_token.clone().unwrap_or_default();
+        match fetch_claude_usage_with_access_token(
+            &current_access_token,
+            tokens.rate_limit_tier.as_deref(),
+        )
+        .await
+        {
+            Ok(snapshot) => Ok(snapshot),
+            Err(ClaudeOAuthFetchError::Unauthorized) => {
+                let refresh = tokens
+                    .refresh_token
+                    .as_deref()
+                    .filter(|v| !v.is_empty())
+                    .context("Claude OAuth token unauthorized and no refresh token available")?;
+                let refreshed = refresh_claude_access_token(refresh).await?;
+                tokens.access_token = Some(refreshed.0);
+                if let Some(refresh_token) = refreshed.1 {
+                    tokens.refresh_token = Some(refresh_token);
                 }
-                ClaudeOAuthFetchError::Other(error) => error,
-            })
+                if let Some(expires_at) = refreshed.2 {
+                    tokens.expires_at = Some(expires_at as f64);
+                }
+                let _ = save_claude_oauth_tokens(&credentials_path, &tokens);
+                let refreshed_access_token = tokens.access_token.clone().unwrap_or_default();
+                fetch_claude_usage_with_access_token(
+                    &refreshed_access_token,
+                    tokens.rate_limit_tier.as_deref(),
+                )
+                .await
+                .map_err(|err| match err {
+                    ClaudeOAuthFetchError::Unauthorized => {
+                        anyhow::anyhow!("Claude OAuth remained unauthorized after refresh")
+                    }
+                    ClaudeOAuthFetchError::Other(error) => error,
+                })
+            }
+            Err(ClaudeOAuthFetchError::Other(error)) => Err(error),
         }
-        Err(ClaudeOAuthFetchError::Other(error)) => Err(error),
     }
+    .await;
+
+    match oauth_result {
+        Ok(snapshot) => {
+            save_claude_snapshot_cache(&snapshot);
+            Ok(snapshot)
+        }
+        Err(err) => {
+            // Both CLI and OAuth failed — try the local cache as last resort.
+            if let Some(cached) = load_claude_snapshot_cache() {
+                Ok(cached)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claude official-limits snapshot cache (survives probe failures).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaudeSnapshotCache {
+    fetched_unix: u64,
+    snapshot: OfficialClaudeSnapshot,
+}
+
+/// Maximum age of the cached snapshot (10 minutes).  Beyond this the cache
+/// is considered stale and will not be used as a fallback.
+const CLAUDE_SNAPSHOT_CACHE_MAX_AGE_SECS: u64 = 600;
+
+fn claude_snapshot_cache_path() -> Option<PathBuf> {
+    let base = dirs::cache_dir()?;
+    Some(base.join("tokenusage").join("claude-limits-cache.json"))
+}
+
+fn save_claude_snapshot_cache(snapshot: &OfficialClaudeSnapshot) {
+    let Some(path) = claude_snapshot_cache_path() else {
+        return;
+    };
+    let cache = ClaudeSnapshotCache {
+        fetched_unix: unix_now_secs(),
+        snapshot: snapshot.clone(),
+    };
+    if let Ok(json) = serde_json::to_vec(&cache) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn load_claude_snapshot_cache() -> Option<OfficialClaudeSnapshot> {
+    let path = claude_snapshot_cache_path()?;
+    let body = std::fs::read(&path).ok()?;
+    let cache: ClaudeSnapshotCache = serde_json::from_slice(&body).ok()?;
+    let age = unix_now_secs().saturating_sub(cache.fetched_unix);
+    if age > CLAUDE_SNAPSHOT_CACHE_MAX_AGE_SECS {
+        return None; // Too stale
+    }
+    Some(cache.snapshot)
+}
+
+// ---------------------------------------------------------------------------
+// Live frame cache — persist last rendered frame data so `tu live` can start
+// instantly showing the previous session's values instead of a blank skeleton.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LiveFrameCache {
+    cached_at_unix: u64,
+    /// ISO date string (YYYY-MM-DD) in user's timezone, so we can invalidate
+    /// today_totals if the day has changed.
+    cached_date: String,
+    today_totals: TokenCounts,
+    last_30d_totals: TokenCounts,
+    last_30d_active_days: u32,
+    official_codex: Option<OfficialCodexSnapshot>,
+    official_claude: Option<OfficialClaudeSnapshot>,
+    official_antigravity: Option<OfficialAntigravitySnapshot>,
+}
+
+fn live_frame_cache_path() -> Option<PathBuf> {
+    let base = dirs::cache_dir()?;
+    Some(base.join("tokenusage").join("live-frame-cache.json"))
+}
+
+fn save_live_frame_cache(cache: &LiveFrameCache) {
+    let Some(path) = live_frame_cache_path() else {
+        return;
+    };
+    if let Ok(json) = serde_json::to_vec(cache) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn load_live_frame_cache() -> Option<LiveFrameCache> {
+    let path = live_frame_cache_path()?;
+    let body = std::fs::read(&path).ok()?;
+    let cache: LiveFrameCache = serde_json::from_slice(&body).ok()?;
+    // Allow up to 24 hours of staleness — the cache is just for instant startup,
+    // real data replaces it within seconds.
+    let age = unix_now_secs().saturating_sub(cache.cached_at_unix);
+    if age > 86400 {
+        return None;
+    }
+    Some(cache)
 }
 
 // ---------------------------------------------------------------------------
@@ -6914,11 +7195,16 @@ impl LiveUsageRuntime {
         self.last_discovery_at = Instant::now();
     }
 
-    fn load(&mut self, timezone: &TimeZoneMode) -> LoadedUsage {
-        // Merge deferred Claude files back on the second load cycle so the
-        // first frame renders instantly with only fast sources (Codex).
+    /// Returns true if deferred Claude files are still pending.
+    fn has_deferred_claude(&self) -> bool {
+        self.deferred_claude_files.is_some()
+    }
+
+    /// Merge deferred Claude files (discovery + parse).  Call this explicitly
+    /// after the first fast frame has been rendered so the user sees Codex
+    /// data immediately.
+    fn merge_deferred_claude(&mut self) {
         if let Some(_deferred) = self.deferred_claude_files.take() {
-            // Discover Claude files now (directory walking was skipped on init).
             let claude_sources: Vec<_> = self
                 .sources
                 .iter()
@@ -6934,6 +7220,9 @@ impl LiveUsageRuntime {
                 self.files_cache.dedup_by(|a, b| a.path == b.path);
             }
         }
+    }
+
+    fn load(&mut self, timezone: &TimeZoneMode) -> LoadedUsage {
         self.maybe_refresh_discovery();
         let parsed = parse_files_with_cache(
             &self.files_cache,

@@ -73,7 +73,7 @@ impl UsageAccumulator {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct TokenCounts {
     pub(crate) input_tokens: u64,
     pub(crate) cache_creation_input_tokens: u64,
