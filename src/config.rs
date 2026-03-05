@@ -50,6 +50,8 @@ struct CommonConfig {
     no_claude: Option<bool>,
     #[serde(alias = "noCodex")]
     no_codex: Option<bool>,
+    #[serde(alias = "noAntigravity")]
+    no_antigravity: Option<bool>,
     #[serde(alias = "claudeProjectsDir")]
     claude_projects_dir: Option<Vec<String>>,
     #[serde(alias = "codexSessionsDir")]
@@ -211,6 +213,7 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Claude(args)
         }
+        Commands::Antigravity(args) => Commands::Antigravity(args),
         Commands::Monthly(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(monthly_cfg) = config.commands.as_ref().and_then(|c| c.monthly.as_ref()) {
@@ -291,6 +294,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Daily(args) => args.common.config.as_deref(),
         Commands::Codex(args) => args.common.config.as_deref(),
         Commands::Claude(args) => args.common.config.as_deref(),
+        Commands::Antigravity(args) => args.config.as_deref(),
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),
@@ -346,6 +350,7 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_none(&mut common.workers, &cfg.workers);
     merge_if_false(&mut common.no_claude, cfg.no_claude);
     merge_if_false(&mut common.no_codex, cfg.no_codex);
+    merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
     if common.claude_projects_dir.is_empty()
         && let Some(values) = cfg.claude_projects_dir.as_ref()
     {

@@ -29,6 +29,7 @@ pub async fn run() -> Result<()> {
             args.common.no_claude = false;
             pipeline::run_daily(args).await
         }
+        Commands::Antigravity(args) => pipeline::run_antigravity(args).await,
         Commands::Monthly(args) => pipeline::run_monthly(args).await,
         Commands::Weekly(args) => pipeline::run_weekly(args).await,
         Commands::Img(args) => share::run_share(args).await,

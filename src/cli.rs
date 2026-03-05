@@ -65,6 +65,7 @@ pub(crate) enum Commands {
     Daily(DailyArgs),
     Codex(DailyArgs),
     Claude(DailyArgs),
+    Antigravity(AntigravityArgs),
     Monthly(MonthlyArgs),
     Weekly(WeeklyArgs),
     Img(ImgArgs),
@@ -117,6 +118,8 @@ pub(crate) struct CommonArgs {
     pub(crate) no_claude: bool,
     #[arg(long, help = "Disable Codex source")]
     pub(crate) no_codex: bool,
+    #[arg(long, help = "Disable Antigravity quota probe")]
+    pub(crate) no_antigravity: bool,
     #[arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable")]
     pub(crate) claude_projects_dir: Vec<String>,
     #[arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable")]
@@ -146,6 +149,20 @@ pub(crate) struct DailyArgs {
     pub(crate) instances: bool,
     #[arg(long, short = 'p', help = "Filter specific project")]
     pub(crate) project: Option<String>,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct AntigravityArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+    #[arg(
+        long,
+        short = 'z',
+        help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"
+    )]
+    pub(crate) timezone: Option<String>,
+    #[arg(long, help = "Path to config JSON")]
+    pub(crate) config: Option<String>,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -356,7 +373,8 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         None => true,
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "monthly" | "weekly" | "img"
-            | "session" | "blocks" | "live" | "statusline" | "gui" | "codex" | "claude",
+            | "session" | "blocks" | "live" | "statusline" | "gui" | "codex" | "claude"
+            | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
@@ -392,6 +410,12 @@ fn normalize_live_shortcuts(argv: &mut Vec<String>) {
             if !argv.iter().any(|arg| arg == "--no-codex") {
                 argv.insert(2, "--no-codex".to_string());
             }
+        }
+        "antigravity" => {
+            // Keep log sources (codex/claude) active for block tracking,
+            // just ensure antigravity probe is not disabled.
+            argv.remove(2);
+            argv.retain(|arg| arg != "--no-antigravity");
         }
         _ => {}
     }

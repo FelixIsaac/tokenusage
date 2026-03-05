@@ -31,8 +31,8 @@ use serde_json::Value;
 use tokio::fs;
 
 use crate::cli::{
-    BlocksArgs, CommonArgs, CostSource, DailyArgs, MonthlyArgs, SessionArgs, SortOrder,
-    StatuslineArgs, VisualBurnRate, WeekStart, WeeklyArgs,
+    AntigravityArgs, BlocksArgs, CommonArgs, CostSource, DailyArgs, MonthlyArgs, SessionArgs,
+    SortOrder, StatuslineArgs, VisualBurnRate, WeekStart, WeeklyArgs,
 };
 use crate::output::{print_report_table_with_options, run_report_tui};
 use crate::types::{
@@ -211,6 +211,7 @@ struct BlockJsonReport {
     membership_estimate: Option<MembershipEstimate>,
     official_codex: Option<OfficialCodexSnapshot>,
     official_claude: Option<OfficialClaudeSnapshot>,
+    official_antigravity: Option<OfficialAntigravitySnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +225,7 @@ struct BlockReportBuildOptions {
     membership_estimate: Option<MembershipEstimate>,
     official_codex: Option<OfficialCodexSnapshot>,
     official_claude: Option<OfficialClaudeSnapshot>,
+    official_antigravity: Option<OfficialAntigravitySnapshot>,
     now: DateTime<Utc>,
 }
 
@@ -247,6 +249,30 @@ struct OfficialClaudeSnapshot {
     secondary_window_mins: Option<i64>,
     primary_resets_at: Option<i64>,
     secondary_resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AntigravityModelQuotaSnapshot {
+    label: String,
+    model_id: String,
+    remaining_fraction: Option<f64>,
+    reset_time: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OfficialAntigravitySnapshot {
+    plan_type: Option<String>,
+    account_email: Option<String>,
+    models: Vec<AntigravityModelQuotaSnapshot>,
+    primary_used_percent: Option<f64>,
+    secondary_used_percent: Option<f64>,
+    tertiary_used_percent: Option<f64>,
+    primary_label: Option<String>,
+    secondary_label: Option<String>,
+    tertiary_label: Option<String>,
+    primary_resets_at: Option<i64>,
+    secondary_resets_at: Option<i64>,
+    tertiary_resets_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,7 +334,43 @@ struct LimitDisplayContext<'a> {
     membership_estimate: Option<&'a MembershipEstimate>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveTab {
+    Overview,
+    Antigravity,
+}
+
+impl LiveTab {
+    fn label(self) -> &'static str {
+        match self {
+            LiveTab::Overview => "Overview",
+            LiveTab::Antigravity => "Antigravity",
+        }
+    }
+
+    fn all() -> &'static [LiveTab] {
+        &[LiveTab::Overview, LiveTab::Antigravity]
+    }
+
+    fn next(self) -> Self {
+        match self {
+            LiveTab::Overview => LiveTab::Antigravity,
+            LiveTab::Antigravity => LiveTab::Overview,
+        }
+    }
+
+    fn prev(self) -> Self {
+        self.next() // only 2 tabs, prev == next
+    }
+}
+
+enum LiveInputEvent {
+    Exit,
+    SwitchTab(LiveTab),
+    Tick,
+}
+
+#[derive(Debug, Clone)]
 struct LiveFrameContext<'a> {
     now: DateTime<Utc>,
     refresh_every: u64,
@@ -321,11 +383,13 @@ struct LiveFrameContext<'a> {
     limit: LimitDisplayContext<'a>,
     official_codex: Option<&'a OfficialCodexSnapshot>,
     official_claude: Option<&'a OfficialClaudeSnapshot>,
+    official_antigravity: Option<&'a OfficialAntigravitySnapshot>,
     selected_source: Option<SourceKind>,
     today_totals: TokenCounts,
     last_30d_totals: TokenCounts,
     last_30d_active_days: u32,
     active: Option<&'a ActiveBlockSummary>,
+    active_tab: LiveTab,
 }
 
 impl<'a> LiveFrameContext<'a> {
@@ -339,11 +403,13 @@ impl<'a> LiveFrameContext<'a> {
         limit: LimitDisplayContext<'a>,
         official_codex: Option<&'a OfficialCodexSnapshot>,
         official_claude: Option<&'a OfficialClaudeSnapshot>,
+        official_antigravity: Option<&'a OfficialAntigravitySnapshot>,
         selected_source: Option<SourceKind>,
         today_totals: TokenCounts,
         last_30d_totals: TokenCounts,
         last_30d_active_days: u32,
         active: Option<&'a ActiveBlockSummary>,
+        active_tab: LiveTab,
     ) -> Self {
         let now_unix = now.timestamp();
         let block_start = DateTime::from_timestamp(block_start_unix, 0).unwrap_or(now);
@@ -363,11 +429,13 @@ impl<'a> LiveFrameContext<'a> {
             limit,
             official_codex,
             official_claude,
+            official_antigravity,
             selected_source,
             today_totals,
             last_30d_totals,
             last_30d_active_days,
             active,
+            active_tab,
         }
     }
 }
@@ -750,6 +818,92 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     }
 }
 
+pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
+    let tz = parse_timezone_mode(args.timezone.as_deref())?;
+    let snapshot = fetch_antigravity_official_limits()
+        .await
+        .context("Failed to probe Antigravity language server")?;
+
+    if args.json {
+        emit_json(&snapshot, None)?;
+    } else {
+        let plan = snapshot.plan_type.as_deref().unwrap_or("unknown");
+        if let Some(email) = snapshot.account_email.as_deref() {
+            println!("Antigravity  plan={plan}  email={email}");
+        } else {
+            println!("Antigravity  plan={plan}");
+        }
+        println!();
+
+        if snapshot.models.is_empty() {
+            println!("  (no model quotas available)");
+        } else {
+            // Show all models: those with quota data first, then unknowns
+            let ordered = select_antigravity_models(&snapshot.models);
+            let now = Utc::now();
+
+            // Collect models already shown via priority selection
+            let shown_labels: HashSet<&str> =
+                ordered.iter().map(|m| m.label.as_str()).collect();
+
+            // Remaining models not in the priority list
+            let rest: Vec<_> = snapshot
+                .models
+                .iter()
+                .filter(|m| !shown_labels.contains(m.label.as_str()))
+                .collect();
+
+            for model in ordered.iter().chain(rest.into_iter()) {
+                if let Some(frac) = model.remaining_fraction {
+                    let remaining_pct = frac * 100.0;
+                    let used_pct = 100.0 - remaining_pct;
+                    let bar = quota_bar(remaining_pct);
+                    let mut line = format!(
+                        "  {:<32} {bar}  {remaining_pct:5.1}% remaining  ({used_pct:.1}% used)",
+                        model.label
+                    );
+                    if let Some(reset_ts) = model.reset_time {
+                        let reset_text = format_reset_timestamp(reset_ts, &tz);
+                        let eta_text = format_time_until_reset_short(reset_ts, now);
+                        line.push_str(&format!("  resets {reset_text} (in {eta_text})"));
+                    }
+                    println!("{line}");
+                } else {
+                    let bar = "\x1b[90m[░░░░░░░░░░░░░░░░░░░░]\x1b[0m";
+                    let mut line =
+                        format!("  {:<32} {bar}  quota not reported", model.label);
+                    if let Some(reset_ts) = model.reset_time {
+                        let reset_text = format_reset_timestamp(reset_ts, &tz);
+                        let eta_text = format_time_until_reset_short(reset_ts, now);
+                        line.push_str(&format!("  resets {reset_text} (in {eta_text})"));
+                    }
+                    println!("{line}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn quota_bar(remaining_pct: f64) -> String {
+    let width: usize = 20;
+    let filled = ((remaining_pct / 100.0) * width as f64).round() as usize;
+    let empty = width.saturating_sub(filled);
+    let color = if remaining_pct >= 40.0 {
+        "\x1b[32m" // green
+    } else if remaining_pct >= 15.0 {
+        "\x1b[33m" // yellow
+    } else {
+        "\x1b[31m" // red
+    };
+    format!(
+        "{color}[{}{}]\x1b[0m",
+        "█".repeat(filled),
+        "░".repeat(empty)
+    )
+}
+
 pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
@@ -855,14 +1009,14 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
-    let (official_codex, official_claude) = if args.official_limits {
-        let (codex, claude, errors) = fetch_selected_official_limits(&args.common).await;
+    let (official_codex, official_claude, official_antigravity) = if args.official_limits {
+        let (codex, claude, antigravity, errors) = fetch_selected_official_limits(&args.common).await;
         for error in errors {
             eprintln!("{error}");
         }
-        (codex, claude)
+        (codex, claude, antigravity)
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     if args.live {
@@ -873,6 +1027,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             token_limit_mode,
             official_codex,
             official_claude,
+            official_antigravity,
         )
         .await;
     }
@@ -901,6 +1056,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             membership_estimate: membership_estimate.clone(),
             official_codex: official_codex.clone(),
             official_claude: official_claude.clone(),
+            official_antigravity: official_antigravity.clone(),
             now,
         },
     );
@@ -932,6 +1088,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             token_limit_source,
             json_report.official_codex.as_ref(),
             json_report.official_claude.as_ref(),
+            json_report.official_antigravity.as_ref(),
             &tz,
         );
         print_debug(&show.stats, &args.common);
@@ -944,11 +1101,13 @@ async fn fetch_selected_official_limits(
 ) -> (
     Option<OfficialCodexSnapshot>,
     Option<OfficialClaudeSnapshot>,
+    Option<OfficialAntigravitySnapshot>,
     Vec<String>,
 ) {
     let codex_enabled = !common.no_codex;
     let claude_enabled = !common.no_claude;
-    let (codex_result, claude_result) = tokio::join!(
+    let antigravity_enabled = !common.no_antigravity;
+    let (codex_result, claude_result, antigravity_result) = tokio::join!(
         async {
             if codex_enabled {
                 Some(fetch_codex_official_limits().await)
@@ -959,6 +1118,13 @@ async fn fetch_selected_official_limits(
         async {
             if claude_enabled {
                 Some(fetch_claude_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if antigravity_enabled {
+                Some(fetch_antigravity_official_limits().await)
             } else {
                 None
             }
@@ -985,7 +1151,13 @@ async fn fetch_selected_official_limits(
         None => None,
     };
 
-    (codex, claude, errors)
+    let antigravity = match antigravity_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(_)) => None, // Silently skip — Antigravity may not be running
+        None => None,
+    };
+
+    (codex, claude, antigravity, errors)
 }
 
 fn parse_token_limit_mode(raw: Option<&str>) -> Result<Option<TokenLimitMode>> {
@@ -1372,6 +1544,7 @@ fn build_block_json_report(
         membership_estimate,
         official_codex,
         official_claude,
+        official_antigravity,
         now,
     } = options;
     let mut grouped: HashMap<i64, GroupAggregate> = HashMap::new();
@@ -1447,6 +1620,7 @@ fn build_block_json_report(
         membership_estimate,
         official_codex,
         official_claude,
+        official_antigravity,
     }
 }
 
@@ -1457,6 +1631,7 @@ async fn run_blocks_live(
     token_limit_mode: Option<TokenLimitMode>,
     mut official_codex: Option<OfficialCodexSnapshot>,
     mut official_claude: Option<OfficialClaudeSnapshot>,
+    mut official_antigravity: Option<OfficialAntigravitySnapshot>,
 ) -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("--live requires an interactive terminal");
@@ -1466,6 +1641,7 @@ async fn run_blocks_live(
     let mut session = BlocksLiveSession::enter()?;
     let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every).await?;
     let mut last_official_refresh = Instant::now();
+    let mut active_tab = LiveTab::Overview;
 
     loop {
         let now = Utc::now();
@@ -1488,6 +1664,7 @@ async fn run_blocks_live(
         let should_refresh_official = args.official_limits
             && (official_codex.is_none()
                 || official_claude.is_none()
+                || official_antigravity.is_none()
                 || last_official_refresh.elapsed() >= Duration::from_secs(30));
         let official_task = should_refresh_official.then(|| {
             let common = args.common.clone();
@@ -1497,12 +1674,15 @@ async fn run_blocks_live(
         let loaded = live_runtime.load(tz);
 
         if let Some(task) = official_task {
-            if let Ok((codex, claude, _errors)) = task.await {
+            if let Ok((codex, claude, antigravity, _errors)) = task.await {
                 if codex.is_some() {
                     official_codex = codex;
                 }
                 if claude.is_some() {
                     official_claude = claude;
+                }
+                if antigravity.is_some() {
+                    official_antigravity = antigravity;
                 }
                 last_official_refresh = Instant::now();
             }
@@ -1540,16 +1720,36 @@ async fn run_blocks_live(
             },
             official_codex.as_ref(),
             official_claude.as_ref(),
+            official_antigravity.as_ref(),
             selected_source,
             today_totals,
             last_30d_totals,
             last_30d_active_days,
             active.as_ref(),
+            active_tab,
         );
 
         render_blocks_live_frame(&mut session, &frame_context)?;
 
-        if wait_for_blocks_live_exit(Duration::from_secs(refresh_every))? {
+        let mut should_exit = false;
+        loop {
+            match poll_live_input(Duration::from_secs(refresh_every), active_tab)? {
+                LiveInputEvent::Exit => {
+                    should_exit = true;
+                    break;
+                }
+                LiveInputEvent::SwitchTab(tab) => {
+                    active_tab = tab;
+                    // Re-render immediately with updated tab, reuse existing data
+                    let mut ctx = frame_context.clone();
+                    ctx.active_tab = active_tab;
+                    render_blocks_live_frame(&mut session, &ctx)?;
+                    continue;
+                }
+                LiveInputEvent::Tick => break,
+            }
+        }
+        if should_exit {
             break;
         }
     }
@@ -1714,17 +1914,22 @@ fn render_blocks_live_frame(
 fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameContext<'_>) {
     let root = frame.area();
     let preferred_official = preferred_official_for_live(context);
-    let progress_height = if preferred_official
-        .and_then(LiveOfficialRef::secondary_used_percent)
-        .is_some()
+    let progress_height = if context.active_tab == LiveTab::Overview
+        && preferred_official
+            .and_then(LiveOfficialRef::secondary_used_percent)
+            .is_some()
     {
         6
-    } else {
+    } else if context.active_tab == LiveTab::Overview {
         4
+    } else {
+        0
     };
     let header_height = if root.width >= 112 { 2 } else { 4 };
-    let [header_area, progress_area, body_area] = Layout::vertical([
+    let tab_bar_height = 1u16;
+    let [header_area, tab_area, progress_area, body_area] = Layout::vertical([
         Constraint::Length(header_height),
+        Constraint::Length(tab_bar_height),
         Constraint::Length(progress_height),
         Constraint::Min(4),
     ])
@@ -1759,7 +1964,7 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
                 )),
             ]),
             Line::from(format!(
-                "{}  |  block {} -> {}  |  q / Esc / Ctrl+C exit",
+                "{}  |  block {} -> {}  |  q/Esc exit · Tab/←→ switch",
                 context.now_text, context.block_start_text, context.block_end_text
             )),
         ]
@@ -1781,19 +1986,158 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
                 context.now_text, context.refresh_every
             )),
             Line::from(format!("{}h window", context.window_secs / 3600)),
-            Line::from(format!(
-                "block {} -> {}",
-                context.block_start_text, context.block_end_text
-            )),
-            Line::from("q / Esc / Ctrl+C exit"),
+            Line::from("q/Esc exit · Tab/←→ switch"),
         ]
     };
 
     let header = Paragraph::new(header_lines).wrap(Wrap { trim: true });
     frame.render_widget(header, header_area);
 
-    render_live_progress_bars(frame, progress_area, context);
-    render_live_body(frame, body_area, context);
+    // Tab bar
+    render_live_tab_bar(frame, tab_area, context.active_tab);
+
+    match context.active_tab {
+        LiveTab::Overview => {
+            render_live_progress_bars(frame, progress_area, context);
+            render_live_body(frame, body_area, context);
+        }
+        LiveTab::Antigravity => {
+            render_live_antigravity_tab(frame, body_area, context);
+        }
+    }
+}
+
+fn render_live_tab_bar(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    active: LiveTab,
+) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, tab) in LiveTab::all().iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let label = format!(" {} ", tab.label());
+        if *tab == active {
+            spans.push(Span::styled(
+                label,
+                Style::default()
+                    .fg(TuiColor::Black)
+                    .bg(TuiColor::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                label,
+                Style::default().fg(TuiColor::DarkGray),
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_live_antigravity_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let Some(ag) = context.official_antigravity else {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Antigravity language server not detected",
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from("Make sure Antigravity IDE is running with its language server."),
+        ])
+        .wrap(Wrap { trim: true });
+        frame.render_widget(msg, area);
+        return;
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let plan = ag.plan_type.as_deref().unwrap_or("unknown");
+    let email = ag.account_email.as_deref().unwrap_or("—");
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Antigravity",
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!("  plan {plan}  |  {email}")),
+    ]));
+    lines.push(Line::from(""));
+
+    let now = Utc::now();
+    let ordered = select_antigravity_models(&ag.models);
+    let shown: HashSet<String> = ordered.iter().map(|m| m.label.clone()).collect();
+    let rest: Vec<_> = ag
+        .models
+        .iter()
+        .filter(|m| !shown.contains(&m.label))
+        .collect();
+
+    // Draw each model with a gauge-style bar
+    for model in ordered.iter().chain(rest.into_iter()) {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", model.label),
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+
+        if let Some(frac) = model.remaining_fraction {
+            let remaining_pct = frac * 100.0;
+            let used_pct = 100.0 - remaining_pct;
+            let color = if remaining_pct >= 40.0 {
+                TuiColor::Green
+            } else if remaining_pct >= 15.0 {
+                TuiColor::Yellow
+            } else {
+                TuiColor::Red
+            };
+
+            let bar_width = (area.width as usize).saturating_sub(6).min(60);
+            let filled = ((used_pct / 100.0) * bar_width as f64).round() as usize;
+            let empty = bar_width.saturating_sub(filled);
+            let bar = format!("{}{}",
+                "█".repeat(filled),
+                "░".repeat(empty),
+            );
+
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(bar, Style::default().fg(color)),
+                Span::styled(
+                    format!(" {remaining_pct:.0}% left"),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+
+            if let Some(reset_ts) = model.reset_time {
+                let eta = format_time_until_reset_short(reset_ts, now);
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        format!("resets in {eta}"),
+                        Style::default().fg(TuiColor::DarkGray),
+                    ),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("quota not reported", Style::default().fg(TuiColor::DarkGray)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let body = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(body, area);
 }
 
 fn render_live_progress_bars(
@@ -2005,6 +2349,7 @@ fn render_live_progress_bars(
 enum LiveOfficialRef<'a> {
     Codex(&'a OfficialCodexSnapshot),
     Claude(&'a OfficialClaudeSnapshot),
+    Antigravity(&'a OfficialAntigravitySnapshot),
 }
 
 impl<'a> LiveOfficialRef<'a> {
@@ -2012,6 +2357,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(_) => "Codex",
             LiveOfficialRef::Claude(_) => "Claude",
+            LiveOfficialRef::Antigravity(_) => "Antigravity",
         }
     }
 
@@ -2019,6 +2365,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.plan_type.as_deref(),
             LiveOfficialRef::Claude(snapshot) => snapshot.plan_type.as_deref(),
+            LiveOfficialRef::Antigravity(snapshot) => snapshot.plan_type.as_deref(),
         }
     }
 
@@ -2026,6 +2373,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.primary_used_percent,
             LiveOfficialRef::Claude(snapshot) => snapshot.primary_used_percent,
+            LiveOfficialRef::Antigravity(snapshot) => snapshot.primary_used_percent,
         }
     }
 
@@ -2033,6 +2381,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.secondary_used_percent,
             LiveOfficialRef::Claude(snapshot) => snapshot.secondary_used_percent,
+            LiveOfficialRef::Antigravity(snapshot) => snapshot.secondary_used_percent,
         }
     }
 
@@ -2040,6 +2389,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.secondary_window_mins,
             LiveOfficialRef::Claude(snapshot) => snapshot.secondary_window_mins,
+            LiveOfficialRef::Antigravity(_) => None,
         }
     }
 
@@ -2047,6 +2397,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.primary_resets_at,
             LiveOfficialRef::Claude(snapshot) => snapshot.primary_resets_at,
+            LiveOfficialRef::Antigravity(snapshot) => snapshot.primary_resets_at,
         }
     }
 
@@ -2054,6 +2405,7 @@ impl<'a> LiveOfficialRef<'a> {
         match self {
             LiveOfficialRef::Codex(snapshot) => snapshot.secondary_resets_at,
             LiveOfficialRef::Claude(snapshot) => snapshot.secondary_resets_at,
+            LiveOfficialRef::Antigravity(snapshot) => snapshot.secondary_resets_at,
         }
     }
 }
@@ -2066,6 +2418,14 @@ fn preferred_official_for_live<'a>(
             SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
             SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
         };
+    }
+
+    // Antigravity is shown when it's the only available provider or alongside others
+    if context.official_codex.is_none()
+        && context.official_claude.is_none()
+        && let Some(ag) = context.official_antigravity
+    {
+        return Some(LiveOfficialRef::Antigravity(ag));
     }
 
     match (context.official_codex, context.official_claude) {
@@ -2623,6 +2983,53 @@ fn live_limit_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
         ]));
     }
 
+    if let Some(ag) = context.official_antigravity {
+        lines.push(Line::from(""));
+        let plan = ag.plan_type.as_deref().unwrap_or("unknown");
+        lines.push(Line::from(vec![Span::styled(
+            format!("Antigravity ({plan})"),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        let now = Utc::now();
+        let ordered = select_antigravity_models(&ag.models);
+        let shown: HashSet<String> = ordered.iter().map(|m| m.label.clone()).collect();
+        let rest: Vec<_> = ag
+            .models
+            .iter()
+            .filter(|m| !shown.contains(&m.label))
+            .collect();
+        for model in ordered.iter().chain(rest.into_iter()) {
+            let (pct_text, color) = if let Some(frac) = model.remaining_fraction {
+                let remaining = frac * 100.0;
+                let used = 100.0 - remaining;
+                let color = if remaining >= 40.0 {
+                    TuiColor::Green
+                } else if remaining >= 15.0 {
+                    TuiColor::Yellow
+                } else {
+                    TuiColor::Red
+                };
+                (format!("{remaining:.0}% left ({used:.0}% used)"), color)
+            } else {
+                ("quota n/a".to_string(), TuiColor::DarkGray)
+            };
+            let mut spans = vec![
+                Span::raw(format!("  {:<26} ", model.label)),
+                Span::styled(
+                    pct_text,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+            ];
+            if let Some(reset_ts) = model.reset_time {
+                let eta = format_time_until_reset_short(reset_ts, now);
+                spans.push(Span::raw(format!(" ({eta})")));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
     lines
 }
 
@@ -2761,11 +3168,11 @@ fn burn_status_color(status: BurnStatus) -> TuiColor {
     }
 }
 
-fn wait_for_blocks_live_exit(timeout: Duration) -> Result<bool> {
+fn poll_live_input(timeout: Duration, current_tab: LiveTab) -> Result<LiveInputEvent> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let poll_for = remaining.min(Duration::from_millis(200));
+        let poll_for = remaining.min(Duration::from_millis(50));
         if !event::poll(poll_for)? {
             continue;
         }
@@ -2778,15 +3185,21 @@ fn wait_for_blocks_live_exit(timeout: Duration) -> Result<bool> {
         }
 
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return Ok(true),
+            KeyCode::Esc | KeyCode::Char('q') => return Ok(LiveInputEvent::Exit),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                return Ok(true);
+                return Ok(LiveInputEvent::Exit);
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                return Ok(LiveInputEvent::SwitchTab(current_tab.next()));
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                return Ok(LiveInputEvent::SwitchTab(current_tab.prev()));
             }
             _ => {}
         }
     }
 
-    Ok(false)
+    Ok(LiveInputEvent::Tick)
 }
 
 pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
@@ -2835,14 +3248,15 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
 
     let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
     let block_summary = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
-    let (official_codex, official_claude) = if args.official_limits {
-        let (codex, claude, errors) = fetch_selected_official_limits(&args.common).await;
+    let (official_codex, official_claude, official_antigravity) = if args.official_limits {
+        let (codex, claude, antigravity, errors) =
+            fetch_selected_official_limits(&args.common).await;
         for error in errors {
             eprintln!("{error}");
         }
-        (codex, claude)
+        (codex, claude, antigravity)
     } else {
-        (None, None)
+        (None, None, None)
     };
     let line = build_statusline_line(
         &args,
@@ -2852,6 +3266,7 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
         block_summary.as_ref(),
         official_codex.as_ref(),
         official_claude.as_ref(),
+        official_antigravity.as_ref(),
         &tz,
     );
 
@@ -3155,6 +3570,7 @@ fn build_statusline_line(
     block: Option<&ActiveBlockSummary>,
     official_codex: Option<&OfficialCodexSnapshot>,
     official_claude: Option<&OfficialClaudeSnapshot>,
+    official_antigravity: Option<&OfficialAntigravitySnapshot>,
     tz: &TimeZoneMode,
 ) -> String {
     let model_name = hook
@@ -3247,6 +3663,9 @@ fn build_statusline_line(
     if let Some(official) = official_claude {
         parts.push(build_statusline_official_claude_segment(official, tz));
     }
+    if let Some(official) = official_antigravity {
+        parts.push(build_statusline_official_antigravity_segment(official, tz));
+    }
 
     parts.join(" | ")
 }
@@ -3312,6 +3731,49 @@ fn build_statusline_official_claude_segment(
             entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
         }
         parts.push(entry);
+    }
+
+    parts.join(" ")
+}
+
+fn build_statusline_official_antigravity_segment(
+    official: &OfficialAntigravitySnapshot,
+    tz: &TimeZoneMode,
+) -> String {
+    let plan = official.plan_type.as_deref().unwrap_or("unknown");
+    let now = Utc::now();
+    let mut parts = vec![format!("antigravity {plan}")];
+
+    let slots: &[(Option<f64>, Option<&str>, Option<i64>)] = &[
+        (
+            official.primary_used_percent,
+            official.primary_label.as_deref(),
+            official.primary_resets_at,
+        ),
+        (
+            official.secondary_used_percent,
+            official.secondary_label.as_deref(),
+            official.secondary_resets_at,
+        ),
+        (
+            official.tertiary_used_percent,
+            official.tertiary_label.as_deref(),
+            official.tertiary_resets_at,
+        ),
+    ];
+
+    for (used_opt, label, resets_at) in slots {
+        if let Some(used) = used_opt {
+            let tag = label.unwrap_or("model");
+            let remaining = (100.0 - used).clamp(0.0, 100.0);
+            let mut entry = format!("{tag} {remaining:.1}% left");
+            if let Some(resets_at) = resets_at {
+                let reset_text = format_reset_timestamp(*resets_at, tz);
+                let eta_text = format_time_until_reset_short(*resets_at, now);
+                entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+            }
+            parts.push(entry);
+        }
     }
 
     parts.join(" ")
@@ -4107,6 +4569,449 @@ async fn refresh_claude_access_token(
     Ok((payload.access_token, payload.refresh_token, expires_at_ms))
 }
 
+// ---------------------------------------------------------------------------
+// Antigravity local probe — detect language_server_macos process, find port,
+// query the Connect-protocol gRPC endpoints for quota data.
+// ---------------------------------------------------------------------------
+
+async fn fetch_antigravity_official_limits() -> Result<OfficialAntigravitySnapshot> {
+    let (pid, csrf_token, extension_port) = detect_antigravity_process().await?;
+    let ports = antigravity_listening_ports(pid).await?;
+    let connect_port = antigravity_find_working_port(&ports, &csrf_token).await?;
+    let ctx = AntigravityRequestContext {
+        https_port: connect_port,
+        http_port: extension_port,
+        csrf_token,
+    };
+
+    let snapshot = match antigravity_fetch_user_status(&ctx).await {
+        Ok(snap) => snap,
+        Err(_) => antigravity_fetch_command_model_configs(&ctx).await?,
+    };
+    Ok(snapshot)
+}
+
+struct AntigravityRequestContext {
+    https_port: u16,
+    http_port: Option<u16>,
+    csrf_token: String,
+}
+
+async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
+    let output = tokio::task::spawn_blocking(|| {
+        Command::new("/bin/ps")
+            .args(["-ax", "-o", "pid=,command="])
+            .output()
+            .context("failed to run ps for antigravity detection")
+    })
+    .await
+    .context("ps task join failed")??;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (pid_str, cmd) = match trimmed.split_once(|c: char| c.is_whitespace()) {
+            Some((p, c)) => (p.trim(), c),
+            None => continue,
+        };
+        let lower = cmd.to_ascii_lowercase();
+        if !lower.contains("language_server_macos") {
+            continue;
+        }
+        let is_antigravity = (lower.contains("--app_data_dir") && lower.contains("antigravity"))
+            || lower.contains("/antigravity/");
+        if !is_antigravity {
+            continue;
+        }
+        let pid: u32 = match pid_str.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let csrf = match extract_flag_value("--csrf_token", cmd) {
+            Some(v) => v,
+            None => continue,
+        };
+        let ext_port = extract_flag_value("--extension_server_port", cmd)
+            .and_then(|v| v.parse::<u16>().ok());
+        return Ok((pid, csrf, ext_port));
+    }
+    bail!("Antigravity language server not detected")
+}
+
+fn extract_flag_value(flag: &str, command: &str) -> Option<String> {
+    let idx = command.find(flag)?;
+    let after = &command[idx + flag.len()..];
+    let after = after.strip_prefix('=').unwrap_or_else(|| after.trim_start());
+    let value = after.split_whitespace().next()?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+async fn antigravity_listening_ports(pid: u32) -> Result<Vec<u16>> {
+    let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .context("lsof not available for antigravity port detection")?;
+
+    let lsof = lsof.to_string();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(&lsof)
+            .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid.to_string()])
+            .output()
+            .context("failed to run lsof for antigravity")
+    })
+    .await
+    .context("lsof task join failed")??;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ports = std::collections::BTreeSet::new();
+    for line in stdout.lines() {
+        // Match lines like: ... TCP *:42150 (LISTEN)
+        if let Some(listen_idx) = line.find("(LISTEN)") {
+            let before = &line[..listen_idx];
+            if let Some(colon_idx) = before.rfind(':') {
+                let port_str = before[colon_idx + 1..].trim();
+                if let Ok(port) = port_str.parse::<u16>() {
+                    ports.insert(port);
+                }
+            }
+        }
+    }
+
+    if ports.is_empty() {
+        bail!("Antigravity process has no listening ports");
+    }
+    Ok(ports.into_iter().collect())
+}
+
+async fn antigravity_find_working_port(ports: &[u16], csrf_token: &str) -> Result<u16> {
+    let unleash_body = serde_json::json!({
+        "context": {
+            "properties": {
+                "devMode": "false",
+                "extensionVersion": "unknown",
+                "hasAnthropicModelAccess": "true",
+                "ide": "antigravity",
+                "ideVersion": "unknown",
+                "installationId": "tokenusage",
+                "language": "UNSPECIFIED",
+                "os": "macos",
+                "requestedModelId": "MODEL_UNSPECIFIED",
+            }
+        }
+    });
+    let path = "/exa.language_server_pb.LanguageServerService/GetUnleashData";
+
+    for &port in ports {
+        let url = format!("https://127.0.0.1:{port}{path}");
+        let result = antigravity_post(&url, csrf_token, &unleash_body).await;
+        if result.is_ok() {
+            return Ok(port);
+        }
+    }
+    bail!("no working Antigravity API port found among {} candidates", ports.len())
+}
+
+fn antigravity_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build HTTP client for antigravity")
+}
+
+async fn antigravity_post(
+    url: &str,
+    csrf_token: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let client = antigravity_http_client()?;
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Connect-Protocol-Version", "1")
+        .header("X-Codeium-Csrf-Token", csrf_token)
+        .json(body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        bail!("Antigravity HTTP {status}: {text}");
+    }
+    response
+        .json()
+        .await
+        .context("invalid JSON from antigravity")
+}
+
+async fn antigravity_post_with_http_fallback(
+    ctx: &AntigravityRequestContext,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let https_url = format!("https://127.0.0.1:{}{path}", ctx.https_port);
+    match antigravity_post(&https_url, &ctx.csrf_token, body).await {
+        Ok(v) => Ok(v),
+        Err(https_err) => {
+            if let Some(http_port) = ctx.http_port {
+                if http_port != ctx.https_port {
+                    let http_url = format!("http://127.0.0.1:{http_port}{path}");
+                    return antigravity_post(&http_url, &ctx.csrf_token, body).await;
+                }
+            }
+            Err(https_err)
+        }
+    }
+}
+
+fn antigravity_default_request_body() -> serde_json::Value {
+    serde_json::json!({
+        "metadata": {
+            "ideName": "antigravity",
+            "extensionName": "antigravity",
+            "ideVersion": "unknown",
+            "locale": "en",
+        }
+    })
+}
+
+async fn antigravity_fetch_user_status(
+    ctx: &AntigravityRequestContext,
+) -> Result<OfficialAntigravitySnapshot> {
+    let path = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
+    let body = antigravity_default_request_body();
+    let resp = antigravity_post_with_http_fallback(ctx, path, &body).await?;
+    parse_antigravity_user_status(&resp)
+}
+
+async fn antigravity_fetch_command_model_configs(
+    ctx: &AntigravityRequestContext,
+) -> Result<OfficialAntigravitySnapshot> {
+    let path = "/exa.language_server_pb.LanguageServerService/GetCommandModelConfigs";
+    let body = antigravity_default_request_body();
+    let resp = antigravity_post_with_http_fallback(ctx, path, &body).await?;
+    parse_antigravity_command_model_configs(&resp)
+}
+
+fn parse_antigravity_user_status(
+    resp: &serde_json::Value,
+) -> Result<OfficialAntigravitySnapshot> {
+    // Check for error code
+    if let Some(code) = resp.get("code") {
+        let is_ok = match code {
+            serde_json::Value::Number(n) => n.as_i64() == Some(0),
+            serde_json::Value::String(s) => {
+                let l = s.to_ascii_lowercase();
+                l == "ok" || l == "success" || l == "0"
+            }
+            _ => true,
+        };
+        if !is_ok {
+            bail!("Antigravity API error code: {code}");
+        }
+    }
+
+    let user_status = resp
+        .get("userStatus")
+        .context("Antigravity response missing userStatus")?;
+
+    let email = user_status
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let plan_name = user_status
+        .pointer("/planStatus/planInfo")
+        .and_then(|info| {
+            let candidates = [
+                "planDisplayName",
+                "displayName",
+                "productName",
+                "planName",
+                "planShortName",
+            ];
+            candidates
+                .iter()
+                .filter_map(|key| info.get(key)?.as_str())
+                .find(|s| !s.trim().is_empty())
+                .map(String::from)
+        });
+
+    let model_configs = user_status
+        .pointer("/cascadeModelConfigData/clientModelConfigs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let models = parse_antigravity_model_quotas(&model_configs);
+    Ok(build_antigravity_snapshot(plan_name, email, models))
+}
+
+fn parse_antigravity_command_model_configs(
+    resp: &serde_json::Value,
+) -> Result<OfficialAntigravitySnapshot> {
+    if let Some(code) = resp.get("code") {
+        let is_ok = match code {
+            serde_json::Value::Number(n) => n.as_i64() == Some(0),
+            serde_json::Value::String(s) => {
+                let l = s.to_ascii_lowercase();
+                l == "ok" || l == "success" || l == "0"
+            }
+            _ => true,
+        };
+        if !is_ok {
+            bail!("Antigravity API error code: {code}");
+        }
+    }
+
+    let model_configs = resp
+        .get("clientModelConfigs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let models = parse_antigravity_model_quotas(&model_configs);
+    Ok(build_antigravity_snapshot(None, None, models))
+}
+
+fn parse_antigravity_model_quotas(
+    configs: &[serde_json::Value],
+) -> Vec<AntigravityModelQuotaSnapshot> {
+    configs
+        .iter()
+        .filter_map(|config| {
+            let label = config.get("label")?.as_str()?.to_string();
+            let model_id = config
+                .pointer("/modelOrAlias/model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let quota = config.get("quotaInfo")?;
+            let remaining_fraction = quota.get("remainingFraction").and_then(|v| v.as_f64());
+            let reset_time = quota
+                .get("resetTime")
+                .and_then(|v| v.as_str())
+                .and_then(parse_antigravity_reset_time);
+            Some(AntigravityModelQuotaSnapshot {
+                label,
+                model_id,
+                remaining_fraction,
+                reset_time,
+            })
+        })
+        .collect()
+}
+
+fn parse_antigravity_reset_time(value: &str) -> Option<i64> {
+    // Try as ISO 8601 first
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(dt.timestamp());
+    }
+    // Try as seconds since epoch
+    if let Ok(secs) = value.parse::<f64>() {
+        return Some(secs as i64);
+    }
+    None
+}
+
+fn build_antigravity_snapshot(
+    plan_type: Option<String>,
+    account_email: Option<String>,
+    models: Vec<AntigravityModelQuotaSnapshot>,
+) -> OfficialAntigravitySnapshot {
+    let ordered = select_antigravity_models(&models);
+
+    let (primary_used, primary_label, primary_resets) = ordered
+        .first()
+        .map(|m| {
+            let used = m.remaining_fraction.map(|f| (1.0 - f) * 100.0);
+            (used, Some(m.label.clone()), m.reset_time)
+        })
+        .unwrap_or((None, None, None));
+
+    let (secondary_used, secondary_label, secondary_resets) = ordered
+        .get(1)
+        .map(|m| {
+            let used = m.remaining_fraction.map(|f| (1.0 - f) * 100.0);
+            (used, Some(m.label.clone()), m.reset_time)
+        })
+        .unwrap_or((None, None, None));
+
+    let (tertiary_used, tertiary_label, tertiary_resets) = ordered
+        .get(2)
+        .map(|m| {
+            let used = m.remaining_fraction.map(|f| (1.0 - f) * 100.0);
+            (used, Some(m.label.clone()), m.reset_time)
+        })
+        .unwrap_or((None, None, None));
+
+    OfficialAntigravitySnapshot {
+        plan_type,
+        account_email,
+        models,
+        primary_used_percent: primary_used,
+        secondary_used_percent: secondary_used,
+        tertiary_used_percent: tertiary_used,
+        primary_label,
+        secondary_label,
+        tertiary_label,
+        primary_resets_at: primary_resets,
+        secondary_resets_at: secondary_resets,
+        tertiary_resets_at: tertiary_resets,
+    }
+}
+
+/// Select and prioritise models the same way CodexBar does:
+/// 1. Claude (non-thinking)  2. Gemini Pro Low  3. Gemini Flash
+/// Fallback: all models sorted by remaining % ascending.
+fn select_antigravity_models(
+    models: &[AntigravityModelQuotaSnapshot],
+) -> Vec<AntigravityModelQuotaSnapshot> {
+    let mut ordered = Vec::new();
+
+    if let Some(m) = models.iter().find(|m| {
+        let l = m.label.to_ascii_lowercase();
+        l.contains("claude") && !l.contains("thinking")
+    }) {
+        ordered.push(m.clone());
+    }
+    if let Some(m) = models.iter().find(|m| {
+        let l = m.label.to_ascii_lowercase();
+        l.contains("pro") && l.contains("low")
+    }) {
+        if !ordered.iter().any(|o| o.label == m.label) {
+            ordered.push(m.clone());
+        }
+    }
+    if let Some(m) = models.iter().find(|m| {
+        let l = m.label.to_ascii_lowercase();
+        l.contains("gemini") && l.contains("flash")
+    }) {
+        if !ordered.iter().any(|o| o.label == m.label) {
+            ordered.push(m.clone());
+        }
+    }
+
+    if ordered.is_empty() {
+        let mut all: Vec<_> = models.to_vec();
+        all.sort_by(|a, b| {
+            let ra = a.remaining_fraction.unwrap_or(0.0);
+            let rb = b.remaining_fraction.unwrap_or(0.0);
+            ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        return all;
+    }
+    ordered
+}
+
 fn fetch_codex_official_limits_blocking() -> Result<OfficialCodexSnapshot> {
     let rpc_script = r#"(
 exec </dev/null;
@@ -4299,9 +5204,14 @@ fn print_membership_estimate(
     token_limit_source: TokenLimitSource,
     official_codex: Option<&OfficialCodexSnapshot>,
     official_claude: Option<&OfficialClaudeSnapshot>,
+    official_antigravity: Option<&OfficialAntigravitySnapshot>,
     tz: &TimeZoneMode,
 ) {
-    if estimate.is_none() && official_codex.is_none() && official_claude.is_none() {
+    if estimate.is_none()
+        && official_codex.is_none()
+        && official_claude.is_none()
+        && official_antigravity.is_none()
+    {
         return;
     }
 
@@ -4425,6 +5335,36 @@ fn print_membership_estimate(
                 (100.0 - secondary_used).clamp(0.0, 100.0),
                 detail_text
             );
+        }
+    }
+
+    if let Some(official) = official_antigravity {
+        println!();
+        let plan = official.plan_type.as_deref().unwrap_or("unknown");
+        if let Some(email) = official.account_email.as_deref() {
+            println!("official: antigravity plan={plan} email={email}");
+        } else {
+            println!("official: antigravity plan={plan}");
+        }
+        let labels = [
+            ("primary", official.primary_label.as_deref(), official.primary_used_percent, official.primary_resets_at),
+            ("secondary", official.secondary_label.as_deref(), official.secondary_used_percent, official.secondary_resets_at),
+            ("tertiary", official.tertiary_label.as_deref(), official.tertiary_used_percent, official.tertiary_resets_at),
+        ];
+        for (slot, label, used_opt, reset_opt) in labels {
+            if let Some(used) = used_opt {
+                let tag = label.unwrap_or(slot);
+                let mut entry = format!(
+                    "official: antigravity {tag} used={used:.1}% remaining={:.1}%",
+                    (100.0 - used).clamp(0.0, 100.0)
+                );
+                if let Some(resets_at) = reset_opt {
+                    let reset_text = format_reset_timestamp(resets_at, tz);
+                    let eta_text = format_time_until_reset_short(resets_at, Utc::now());
+                    entry.push_str(&format!(" (reset {reset_text}, in {eta_text})"));
+                }
+                println!("{entry}");
+            }
         }
     }
 }
@@ -6196,5 +7136,189 @@ mod tests {
         assert_eq!(summary.totals.total_tokens, 400);
         assert_eq!(summary.dominant_source, Some(SourceKind::Codex));
         assert!(summary.remaining_minutes >= 0);
+    }
+
+    // ---- Antigravity tests ----
+
+    #[test]
+    fn parse_antigravity_user_status_response() {
+        let json = serde_json::json!({
+            "code": 0,
+            "userStatus": {
+                "email": "test@example.com",
+                "planStatus": {
+                    "planInfo": {
+                        "planName": "pro",
+                        "planDisplayName": "Pro Plan",
+                        "displayName": "Pro",
+                        "productName": "Antigravity Pro",
+                        "planShortName": "pro"
+                    }
+                },
+                "cascadeModelConfigData": {
+                    "clientModelConfigs": [
+                        {
+                            "label": "Claude 4 Sonnet",
+                            "modelOrAlias": { "model": "claude-4-sonnet" },
+                            "quotaInfo": {
+                                "remainingFraction": 0.75,
+                                "resetTime": "1709500800"
+                            }
+                        },
+                        {
+                            "label": "Gemini Pro Low",
+                            "modelOrAlias": { "model": "gemini-pro" },
+                            "quotaInfo": {
+                                "remainingFraction": 0.50,
+                                "resetTime": "1709500800"
+                            }
+                        },
+                        {
+                            "label": "Gemini 2.5 Flash",
+                            "modelOrAlias": { "model": "gemini-flash" },
+                            "quotaInfo": {
+                                "remainingFraction": 0.90
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+
+        let snapshot = parse_antigravity_user_status(&json).unwrap();
+        assert_eq!(snapshot.plan_type.as_deref(), Some("Pro Plan"));
+        assert_eq!(snapshot.account_email.as_deref(), Some("test@example.com"));
+        assert_eq!(snapshot.models.len(), 3);
+
+        // Claude is primary (25% used)
+        assert!((snapshot.primary_used_percent.unwrap() - 25.0).abs() < 0.01);
+        assert_eq!(snapshot.primary_label.as_deref(), Some("Claude 4 Sonnet"));
+
+        // Gemini Pro Low is secondary (50% used)
+        assert!((snapshot.secondary_used_percent.unwrap() - 50.0).abs() < 0.01);
+        assert_eq!(snapshot.secondary_label.as_deref(), Some("Gemini Pro Low"));
+
+        // Gemini Flash is tertiary (10% used)
+        assert!((snapshot.tertiary_used_percent.unwrap() - 10.0).abs() < 0.01);
+        assert_eq!(
+            snapshot.tertiary_label.as_deref(),
+            Some("Gemini 2.5 Flash")
+        );
+    }
+
+    #[test]
+    fn parse_antigravity_command_model_response() {
+        let json = serde_json::json!({
+            "code": "ok",
+            "clientModelConfigs": [
+                {
+                    "label": "GPT-4o",
+                    "modelOrAlias": { "model": "gpt-4o" },
+                    "quotaInfo": {
+                        "remainingFraction": 0.30
+                    }
+                }
+            ]
+        });
+
+        let snapshot = parse_antigravity_command_model_configs(&json).unwrap();
+        assert!(snapshot.plan_type.is_none());
+        assert!(snapshot.account_email.is_none());
+        assert_eq!(snapshot.models.len(), 1);
+        // Fallback: single model becomes primary
+        assert!((snapshot.primary_used_percent.unwrap() - 70.0).abs() < 0.01);
+        assert_eq!(snapshot.primary_label.as_deref(), Some("GPT-4o"));
+    }
+
+    #[test]
+    fn select_antigravity_models_prioritises_correctly() {
+        let models = vec![
+            AntigravityModelQuotaSnapshot {
+                label: "Gemini 2.5 Flash".to_string(),
+                model_id: "gemini-flash".to_string(),
+                remaining_fraction: Some(0.9),
+                reset_time: None,
+            },
+            AntigravityModelQuotaSnapshot {
+                label: "Claude 4 Sonnet".to_string(),
+                model_id: "claude-4-sonnet".to_string(),
+                remaining_fraction: Some(0.5),
+                reset_time: None,
+            },
+            AntigravityModelQuotaSnapshot {
+                label: "Gemini Pro Low".to_string(),
+                model_id: "gemini-pro-low".to_string(),
+                remaining_fraction: Some(0.3),
+                reset_time: None,
+            },
+        ];
+
+        let ordered = select_antigravity_models(&models);
+        assert_eq!(ordered.len(), 3);
+        assert_eq!(ordered[0].label, "Claude 4 Sonnet");
+        assert_eq!(ordered[1].label, "Gemini Pro Low");
+        assert_eq!(ordered[2].label, "Gemini 2.5 Flash");
+    }
+
+    #[test]
+    fn select_antigravity_models_fallback_sorts_by_remaining() {
+        let models = vec![
+            AntigravityModelQuotaSnapshot {
+                label: "Model A".to_string(),
+                model_id: "a".to_string(),
+                remaining_fraction: Some(0.8),
+                reset_time: None,
+            },
+            AntigravityModelQuotaSnapshot {
+                label: "Model B".to_string(),
+                model_id: "b".to_string(),
+                remaining_fraction: Some(0.2),
+                reset_time: None,
+            },
+        ];
+
+        let ordered = select_antigravity_models(&models);
+        assert_eq!(ordered[0].label, "Model B"); // 0.2 remaining = lowest first
+        assert_eq!(ordered[1].label, "Model A");
+    }
+
+    #[test]
+    fn extract_flag_value_works() {
+        let cmd = "/path/to/language_server_macos --csrf_token=abc123 --extension_server_port 42150 --app_data_dir antigravity";
+        assert_eq!(
+            extract_flag_value("--csrf_token", cmd),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            extract_flag_value("--extension_server_port", cmd),
+            Some("42150".to_string())
+        );
+        assert_eq!(
+            extract_flag_value("--app_data_dir", cmd),
+            Some("antigravity".to_string())
+        );
+        assert_eq!(extract_flag_value("--nonexistent", cmd), None);
+    }
+
+    #[test]
+    fn parse_antigravity_reset_time_iso8601() {
+        let ts = parse_antigravity_reset_time("2024-03-04T12:00:00Z");
+        assert!(ts.is_some());
+        assert_eq!(ts.unwrap(), 1709553600);
+    }
+
+    #[test]
+    fn parse_antigravity_reset_time_epoch() {
+        let ts = parse_antigravity_reset_time("1709500800");
+        assert_eq!(ts, Some(1709500800));
+    }
+
+    #[test]
+    fn parse_antigravity_error_code_rejects_nonzero() {
+        let json = serde_json::json!({
+            "code": 7,
+            "userStatus": null,
+        });
+        assert!(parse_antigravity_user_status(&json).is_err());
     }
 }
