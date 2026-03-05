@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use crossbeam_channel::{Receiver, bounded};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -337,30 +337,36 @@ struct LimitDisplayContext<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LiveTab {
     Overview,
+    Codex,
+    Claude,
     Antigravity,
 }
+
+const ALL_LIVE_TABS: &[LiveTab] = &[
+    LiveTab::Overview,
+    LiveTab::Codex,
+    LiveTab::Claude,
+    LiveTab::Antigravity,
+];
 
 impl LiveTab {
     fn label(self) -> &'static str {
         match self {
             LiveTab::Overview => "Overview",
+            LiveTab::Codex => "Codex",
+            LiveTab::Claude => "Claude",
             LiveTab::Antigravity => "Antigravity",
         }
     }
 
-    fn all() -> &'static [LiveTab] {
-        &[LiveTab::Overview, LiveTab::Antigravity]
-    }
-
     fn next(self) -> Self {
-        match self {
-            LiveTab::Overview => LiveTab::Antigravity,
-            LiveTab::Antigravity => LiveTab::Overview,
-        }
+        let idx = ALL_LIVE_TABS.iter().position(|&t| t == self).unwrap_or(0);
+        ALL_LIVE_TABS[(idx + 1) % ALL_LIVE_TABS.len()]
     }
 
     fn prev(self) -> Self {
-        self.next() // only 2 tabs, prev == next
+        let idx = ALL_LIVE_TABS.iter().position(|&t| t == self).unwrap_or(0);
+        ALL_LIVE_TABS[(idx + ALL_LIVE_TABS.len() - 1) % ALL_LIVE_TABS.len()]
     }
 }
 
@@ -1009,6 +1015,20 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
+    // For live mode, skip blocking initial fetch — go straight to TUI and fetch in background.
+    if args.live {
+        return run_blocks_live(
+            &args,
+            &tz,
+            window_secs,
+            token_limit_mode,
+            None,
+            None,
+            None,
+        )
+        .await;
+    }
+
     let (official_codex, official_claude, official_antigravity) = if args.official_limits {
         let (codex, claude, antigravity, errors) = fetch_selected_official_limits(&args.common).await;
         for error in errors {
@@ -1018,19 +1038,6 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     } else {
         (None, None, None)
     };
-
-    if args.live {
-        return run_blocks_live(
-            &args,
-            &tz,
-            window_secs,
-            token_limit_mode,
-            official_codex,
-            official_claude,
-            official_antigravity,
-        )
-        .await;
-    }
 
     let loaded = load_usage(&args.common, &tz).await?;
     let now = Utc::now();
@@ -1642,6 +1649,14 @@ async fn run_blocks_live(
     let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every).await?;
     let mut last_official_refresh = Instant::now();
     let mut active_tab = LiveTab::Overview;
+    let mut pending_official_task: Option<
+        tokio::task::JoinHandle<(
+            Option<OfficialCodexSnapshot>,
+            Option<OfficialClaudeSnapshot>,
+            Option<OfficialAntigravitySnapshot>,
+            Vec<String>,
+        )>,
+    > = None;
 
     loop {
         let now = Utc::now();
@@ -1661,32 +1676,43 @@ async fn run_blocks_live(
             official_claude.as_ref(),
         );
 
+        // Non-blocking official limits fetch: spawn a background task and check
+        // completion on each frame instead of blocking the render loop.
         let should_refresh_official = args.official_limits
+            && pending_official_task.is_none()
             && (official_codex.is_none()
                 || official_claude.is_none()
                 || official_antigravity.is_none()
                 || last_official_refresh.elapsed() >= Duration::from_secs(30));
-        let official_task = should_refresh_official.then(|| {
+        if should_refresh_official {
             let common = args.common.clone();
-            tokio::spawn(async move { fetch_selected_official_limits(&common).await })
-        });
+            pending_official_task =
+                Some(tokio::spawn(
+                    async move { fetch_selected_official_limits(&common).await },
+                ));
+        }
 
-        let loaded = live_runtime.load(tz);
-
-        if let Some(task) = official_task {
-            if let Ok((codex, claude, antigravity, _errors)) = task.await {
-                if codex.is_some() {
-                    official_codex = codex;
+        // Check if the background task has completed (non-blocking).
+        if let Some(ref task) = pending_official_task {
+            if task.is_finished() {
+                if let Some(task) = pending_official_task.take() {
+                    if let Ok((codex, claude, antigravity, _errors)) = task.await {
+                        if codex.is_some() {
+                            official_codex = codex;
+                        }
+                        if claude.is_some() {
+                            official_claude = claude;
+                        }
+                        if antigravity.is_some() {
+                            official_antigravity = antigravity;
+                        }
+                        last_official_refresh = Instant::now();
+                    }
                 }
-                if claude.is_some() {
-                    official_claude = claude;
-                }
-                if antigravity.is_some() {
-                    official_antigravity = antigravity;
-                }
-                last_official_refresh = Instant::now();
             }
         }
+
+        let loaded = live_runtime.load(tz);
         let membership_estimate =
             estimate_membership_from_logs(&loaded.events, now, live_window_secs);
         let inferred_limit = membership_estimate
@@ -1773,13 +1799,13 @@ fn select_live_source(
     if let Some(source) = active.and_then(|v| v.dominant_source) {
         return Some(source);
     }
-    if official_codex.is_some() {
-        return Some(SourceKind::Codex);
+    // When both sources exist, return None to show combined data.
+    // Only pick a single source when it's the sole provider.
+    match (official_codex.is_some(), official_claude.is_some()) {
+        (true, false) => Some(SourceKind::Codex),
+        (false, true) => Some(SourceKind::Claude),
+        _ => None,
     }
-    if official_claude.is_some() {
-        return Some(SourceKind::Claude);
-    }
-    None
 }
 
 fn resolve_live_block_bounds(
@@ -1914,16 +1940,43 @@ fn render_blocks_live_frame(
 fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameContext<'_>) {
     let root = frame.area();
     let preferred_official = preferred_official_for_live(context);
-    let progress_height = if context.active_tab == LiveTab::Overview
-        && preferred_official
-            .and_then(LiveOfficialRef::secondary_used_percent)
-            .is_some()
-    {
-        6
-    } else if context.active_tab == LiveTab::Overview {
-        4
-    } else {
-        0
+    let progress_height: u16 = match context.active_tab {
+        LiveTab::Overview => {
+            // Count how many sources have data
+            let n = [
+                context.official_codex.is_some(),
+                context.official_claude.is_some(),
+                context.official_antigravity.is_some(),
+            ]
+            .iter()
+            .filter(|&&v| v)
+            .count() as u16;
+            // 2 lines per source (label + bar), plus time bar (2 lines)
+            2 + n * 2
+        }
+        LiveTab::Codex => {
+            if context
+                .official_codex
+                .and_then(|s| s.secondary_used_percent)
+                .is_some()
+            {
+                6
+            } else {
+                4
+            }
+        }
+        LiveTab::Claude => {
+            if context
+                .official_claude
+                .and_then(|s| s.secondary_used_percent)
+                .is_some()
+            {
+                6
+            } else {
+                4
+            }
+        }
+        LiveTab::Antigravity => 0,
     };
     let header_height = if root.width >= 112 { 2 } else { 4 };
     let tab_bar_height = 1u16;
@@ -1998,8 +2051,16 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
 
     match context.active_tab {
         LiveTab::Overview => {
-            render_live_progress_bars(frame, progress_area, context);
-            render_live_body(frame, body_area, context);
+            render_live_overview_bars(frame, progress_area, context);
+            render_live_overview_body(frame, body_area, context);
+        }
+        LiveTab::Codex => {
+            render_live_progress_bars_for(frame, progress_area, context, Some(SourceKind::Codex));
+            render_live_source_detail(frame, body_area, context, SourceKind::Codex);
+        }
+        LiveTab::Claude => {
+            render_live_progress_bars_for(frame, progress_area, context, Some(SourceKind::Claude));
+            render_live_source_detail(frame, body_area, context, SourceKind::Claude);
         }
         LiveTab::Antigravity => {
             render_live_antigravity_tab(frame, body_area, context);
@@ -2013,7 +2074,7 @@ fn render_live_tab_bar(
     active: LiveTab,
 ) {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    for (i, tab) in LiveTab::all().iter().enumerate() {
+    for (i, tab) in ALL_LIVE_TABS.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
@@ -2140,12 +2201,333 @@ fn render_live_antigravity_tab(
     frame.render_widget(body, area);
 }
 
-fn render_live_progress_bars(
+fn render_live_overview_bars(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
     context: &LiveFrameContext<'_>,
 ) {
-    let preferred_official = preferred_official_for_live(context);
+    let mut constraints: Vec<Constraint> = Vec::new();
+    // Time bar: label + gauge
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Length(1));
+
+    struct SourceBar {
+        label: String,
+        used: f64,
+        reset_text: Option<String>,
+    }
+    let mut source_bars: Vec<SourceBar> = Vec::new();
+
+    if let Some(codex) = context.official_codex {
+        if let Some(used) = codex.primary_used_percent {
+            let reset = codex
+                .primary_resets_at
+                .map(|r| format_time_until_reset_short(r, context.now));
+            source_bars.push(SourceBar {
+                label: "Codex".to_string(),
+                used,
+                reset_text: reset,
+            });
+            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(1));
+        }
+    }
+    if let Some(claude) = context.official_claude {
+        if let Some(used) = claude.primary_used_percent {
+            let reset = claude
+                .primary_resets_at
+                .map(|r| format_time_until_reset_short(r, context.now));
+            source_bars.push(SourceBar {
+                label: "Claude".to_string(),
+                used,
+                reset_text: reset,
+            });
+            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(1));
+        }
+    }
+    if let Some(ag) = context.official_antigravity {
+        if let Some(used) = ag.primary_used_percent {
+            let reset = ag
+                .primary_resets_at
+                .map(|r| format_time_until_reset_short(r, context.now));
+            source_bars.push(SourceBar {
+                label: ag
+                    .primary_label
+                    .as_deref()
+                    .unwrap_or("Antigravity")
+                    .to_string(),
+                used,
+                reset_text: reset,
+            });
+            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(1));
+        }
+    }
+
+    let rows = Layout::vertical(constraints).split(area);
+
+    // Time bar
+    let time_ratio = if context.window_secs > 0 {
+        (context.elapsed_secs as f64 / context.window_secs as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let time_title = Paragraph::new(Line::from(vec![
+        Span::styled("Time ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(
+            "{} / {}",
+            format_hours_minutes(context.elapsed_secs / 60),
+            format_hours_minutes(context.window_secs / 60)
+        )),
+    ]));
+    frame.render_widget(time_title, rows[0]);
+    let time_gauge = Gauge::default()
+        .style(live_gauge_track_style())
+        .gauge_style(
+            Style::default()
+                .fg(TuiColor::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .ratio(time_ratio)
+        .label(format!("{:.1}%", time_ratio * 100.0));
+    frame.render_widget(time_gauge, rows[1]);
+
+    // Source bars
+    for (i, bar) in source_bars.iter().enumerate() {
+        let row_base = 2 + i * 2;
+        let title = Paragraph::new(Line::from(vec![Span::styled(
+            &bar.label,
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+        frame.render_widget(title, rows[row_base]);
+
+        let mut label = format!("{:.1}% used", bar.used);
+        if let Some(reset) = &bar.reset_text {
+            label.push_str(&format!(" | resets in {reset}"));
+        }
+        let gauge = Gauge::default()
+            .style(live_gauge_track_style())
+            .gauge_style(
+                Style::default()
+                    .fg(used_gauge_color(bar.used))
+                    .add_modifier(Modifier::BOLD),
+            )
+            .ratio((bar.used / 100.0).clamp(0.0, 1.0))
+            .label(label);
+        frame.render_widget(gauge, rows[row_base + 1]);
+    }
+}
+
+fn render_live_overview_body(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Today summary
+    lines.push(Line::from(vec![Span::styled(
+        "Today (all sources)",
+        Style::default()
+            .fg(TuiColor::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(vec![
+        Span::raw(live_key_label("Tokens")),
+        Span::styled(
+            format_u64(context.today_totals.total_tokens),
+            Style::default()
+                .fg(TuiColor::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw(live_key_label("Cost")),
+        Span::styled(
+            format_usd(context.today_totals.cost_usd),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // 30-day avg
+    if context.last_30d_active_days > 0 {
+        let avg_cost =
+            context.last_30d_totals.cost_usd / context.last_30d_active_days as f64;
+        let avg_tokens =
+            context.last_30d_totals.total_tokens / context.last_30d_active_days as u64;
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label("30d avg/day")),
+            Span::raw(format!(
+                "{} · {} tokens",
+                format_usd(avg_cost),
+                format_u64(avg_tokens)
+            )),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Per-source summaries
+    if let Some(codex) = context.official_codex {
+        let plan = codex.plan_type.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![Span::styled(
+            format!("Codex  (plan {plan})"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+        if let Some(primary) = codex.primary_used_percent {
+            lines.push(live_key_value_line("  Session", format!("{primary:.1}% used"), used_gauge_color(primary)));
+        }
+        if let Some(weekly) = codex.secondary_used_percent {
+            lines.push(live_key_value_line("  Weekly", format!("{weekly:.1}% used"), used_gauge_color(weekly)));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if let Some(claude) = context.official_claude {
+        let plan = claude.plan_type.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![Span::styled(
+            format!("Claude  (plan {plan})"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+        if let Some(primary) = claude.primary_used_percent {
+            lines.push(live_key_value_line("  Session", format!("{primary:.1}% used"), used_gauge_color(primary)));
+        }
+        if let Some(weekly) = claude.secondary_used_percent {
+            lines.push(live_key_value_line("  Weekly", format!("{weekly:.1}% used"), used_gauge_color(weekly)));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if let Some(ag) = context.official_antigravity {
+        let plan = ag.plan_type.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![Span::styled(
+            format!("Antigravity  (plan {plan})"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )]));
+        let ordered = select_antigravity_models(&ag.models);
+        for model in ordered.iter().take(3) {
+            if let Some(frac) = model.remaining_fraction {
+                let remaining = frac * 100.0;
+                let color = if remaining >= 40.0 {
+                    TuiColor::Green
+                } else if remaining >= 15.0 {
+                    TuiColor::Yellow
+                } else {
+                    TuiColor::Red
+                };
+                lines.push(live_key_value_line(
+                    &format!("  {}", model.label),
+                    format!("{remaining:.0}% left"),
+                    color,
+                ));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
+    if context.official_codex.is_none()
+        && context.official_claude.is_none()
+        && context.official_antigravity.is_none()
+    {
+        lines.push(Line::from(vec![Span::styled(
+            "No official limits available",
+            Style::default().fg(TuiColor::Yellow),
+        )]));
+    }
+
+    let body = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(body, area);
+}
+
+fn render_live_source_detail(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+    source: SourceKind,
+) {
+    let has_official = match source {
+        SourceKind::Codex => context.official_codex.is_some(),
+        SourceKind::Claude => context.official_claude.is_some(),
+    };
+
+    if !has_official {
+        let label = source.as_str();
+        let lower = label.to_lowercase();
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                format!("{label} official limits not available"),
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+        ];
+        match source {
+            SourceKind::Claude => {
+                lines.push(Line::from(
+                    "Fetching via Claude CLI probe... (may take ~15s on first load)",
+                ));
+                lines.push(Line::from(
+                    "If this persists, ensure `claude` CLI is installed and accessible.",
+                ));
+            }
+            SourceKind::Codex => {
+                lines.push(Line::from(format!(
+                    "Run `tu live {lower}` after using {label} to fetch limits.",
+                )));
+            }
+        }
+
+        // Still show today's usage from logs below the warning
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "Usage from logs",
+            Style::default()
+                .fg(TuiColor::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label("Today tokens")),
+            Span::styled(
+                format_u64(context.today_totals.total_tokens),
+                Style::default()
+                    .fg(TuiColor::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label("Today cost")),
+            Span::styled(
+                format_usd(context.today_totals.cost_usd),
+                Style::default()
+                    .fg(TuiColor::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        let msg = Paragraph::new(lines).wrap(Wrap { trim: true });
+        frame.render_widget(msg, area);
+        return;
+    }
+
+    render_live_body(frame, area, context);
+}
+
+fn render_live_progress_bars_for(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+    source_override: Option<SourceKind>,
+) {
+    let preferred_official = match source_override {
+        Some(SourceKind::Codex) => context.official_codex.map(LiveOfficialRef::Codex),
+        Some(SourceKind::Claude) => context.official_claude.map(LiveOfficialRef::Claude),
+        None => preferred_official_for_live(context),
+    };
     let show_weekly = preferred_official
         .and_then(LiveOfficialRef::secondary_used_percent)
         .is_some();
@@ -4309,6 +4691,15 @@ async fn refresh_codex_access_token(
 }
 
 async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnapshot> {
+    // Primary approach: CLI PTY probe (run `claude`, send `/usage`, parse output).
+    match fetch_claude_limits_via_cli().await {
+        Ok(snapshot) => return Ok(snapshot),
+        Err(cli_err) => {
+            eprintln!("claude cli probe failed: {cli_err:#}");
+        }
+    }
+
+    // Fallback: OAuth via ~/.claude/.credentials.json (may not exist on newer installs).
     let (credentials_path, mut tokens) = load_claude_oauth_tokens()?;
     let current_access_token = tokens.access_token.clone().unwrap_or_default();
     match fetch_claude_usage_with_access_token(
@@ -4348,6 +4739,717 @@ async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnapshot> {
         }
         Err(ClaudeOAuthFetchError::Other(error)) => Err(error),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Claude CLI PTY probe — run `claude` in a pseudo-terminal, send `/usage`,
+// parse the rendered TUI text to extract session/weekly usage percentages.
+// ---------------------------------------------------------------------------
+
+async fn fetch_claude_limits_via_cli() -> Result<OfficialClaudeSnapshot> {
+    let claude_bin = resolve_claude_binary()?;
+    let bin = claude_bin.clone();
+    let raw_output = tokio::task::spawn_blocking(move || claude_pty_capture(&bin))
+        .await
+        .context("claude pty task join failed")??;
+    let clean = strip_ansi_codes(&raw_output);
+    let debug = std::env::var("TU_DEBUG_CLI").is_ok();
+    if debug {
+        eprintln!("--- claude cli CLEAN output ({} bytes) ---", clean.len());
+        eprintln!("{clean}");
+        eprintln!("--- end claude cli output ---");
+    }
+
+    // Retry once if output doesn't look relevant (CodexBar approach).
+    let looks_relevant = {
+        let compact: String = clean.to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("currentsession") || compact.contains("currentweek")
+            || compact.contains("loadingusage") || compact.contains("failedtoloadusagedata")
+    };
+    if !looks_relevant {
+        if debug {
+            eprintln!("[pty] output looked like startup; retrying once...");
+        }
+        let bin2 = claude_bin;
+        let raw2 = tokio::task::spawn_blocking(move || claude_pty_capture(&bin2))
+            .await
+            .context("claude pty retry join failed")??;
+        let clean2 = strip_ansi_codes(&raw2);
+        if debug {
+            eprintln!("--- claude cli RETRY CLEAN output ({} bytes) ---", clean2.len());
+            eprintln!("{clean2}");
+            eprintln!("--- end claude cli retry output ---");
+        }
+        return parse_claude_usage_text(&clean2);
+    }
+
+    parse_claude_usage_text(&clean)
+}
+
+fn resolve_claude_binary() -> Result<String> {
+    // Check common locations.
+    if let Ok(path) = std::env::var("CLAUDE_BIN") {
+        if Path::new(&path).is_file() {
+            return Ok(path);
+        }
+    }
+    // `which claude`
+    let output = Command::new("which")
+        .arg("claude")
+        .output()
+        .context("failed to run `which claude`")?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() && Path::new(&path).is_file() {
+            return Ok(path);
+        }
+    }
+    // Well-known paths.
+    for candidate in &[
+        dirs::home_dir().map(|h| h.join(".bun/bin/claude")),
+        dirs::home_dir().map(|h| h.join(".npm-global/bin/claude")),
+        Some(PathBuf::from("/usr/local/bin/claude")),
+    ] {
+        if let Some(p) = candidate {
+            if p.is_file() {
+                return Ok(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    bail!("Claude CLI binary not found. Install it or set CLAUDE_BIN env var.")
+}
+
+/// Open a PTY via `portable-pty`, spawn `claude --allowed-tools ""`,
+/// send `/usage`, and collect the rendered TUI output.
+fn claude_pty_capture(binary: &str) -> Result<String> {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    let debug = std::env::var("TU_DEBUG_CLI").is_ok();
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 50,
+            cols: 160,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("openpty failed")?;
+
+    let mut cmd = CommandBuilder::new(binary);
+    cmd.args(["--allowed-tools", ""]);
+
+    // Remove all Claude-related env vars to avoid nested-session detection.
+    for (key, _) in std::env::vars() {
+        if key == "CLAUDECODE"
+            || key.starts_with("ANTHROPIC_")
+            || key.starts_with("CLAUDE_CODE")
+        {
+            cmd.env_remove(&key);
+        }
+    }
+    cmd.env("TERM", "xterm-256color");
+    if let Some(home) = dirs::home_dir() {
+        cmd.cwd(&home);
+    }
+
+    let mut child = pair.slave.spawn_command(cmd).context("failed to spawn claude CLI")?;
+    // Drop slave side in parent so reads on master detect EOF properly.
+    drop(pair.slave);
+
+    let reader = pair.master.try_clone_reader().context("clone pty reader")?;
+    let mut writer = pair.master.take_writer().context("take pty writer")?;
+
+    // Spawn a background reader thread. The PTY reader can block, so we
+    // funnel all data into a channel that the main thread polls.
+    let (tx, rx) = bounded::<Vec<u8>>(256);
+    let reader_thread = thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = vec![0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Helper: drain all currently available chunks from the channel.
+    let drain_rx = |rx: &Receiver<Vec<u8>>| -> String {
+        let mut out = Vec::new();
+        while let Ok(chunk) = rx.try_recv() {
+            out.extend_from_slice(&chunk);
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    };
+
+    // Helper: write to PTY master.
+    let write_pty = |writer: &mut Box<dyn Write + Send>, text: &str| -> Result<()> {
+        writer
+            .write_all(text.as_bytes())
+            .context("write to PTY failed")?;
+        writer.flush().ok();
+        Ok(())
+    };
+
+    // Wait for TUI to fully initialize. The Claude TUI needs time to render
+    // the initial prompt. We look for the prompt character (❯) as a signal.
+    let mut startup_buf = String::new();
+    let startup_deadline = Instant::now() + Duration::from_secs(15);
+    let mut last_startup_data = Instant::now();
+    let mut sent_trust_accept = false;
+    let mut saw_prompt = false;
+
+    while Instant::now() < startup_deadline {
+        let chunk = drain_rx(&rx);
+        if !chunk.is_empty() {
+            startup_buf.push_str(&chunk);
+            last_startup_data = Instant::now();
+
+            let clean = strip_ansi_codes(&startup_buf);
+            let clean_lower = clean.to_ascii_lowercase();
+            // Also check raw text (ANSI stripped may lose spaces between words).
+            let raw_lower = startup_buf.to_ascii_lowercase();
+
+            // Handle trust/safety prompts.
+            // Claude CLI asks "Is this a project you created or one you trust?"
+            // ANSI stripping may remove spaces, so match generously.
+            let is_trust_dialog = (clean_lower.contains("trust")
+                || raw_lower.contains("trust"))
+                && (clean_lower.contains("enter to confirm")
+                    || raw_lower.contains("enter to confirm")
+                    || clean_lower.contains("entertoconfirm"));
+            if !sent_trust_accept && is_trust_dialog {
+                if debug {
+                    eprintln!("[pty] detected trust/safety prompt, accepting...");
+                }
+                // Send Enter to confirm the default selection (❯ 1. Yes).
+                let _ = write_pty(&mut writer, "\r");
+                thread::sleep(Duration::from_millis(500));
+                let _ = write_pty(&mut writer, "\r");
+                sent_trust_accept = true;
+                startup_buf.clear();
+                last_startup_data = Instant::now();
+                continue;
+            }
+
+            // Respond to command palette hints (compact match — no spaces).
+            let compact_lower: String = clean_lower.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact_lower.contains("showplan") {
+                let _ = write_pty(&mut writer, "\r");
+            }
+
+            // The Claude TUI shows ❯ when ready for input (main prompt, not
+            // inside a trust/selection dialog — those also use ❯ for selection).
+            let has_dialog = clean_lower.contains("trust")
+                || raw_lower.contains("trust")
+                || clean_lower.contains("entertoconfirm")
+                || raw_lower.contains("enter to confirm");
+            let is_main_prompt =
+                (clean.contains('❯') || clean.contains("> ")) && !has_dialog;
+            if is_main_prompt {
+                saw_prompt = true;
+                // Give a short settle after seeing prompt.
+                thread::sleep(Duration::from_millis(300));
+                let extra = drain_rx(&rx);
+                if !extra.is_empty() {
+                    startup_buf.push_str(&extra);
+                }
+                break;
+            }
+        }
+
+        // Extended idle: wait longer (4s) since TUI startup can have gaps.
+        if !startup_buf.is_empty()
+            && Instant::now().duration_since(last_startup_data) > Duration::from_secs(4)
+        {
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(80));
+    }
+
+    if debug {
+        let clean = strip_ansi_codes(&startup_buf);
+        eprintln!(
+            "[pty] startup done ({} bytes, prompt={saw_prompt}), clean tail: {:?}",
+            startup_buf.len(),
+            clean.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()
+        );
+    }
+
+    // Send /usage command.
+    write_pty(&mut writer, "/usage\r")?;
+    if debug {
+        eprintln!("[pty] sent /usage command");
+    }
+
+    // Read output until we see usage data or timeout.
+    // CodexBar approach: stop on specific labels, send Enter periodically to help TUI render,
+    // settle for 2s after detecting stop patterns.
+    let mut buffer = String::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last_enter_at = Instant::now();
+    let send_enter_every = Duration::from_millis(800);
+    let mut stopped_early = false;
+
+    while Instant::now() < deadline {
+        let chunk = drain_rx(&rx);
+        if !chunk.is_empty() {
+            buffer.push_str(&chunk);
+
+            // Auto-respond to command palette prompts (compact match — no spaces).
+            let chunk_compact: String = strip_ansi_codes(&chunk)
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            if chunk_compact.contains("showplan") {
+                let _ = write_pty(&mut writer, "\r");
+            }
+
+            // Check stop conditions using compact text (no whitespace).
+            let clean_compact: String = strip_ansi_codes(&buffer)
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+
+            // Stop patterns (inspired by CodexBar): once we see these, the panel is rendering.
+            let has_stop = clean_compact.contains("currentsession")
+                || clean_compact.contains("currentweek")
+                || clean_compact.contains("failedtoloadusagedata");
+            if has_stop {
+                stopped_early = true;
+                break;
+            }
+        }
+
+        // Send Enter periodically to help TUI render (CodexBar does this for /usage).
+        if Instant::now().duration_since(last_enter_at) >= send_enter_every {
+            let _ = write_pty(&mut writer, "\r");
+            last_enter_at = Instant::now();
+        }
+
+        thread::sleep(Duration::from_millis(60));
+    }
+
+    // Settle: after detecting stop patterns, wait 2s more to capture the full panel.
+    if stopped_early {
+        let settle_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < settle_deadline {
+            let extra = drain_rx(&rx);
+            if !extra.is_empty() {
+                buffer.push_str(&extra);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    if debug {
+        eprintln!("[pty] read loop done, buffer len = {}", buffer.len());
+    }
+
+    // Clean up: send /exit and kill.
+    let _ = write_pty(&mut writer, "/exit\r");
+    thread::sleep(Duration::from_millis(200));
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(writer);
+    drop(pair.master);
+    let _ = reader_thread.join();
+
+    if buffer.is_empty() {
+        bail!("Claude CLI produced no output (timed out)");
+    }
+    Ok(buffer)
+}
+
+/// Strip ANSI escape codes from PTY output.
+fn strip_ansi_codes(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // ESC sequence.
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Read until terminating letter.
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() || c == '~' {
+                        break;
+                    }
+                }
+            } else if chars.peek() == Some(&']') {
+                // OSC sequence: ESC ] ... ST (or BEL).
+                chars.next();
+                for c in chars.by_ref() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' {
+                        if chars.peek() == Some(&'\\') {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            } else {
+                // Other ESC sequences — skip next char.
+                chars.next();
+            }
+        } else if ch == '\r' {
+            // Ignore carriage returns.
+            continue;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Parse the cleaned `/usage` text to extract session/weekly usage percentages.
+/// NOTE: Because TUI PTY output has ANSI cursor-movement sequences, when
+/// stripped the words often run together (e.g. "Currentsession38%used").
+/// We handle both spaced and compact forms.
+fn parse_claude_usage_text(text: &str) -> Result<OfficialClaudeSnapshot> {
+    // Step 1: Trim to latest usage panel (like CodexBar's trimToLatestUsagePanel).
+    // Find the last "Settings:" header containing "Usage" to skip startup fragments.
+    let panel_text = trim_to_latest_usage_panel(text).unwrap_or(text);
+
+    // Step 2: Build line-based search context.
+    // Normalize each line by collapsing whitespace to single space (CodexBar approach).
+    let lines: Vec<&str> = panel_text.lines().collect();
+    let normalized_lines: Vec<String> = lines
+        .iter()
+        .map(|l| normalize_for_label_search(l))
+        .collect();
+
+    // Compact form for quick label existence checks.
+    let compact: String = panel_text
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    // Step 3: Extract percentages with label-based line search.
+    let mut session_pct = extract_pct_by_label("current session", &lines, &normalized_lines);
+    let mut weekly_pct = extract_pct_by_label("current week", &lines, &normalized_lines);
+
+    // Fallback: ordered percent scraping (CodexBar does this when labels match
+    // but surrounding layout moved the percentages).
+    let has_weekly_label = compact.contains("currentweek");
+    if session_pct.is_none() || (has_weekly_label && weekly_pct.is_none()) {
+        let ordered = all_percents_from_lines(&lines);
+        if session_pct.is_none() {
+            session_pct = ordered.first().copied();
+        }
+        if has_weekly_label && weekly_pct.is_none() {
+            weekly_pct = ordered.get(1).copied();
+        }
+    }
+
+    if session_pct.is_none() {
+        bail!("Could not find 'Current session' usage in Claude CLI output");
+    }
+
+    // Step 4: Extract reset times.
+    let session_reset = extract_reset_by_label("current session", &lines, &normalized_lines);
+    let weekly_reset = if has_weekly_label {
+        extract_reset_by_label("current week", &lines, &normalized_lines)
+    } else {
+        None
+    };
+
+    // Step 5: Extract plan type.
+    let plan_type = extract_claude_plan_from_compact(&compact);
+
+    Ok(OfficialClaudeSnapshot {
+        plan_type,
+        primary_used_percent: session_pct,
+        secondary_used_percent: weekly_pct,
+        primary_window_mins: Some(5 * 60),
+        secondary_window_mins: Some(7 * 24 * 60),
+        primary_resets_at: session_reset
+            .as_deref()
+            .and_then(parse_claude_reset_to_unix),
+        secondary_resets_at: weekly_reset
+            .as_deref()
+            .and_then(parse_claude_reset_to_unix),
+    })
+}
+
+/// Trim to the latest "Settings: ... Usage ..." panel in the output.
+/// This skips startup fragments (status bar, logo, etc.) that may contain stray percent values.
+fn trim_to_latest_usage_panel(text: &str) -> Option<&str> {
+    // Find the last "Settings:" header.
+    let settings_pos = text.to_ascii_lowercase().rfind("settings:")?;
+    let tail = &text[settings_pos..];
+    let tail_lower = tail.to_ascii_lowercase();
+    // Must contain "Usage" tab indicator.
+    if !tail_lower.contains("usage") {
+        return None;
+    }
+    // Must have percent values with usage keywords, or "loading usage".
+    let has_percent = tail_lower.contains('%');
+    let has_usage_words = tail_lower.contains("used")
+        || tail_lower.contains("left")
+        || tail_lower.contains("remaining")
+        || tail_lower.contains("available");
+    let has_loading = tail_lower.contains("loading usage");
+    if (has_percent && has_usage_words) || has_loading {
+        Some(tail)
+    } else {
+        None
+    }
+}
+
+/// Normalize text for label search: lowercase, collapse whitespace to single space.
+fn normalize_for_label_search(text: &str) -> String {
+    text.to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Extract percent "remaining" from lines near a label.
+/// Returns the "used" percent (if text says "XX% used", returns XX;
+/// if text says "XX% remaining/left", returns 100-XX).
+fn extract_pct_by_label(label: &str, lines: &[&str], normalized: &[String]) -> Option<f64> {
+    let norm_label = normalize_for_label_search(label);
+    for (idx, norm_line) in normalized.iter().enumerate() {
+        if !norm_line.contains(&norm_label) {
+            continue;
+        }
+        // Scan up to 12 lines from the label for a percent value.
+        for candidate in lines.iter().skip(idx).take(12) {
+            if let Some((pct, is_used)) = percent_from_line(candidate) {
+                return if is_used {
+                    Some(pct)
+                } else {
+                    Some(100.0 - pct)
+                };
+            }
+        }
+    }
+    None
+}
+
+/// Extract a percent value from a single line.
+/// Returns (value, is_used_not_remaining).
+/// Skips status-bar context lines (containing | with model names).
+fn percent_from_line(line: &str) -> Option<(f64, bool)> {
+    // Skip status-bar context lines (e.g. "opus | 0% | sonnet").
+    if line.contains('|') {
+        let lower = line.to_ascii_lowercase();
+        if ["opus", "sonnet", "haiku", "default"]
+            .iter()
+            .any(|m| lower.contains(m))
+        {
+            return None;
+        }
+    }
+
+    // Find XX% pattern (allow Unicode whitespace before %).
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            // Skip optional whitespace/NBSP before %.
+            let mut j = i;
+            while j < bytes.len() {
+                if bytes[j] == b' ' {
+                    j += 1;
+                } else if j + 1 < bytes.len() && bytes[j] == 0xc2 && bytes[j + 1] == 0xa0 {
+                    j += 2; // U+00A0 NBSP
+                } else {
+                    break;
+                }
+            }
+            if j < bytes.len() && bytes[j] == b'%' {
+                let num_str = &line[start..i];
+                if let Ok(val) = num_str.parse::<f64>() {
+                    let clamped = val.clamp(0.0, 100.0);
+                    let lower = line.to_ascii_lowercase();
+                    let is_used = if ["used", "spent", "consumed"]
+                        .iter()
+                        .any(|k| lower.contains(k))
+                    {
+                        true
+                    } else if ["remaining", "left", "available"]
+                        .iter()
+                        .any(|k| lower.contains(k))
+                    {
+                        false
+                    } else {
+                        // Default: Claude CLI shows "XX% used".
+                        true
+                    };
+                    return Some((clamped, is_used));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Collect all percent values from the text (ordered, for fallback).
+fn all_percents_from_lines(lines: &[&str]) -> Vec<f64> {
+    lines
+        .iter()
+        .filter_map(|l| percent_from_line(l).map(|(pct, is_used)| if is_used { pct } else { 100.0 - pct }))
+        .collect()
+}
+
+/// Extract "Resets ..." text near a label using line-based normalized search.
+fn extract_reset_by_label(label: &str, lines: &[&str], normalized: &[String]) -> Option<String> {
+    let norm_label = normalize_for_label_search(label);
+    for (idx, norm_line) in normalized.iter().enumerate() {
+        if !norm_line.contains(&norm_label) {
+            continue;
+        }
+        // Scan up to 14 lines from the label for "Resets".
+        for scan_line in lines.iter().skip(idx).take(14) {
+            let scan_norm = normalize_for_label_search(scan_line);
+            // Stop if we hit another "current" section.
+            if scan_norm.starts_with("current ") && !scan_norm.contains(&norm_label) {
+                break;
+            }
+            if scan_norm.contains("reset") || scan_norm.contains("reses") {
+                if let Some(time_str) = extract_time_string(scan_line) {
+                    return Some(time_str);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract a time-like string from a line (e.g. "4:59pm", "2pm", "Mar 5, 3pm").
+fn extract_time_string(line: &str) -> Option<String> {
+    // Find patterns like "HH:MMam/pm" or "Ham/pm" in the raw text.
+    let lower = line.to_ascii_lowercase();
+
+    // Look for "H:MMam/pm" pattern.
+    for (i, _) in lower.char_indices() {
+        let rest = &lower[i..];
+        if rest.starts_with(|c: char| c.is_ascii_digit()) {
+            // Try to match time pattern.
+            let mut end = i;
+            // Digits.
+            while end < lower.len() && lower.as_bytes()[end].is_ascii_digit() {
+                end += 1;
+            }
+            // Optional colon + digits.
+            if end < lower.len() && lower.as_bytes()[end] == b':' {
+                end += 1;
+                while end < lower.len() && lower.as_bytes()[end].is_ascii_digit() {
+                    end += 1;
+                }
+            }
+            // am/pm.
+            let after = &lower[end..];
+            if after.starts_with("am") || after.starts_with("pm") {
+                let time_part = &line[i..end + 2];
+                // Check for timezone in parens after.
+                let remaining = line[end + 2..].trim();
+                if remaining.starts_with('(') {
+                    if let Some(close) = remaining.find(')') {
+                        return Some(format!("{} {}", time_part, &remaining[..=close]));
+                    }
+                }
+                return Some(time_part.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Try to parse "4:59pm (Asia/Shanghai)" or "2pm (Asia/Shanghai)" into a Unix timestamp.
+fn parse_claude_reset_to_unix(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    // Extract timezone if present in parens.
+    let (time_part, tz_str) = if let Some(paren_start) = text.find('(') {
+        let tz = text[paren_start + 1..]
+            .trim_end_matches(')')
+            .trim()
+            .to_string();
+        (text[..paren_start].trim(), Some(tz))
+    } else {
+        (text, None)
+    };
+
+    let now = Local::now();
+
+    // Try parsing with timezone.
+    let tz: Option<Tz> = tz_str.as_deref().and_then(|s| s.parse::<Tz>().ok());
+
+    // Try time-only formats: "4:59pm", "4:59PM", "16:59", "2pm".
+    for fmt in &["%I:%M%p", "%I:%M%P", "%I:%M %p", "%H:%M", "%I%p", "%I%P", "%I %p"] {
+        if let Ok(time) = chrono::NaiveTime::parse_from_str(time_part, fmt) {
+            let today = now.date_naive();
+            let dt = today.and_time(time);
+            let ts = if let Some(tz) = tz {
+                tz.from_local_datetime(&dt).single()?.timestamp()
+            } else {
+                now.timezone().from_local_datetime(&dt).single()?.timestamp()
+            };
+            if ts <= now.timestamp() {
+                return Some(ts + 86400);
+            }
+            return Some(ts);
+        }
+    }
+
+    // Try date+time formats.
+    for fmt in &[
+        "%b %d, %I:%M%p",
+        "%b %d, %I:%M %p",
+        "%b %d %I:%M%p",
+        "%b %d, %H:%M",
+    ] {
+        let with_year = format!("{} {}", now.format("%Y"), time_part);
+        let fmt_with_year = format!("%Y {fmt}");
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&with_year, &fmt_with_year) {
+            let ts = if let Some(tz) = tz {
+                tz.from_local_datetime(&dt).single()?.timestamp()
+            } else {
+                now.timezone().from_local_datetime(&dt).single()?.timestamp()
+            };
+            return Some(ts);
+        }
+    }
+
+    None
+}
+
+/// Extract Claude plan name from compact text.
+fn extract_claude_plan_from_compact(compact: &str) -> Option<String> {
+    for (pattern, label) in &[
+        ("claudemax", "Claude Max"),
+        ("claudepro", "Claude Pro"),
+        ("claudeteam", "Claude Team"),
+        ("claudeenterprise", "Claude Enterprise"),
+    ] {
+        if compact.contains(*pattern) {
+            return Some(label.to_string());
+        }
+    }
+    None
 }
 
 fn load_claude_oauth_tokens() -> Result<(PathBuf, ClaudeOAuthTokens)> {
