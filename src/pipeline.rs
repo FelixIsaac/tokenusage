@@ -379,7 +379,6 @@ enum LiveInputEvent {
 #[derive(Debug, Clone)]
 struct LiveFrameContext<'a> {
     now: DateTime<Utc>,
-    refresh_every: u64,
     window_secs: i64,
     elapsed_secs: i64,
     tz: &'a TimeZoneMode,
@@ -403,7 +402,6 @@ impl<'a> LiveFrameContext<'a> {
     fn new(
         now: DateTime<Utc>,
         tz: &'a TimeZoneMode,
-        refresh_every: u64,
         block_start_unix: i64,
         block_end_unix: i64,
         limit: LimitDisplayContext<'a>,
@@ -425,7 +423,6 @@ impl<'a> LiveFrameContext<'a> {
 
         Self {
             now,
-            refresh_every,
             window_secs,
             elapsed_secs: (now_unix - block_start_unix).clamp(0, window_secs.max(1)),
             tz,
@@ -1738,7 +1735,6 @@ async fn run_blocks_live(
         let mut frame_context = LiveFrameContext::new(
             now,
             tz,
-            refresh_every,
             block_start_unix,
             block_end_unix,
             LimitDisplayContext {
@@ -2003,11 +1999,11 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
         }
         LiveTab::Antigravity => 0,
     };
-    let header_height = if root.width >= 112 { 2 } else { 4 };
     let tab_bar_height = 1u16;
-    let [header_area, tab_area, progress_area, body_area] = Layout::vertical([
-        Constraint::Length(header_height),
+    let info_height = 1u16;
+    let [tab_area, info_area, progress_area, body_area] = Layout::vertical([
         Constraint::Length(tab_bar_height),
+        Constraint::Length(info_height),
         Constraint::Length(progress_height),
         Constraint::Min(4),
     ])
@@ -2019,60 +2015,49 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
     } else {
         "estimated"
     };
-    let source_text = context
-        .selected_source
-        .map(SourceKind::as_str)
-        .unwrap_or("all");
     let plan_text = preferred_official
         .and_then(LiveOfficialRef::plan_type)
         .unwrap_or("unknown");
 
-    let header_lines = if root.width >= 112 {
-        vec![
-            Line::from(vec![
-                Span::styled(
-                    "tu live",
-                    Style::default()
-                        .fg(TuiColor::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(
-                    "  {source_text}  |  {mode_text}  |  plan {plan_text}  |  updated just now  |  refresh {}s",
-                    context.refresh_every,
-                )),
-            ]),
-            Line::from(format!(
-                "{}  |  block {} -> {}  |  q/Esc exit · Tab/←→ switch",
-                context.now_text, context.block_start_text, context.block_end_text
-            )),
-        ]
-    } else {
-        vec![
-            Line::from(vec![
-                Span::styled(
-                    "tu live",
-                    Style::default()
-                        .fg(TuiColor::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(
-                    "  {source_text}  |  {mode_text}  |  plan {plan_text}",
-                )),
-            ]),
-            Line::from(format!(
-                "{}  |  refresh {}s",
-                context.now_text, context.refresh_every
-            )),
-            Line::from(format!("{}h window", context.window_secs / 3600)),
-            Line::from("q/Esc exit · Tab/←→ switch"),
-        ]
-    };
-
-    let header = Paragraph::new(header_lines).wrap(Wrap { trim: true });
-    frame.render_widget(header, header_area);
-
-    // Tab bar
+    // Tab bar at top
     render_live_tab_bar(frame, tab_area, context.active_tab);
+
+    // Condensed info line below tabs
+    let info_line = if root.width >= 100 {
+        Line::from(vec![
+            Span::styled(
+                context.now_text.clone(),
+                Style::default().fg(TuiColor::DarkGray),
+            ),
+            Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
+            Span::styled(
+                format!("block {} -> {}", context.block_start_text, context.block_end_text),
+                Style::default().fg(TuiColor::DarkGray),
+            ),
+            Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
+            Span::raw(format!("{mode_text} · plan {plan_text}")),
+            Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
+            Span::styled(
+                "q/Esc exit · Tab/←→ switch",
+                Style::default().fg(TuiColor::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                context.now_text.clone(),
+                Style::default().fg(TuiColor::DarkGray),
+            ),
+            Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
+            Span::raw(format!("{mode_text} · {plan_text}")),
+            Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
+            Span::styled(
+                "q · Tab switch",
+                Style::default().fg(TuiColor::DarkGray),
+            ),
+        ])
+    };
+    frame.render_widget(Paragraph::new(info_line), info_area);
 
     match context.active_tab {
         LiveTab::Overview => {
@@ -2098,7 +2083,15 @@ fn render_live_tab_bar(
     area: ratatui::layout::Rect,
     active: LiveTab,
 ) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(
+            "tu live",
+            Style::default()
+                .fg(TuiColor::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+    ];
     for (i, tab) in ALL_LIVE_TABS.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  "));
