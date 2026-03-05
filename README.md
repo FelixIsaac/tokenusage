@@ -7,7 +7,7 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravit
 
 `tu` scans local session logs and gives one merged token + cost view across Codex, Claude, and Antigravity in CLI, live monitor, and GUI.
 
-**Benchmark:** up to **131.1x faster than `ccusage`** on warm runs (**34.5x** on cold runs) with real local Codex logs. [See full benchmark](#benchmark-details).
+**Benchmark:** up to **214x faster** than `ccusage` on Claude logs, **138x faster** on Codex logs (warm cache). [See full benchmark](#benchmark-details).
 
 ## Screenshots
 
@@ -137,27 +137,27 @@ Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless
 
 ## Benchmark Details
 
-Benchmark setup:
+**Setup:**
 
 - Machine: Apple M3 Max, macOS 15.6.1
-- Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
-- `tu` version: `1.1.2`
-- `@ccusage/codex` version: `18.0.8`
-- Both in default mode (online pricing behavior, network enabled)
+- `tu` version: `1.2.6` · `ccusage` version: `18.0.8` · `@ccusage/codex` version: `18.0.8`
+- Default mode (no date filters, online pricing, network enabled)
 
-Results:
+**Codex** — 91 JSONL files, 1.7 GB (`~/.codex/sessions`)
 
-| Tool | Command | Time |
-|---|---|---:|
-| `tu` (cold, rebuild cache) | `tu codex --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
-| `@ccusage/codex` (single run) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.56s** |
-| `tu` (warm, avg of 10 runs) | `tu codex -s 2025-09-01 -u 2026-02-28` | **0.052s** |
-| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.819s** |
+| | `tu codex` | `bunx @ccusage/codex` | Speedup |
+|---|---:|---:|---:|
+| Cold (rebuild cache) | **0.92s** | 20.76s | **22.6x** |
+| Warm (best of 5 / avg of 3) | **0.15s** | 20.76s | **138x** |
 
-- Cold-run speedup: about **34.5x**
-- Warm-run speedup: about **131.1x**
+**Claude** — 1 521 JSONL files, 2.2 GB (`~/.claude/projects`)
 
-> Notes: results vary by hardware, filesystem cache state, and log volume.
+| | `tu claude` | `bunx ccusage` | Speedup |
+|---|---:|---:|---:|
+| Cold (rebuild cache) | **0.73s** | 17.15s | **23.5x** |
+| Warm (best of 5 / avg of 3) | **0.08s** | 17.15s | **214x** |
+
+> Results vary by hardware, filesystem cache state, and log volume.
 
 ## Command Overview
 
