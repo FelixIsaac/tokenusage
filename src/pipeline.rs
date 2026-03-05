@@ -1649,6 +1649,8 @@ async fn run_blocks_live(
     let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every).await?;
     let mut last_official_refresh = Instant::now();
     let mut active_tab = LiveTab::Overview;
+    #[allow(unused_assignments)]
+    let mut last_data_refresh = Instant::now();
     let mut pending_official_task: Option<
         tokio::task::JoinHandle<(
             Option<OfficialCodexSnapshot>,
@@ -1733,7 +1735,7 @@ async fn run_blocks_live(
         );
         let (today_totals, last_30d_totals, last_30d_active_days) =
             aggregate_recent_costs(&loaded.events, now, tz, selected_source);
-        let frame_context = LiveFrameContext::new(
+        let mut frame_context = LiveFrameContext::new(
             now,
             tz,
             refresh_every,
@@ -1755,33 +1757,56 @@ async fn run_blocks_live(
             active_tab,
         );
 
+        frame_context.active_tab = active_tab;
         render_blocks_live_frame(&mut session, &frame_context)?;
+        last_data_refresh = Instant::now();
 
-        let mut should_exit = false;
+        // Fast inner loop: poll input at ~50ms intervals, re-render on tab switch
+        // immediately. Only break out to refresh data when the refresh timer fires.
         loop {
-            match poll_live_input(Duration::from_secs(refresh_every), active_tab)? {
+            let until_refresh = Duration::from_secs(refresh_every)
+                .saturating_sub(last_data_refresh.elapsed());
+            if until_refresh.is_zero() {
+                break; // Time to refresh data
+            }
+            let poll_for = until_refresh.min(Duration::from_millis(50));
+            match poll_live_input(poll_for, active_tab)? {
                 LiveInputEvent::Exit => {
-                    should_exit = true;
-                    break;
+                    live_runtime.flush_cache(true);
+                    return Ok(()); // Exit directly with cache flush
                 }
                 LiveInputEvent::SwitchTab(tab) => {
                     active_tab = tab;
-                    // Re-render immediately with updated tab, reuse existing data
                     let mut ctx = frame_context.clone();
                     ctx.active_tab = active_tab;
                     render_blocks_live_frame(&mut session, &ctx)?;
-                    continue;
                 }
-                LiveInputEvent::Tick => break,
+                LiveInputEvent::Tick => {
+                    // Check non-blocking official task completion mid-frame.
+                    if let Some(ref task) = pending_official_task {
+                        if task.is_finished() {
+                            if let Some(task) = pending_official_task.take() {
+                                if let Ok((codex, claude, antigravity, _errors)) = task.await {
+                                    if codex.is_some() {
+                                        official_codex = codex;
+                                    }
+                                    if claude.is_some() {
+                                        official_claude = claude;
+                                    }
+                                    if antigravity.is_some() {
+                                        official_antigravity = antigravity;
+                                    }
+                                    last_official_refresh = Instant::now();
+                                }
+                            }
+                            // Official data changed — force an immediate data refresh.
+                            break;
+                        }
+                    }
+                }
             }
         }
-        if should_exit {
-            break;
-        }
     }
-
-    live_runtime.flush_cache(true);
-    Ok(())
 }
 
 fn select_live_source(
