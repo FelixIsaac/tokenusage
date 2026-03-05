@@ -127,6 +127,8 @@ struct LiveUsageRuntime {
     cache_path: Option<PathBuf>,
     cache_dirty: bool,
     files_cache: Vec<DiscoveredFile>,
+    /// Claude files deferred until the second frame so Codex data renders instantly.
+    deferred_claude_files: Option<Vec<DiscoveredFile>>,
     last_discovery_at: Instant,
     discovery_interval: Duration,
     last_sources_refresh_at: Instant,
@@ -1643,7 +1645,7 @@ async fn run_blocks_live(
 
     let refresh_every = args.refresh_interval.max(1);
     let mut session = BlocksLiveSession::enter()?;
-    let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every).await?;
+    let mut live_runtime = LiveUsageRuntime::new(&args.common, refresh_every, true).await?;
     let mut last_official_refresh = Instant::now();
     let mut active_tab = LiveTab::Overview;
     #[allow(unused_assignments)]
@@ -6805,7 +6807,7 @@ fn parse_files_with_cache(
 }
 
 impl LiveUsageRuntime {
-    async fn new(common: &CommonArgs, refresh_every: u64) -> Result<Self> {
+    async fn new(common: &CommonArgs, refresh_every: u64, defer_claude: bool) -> Result<Self> {
         let filter = parse_common_filter(common)?;
         let sources = build_sources(common).await?;
         if sources.is_empty() {
@@ -6814,7 +6816,14 @@ impl LiveUsageRuntime {
             );
         }
 
-        let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
+        // When deferring Claude, use cached-only pricing (no network wait) so
+        // the first frame renders instantly.  The stale/missing pricing will be
+        // refreshed on the next full load cycle via maybe_refresh_sources.
+        let pricing = if defer_claude {
+            Arc::new(load_pricing(common.pricing_file.as_deref(), true).await?)
+        } else {
+            Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?)
+        };
         let pricing_key = pricing_cache_key(&pricing);
         let ignore_rules = PathIgnoreRules::from_common(common);
         let worker_count = worker_count_from_common(common);
@@ -6833,7 +6842,28 @@ impl LiveUsageRuntime {
             cache_store = IncrementalCacheStore::new(pricing_key);
         }
 
-        let files_cache = discover_files(&sources, &ignore_rules, filter);
+        // When defer_claude is set, only discover non-Claude sources so the
+        // first frame renders instantly.  Claude directory walking + parsing
+        // is deferred to the second load cycle.
+        let (files_cache, deferred_claude_files) = if defer_claude {
+            let fast_sources: Vec<_> = sources
+                .iter()
+                .filter(|s| s.kind != SourceKind::Claude)
+                .cloned()
+                .collect();
+            let fast_files = discover_files(&fast_sources, &ignore_rules, filter);
+            // Signal that Claude files need to be discovered later.
+            let has_claude_source = sources.iter().any(|s| s.kind == SourceKind::Claude);
+            let deferred = if has_claude_source {
+                Some(Vec::new()) // empty vec = needs discovery
+            } else {
+                None
+            };
+            (fast_files, deferred)
+        } else {
+            (discover_files(&sources, &ignore_rules, filter), None)
+        };
+
         let now = Instant::now();
         let discovery_interval =
             Duration::from_secs((refresh_every.saturating_mul(3)).clamp(2, 12));
@@ -6849,6 +6879,7 @@ impl LiveUsageRuntime {
             cache_path,
             cache_dirty: common.rebuild_cache,
             files_cache,
+            deferred_claude_files,
             last_discovery_at: now,
             discovery_interval,
             last_sources_refresh_at: now,
@@ -6884,6 +6915,25 @@ impl LiveUsageRuntime {
     }
 
     fn load(&mut self, timezone: &TimeZoneMode) -> LoadedUsage {
+        // Merge deferred Claude files back on the second load cycle so the
+        // first frame renders instantly with only fast sources (Codex).
+        if let Some(_deferred) = self.deferred_claude_files.take() {
+            // Discover Claude files now (directory walking was skipped on init).
+            let claude_sources: Vec<_> = self
+                .sources
+                .iter()
+                .filter(|s| s.kind == SourceKind::Claude)
+                .cloned()
+                .collect();
+            if !claude_sources.is_empty() {
+                let mut claude_files =
+                    discover_files(&claude_sources, &self.ignore_rules, self.filter);
+                self.files_cache.append(&mut claude_files);
+                self.files_cache
+                    .sort_unstable_by(|a, b| a.path.cmp(&b.path));
+                self.files_cache.dedup_by(|a, b| a.path == b.path);
+            }
+        }
         self.maybe_refresh_discovery();
         let parsed = parse_files_with_cache(
             &self.files_cache,

@@ -1,11 +1,11 @@
 # tokenusage (`tu`)
 
-Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
+Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity usage.
 
 [![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
 [![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
 
-`tu` scans local session logs and gives one merged token + cost view across Codex and Claude in CLI, live monitor, and GUI.
+`tu` scans local session logs and gives one merged token + cost view across Codex, Claude, and Antigravity in CLI, live monitor, and GUI.
 
 **Benchmark:** up to **131.1x faster than `ccusage`** on warm runs (**34.5x** on cold runs) with real local Codex logs. [See full benchmark](#benchmark-details).
 
@@ -42,7 +42,7 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
   </tr>
   <tr>
     <td valign="top" colspan="2">
-      <code>tu live codex</code><br/>
+      <code>tu live</code><br/>
       <p align="center">
         <a href="docs/images/live-demo.png"><img src="docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
@@ -79,6 +79,7 @@ tu
 # Source-specific
 tu codex
 tu claude
+tu antigravity
 
 # Date filter
 tu --since 2026-02-01 --until 2026-02-28
@@ -87,10 +88,11 @@ tu --since 2026-02-01 --until 2026-02-28
 tu weekly --start-of-week monday
 tu monthly
 
-# Live monitor
+# Live monitor (tabs: Codex / Claude / Antigravity)
 tu live
 tu live codex
 tu live claude
+tu live antigravity
 
 # GUI dashboard
 tu gui
@@ -104,7 +106,7 @@ tu img week
 ## Why tokenusage
 
 - Faster feedback loop: native Rust + parallel scan/parsing + incremental cache.
-- One dashboard for both Codex and Claude, with merged totals and per-model breakdown.
+- One dashboard for Codex, Claude, and Antigravity, with merged totals and per-model breakdown.
 - Share-ready image card (`tu img`) for posting your token/cost trend.
 - Works in terminal and desktop GUI without sending your logs to a cloud service.
 
@@ -112,9 +114,10 @@ tu img week
 
 ### Where does the data come from?
 
-From local log directories only:
+From local log directories and IDE probes:
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+- Antigravity: probed from running IDE language server (no log files needed)
 
 You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
 
@@ -153,7 +156,7 @@ Results:
 ## Command Overview
 
 ```text
-tu [daily|codex|claude|monthly|weekly|img|session|blocks|live|statusline|gui]
+tu [daily|codex|claude|antigravity|monthly|weekly|img|session|blocks|live|statusline|gui]
 ```
 
 Useful commands:
