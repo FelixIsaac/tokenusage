@@ -848,8 +848,7 @@ pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
             let now = Utc::now();
 
             // Collect models already shown via priority selection
-            let shown_labels: HashSet<&str> =
-                ordered.iter().map(|m| m.label.as_str()).collect();
+            let shown_labels: HashSet<&str> = ordered.iter().map(|m| m.label.as_str()).collect();
 
             // Remaining models not in the priority list
             let rest: Vec<_> = snapshot
@@ -875,8 +874,7 @@ pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
                     println!("{line}");
                 } else {
                     let bar = "\x1b[90m[░░░░░░░░░░░░░░░░░░░░]\x1b[0m";
-                    let mut line =
-                        format!("  {:<32} {bar}  quota not reported", model.label);
+                    let mut line = format!("  {:<32} {bar}  quota not reported", model.label);
                     if let Some(reset_ts) = model.reset_time {
                         let reset_text = format_reset_timestamp(reset_ts, &tz);
                         let eta_text = format_time_until_reset_short(reset_ts, now);
@@ -1016,20 +1014,12 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
     // For live mode, skip blocking initial fetch — go straight to TUI and fetch in background.
     if args.live {
-        return run_blocks_live(
-            &args,
-            &tz,
-            window_secs,
-            token_limit_mode,
-            None,
-            None,
-            None,
-        )
-        .await;
+        return run_blocks_live(&args, &tz, window_secs, token_limit_mode, None, None, None).await;
     }
 
     let (official_codex, official_claude, official_antigravity) = if args.official_limits {
-        let (codex, claude, antigravity, errors) = fetch_selected_official_limits(&args.common).await;
+        let (codex, claude, antigravity, errors) =
+            fetch_selected_official_limits(&args.common).await;
         for error in errors {
             eprintln!("{error}");
         }
@@ -1658,10 +1648,16 @@ async fn run_blocks_live(
         let today_str = tz.now_date().to_string();
         // Only use cached today_totals if the date matches; otherwise zero.
         let (cached_today, cached_30d, cached_30d_days) = match cached.as_ref() {
-            Some(c) if c.cached_date == today_str => {
-                (c.today_totals.clone(), c.last_30d_totals.clone(), c.last_30d_active_days)
-            }
-            Some(c) => (TokenCounts::default(), c.last_30d_totals.clone(), c.last_30d_active_days),
+            Some(c) if c.cached_date == today_str => (
+                c.today_totals.clone(),
+                c.last_30d_totals.clone(),
+                c.last_30d_active_days,
+            ),
+            Some(c) => (
+                TokenCounts::default(),
+                c.last_30d_totals.clone(),
+                c.last_30d_active_days,
+            ),
             None => (TokenCounts::default(), TokenCounts::default(), 0),
         };
         // Use cached official snapshots if the caller didn't provide them.
@@ -1809,10 +1805,9 @@ async fn run_blocks_live(
                 || last_official_refresh.elapsed() >= official_refresh_interval);
         if should_refresh_official {
             let common = args.common.clone();
-            pending_official_task =
-                Some(tokio::spawn(
-                    async move { fetch_selected_official_limits(&common).await },
-                ));
+            pending_official_task = Some(tokio::spawn(async move {
+                fetch_selected_official_limits(&common).await
+            }));
         }
 
         // Check if the background task has completed (non-blocking).
@@ -1836,8 +1831,8 @@ async fn run_blocks_live(
                         if any_new || errors.is_empty() {
                             official_refresh_interval = official_refresh_interval_base;
                         } else {
-                            official_refresh_interval = (official_refresh_interval * 2)
-                                .min(official_refresh_interval_max);
+                            official_refresh_interval =
+                                (official_refresh_interval * 2).min(official_refresh_interval_max);
                         }
                     }
                 }
@@ -1906,8 +1901,8 @@ async fn run_blocks_live(
         // Fast inner loop: poll input at ~50ms intervals, re-render on tab switch
         // immediately. Only break out to refresh data when the refresh timer fires.
         loop {
-            let until_refresh = Duration::from_secs(refresh_every)
-                .saturating_sub(last_data_refresh.elapsed());
+            let until_refresh =
+                Duration::from_secs(refresh_every).saturating_sub(last_data_refresh.elapsed());
             if until_refresh.is_zero() {
                 break; // Time to refresh data
             }
@@ -1933,8 +1928,9 @@ async fn run_blocks_live(
                         if task.is_finished() {
                             if let Some(task) = pending_official_task.take() {
                                 if let Ok((codex, claude, antigravity, errors)) = task.await {
-                                    let any_new =
-                                        codex.is_some() || claude.is_some() || antigravity.is_some();
+                                    let any_new = codex.is_some()
+                                        || claude.is_some()
+                                        || antigravity.is_some();
                                     if codex.is_some() {
                                         official_codex = codex;
                                     }
@@ -2198,7 +2194,10 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
             ),
             Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
             Span::styled(
-                format!("block {} -> {}", context.block_start_text, context.block_end_text),
+                format!(
+                    "block {} -> {}",
+                    context.block_start_text, context.block_end_text
+                ),
                 Style::default().fg(TuiColor::DarkGray),
             ),
             Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
@@ -2218,10 +2217,7 @@ fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &LiveFrameConte
             Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
             Span::raw(format!("{mode_text} · {plan_text}")),
             Span::styled("  |  ", Style::default().fg(TuiColor::DarkGray)),
-            Span::styled(
-                "q · Tab switch",
-                Style::default().fg(TuiColor::DarkGray),
-            ),
+            Span::styled("q · Tab switch", Style::default().fg(TuiColor::DarkGray)),
         ])
     };
     frame.render_widget(Paragraph::new(info_line), info_area);
@@ -2273,10 +2269,7 @@ fn render_live_tab_bar(
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
-            spans.push(Span::styled(
-                label,
-                Style::default().fg(TuiColor::DarkGray),
-            ));
+            spans.push(Span::styled(label, Style::default().fg(TuiColor::DarkGray)));
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -2349,10 +2342,7 @@ fn render_live_antigravity_tab(
             let bar_width = (area.width as usize).saturating_sub(6).min(60);
             let filled = ((used_pct / 100.0) * bar_width as f64).round() as usize;
             let empty = bar_width.saturating_sub(filled);
-            let bar = format!("{}{}",
-                "█".repeat(filled),
-                "░".repeat(empty),
-            );
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty),);
 
             lines.push(Line::from(vec![
                 Span::raw("    "),
@@ -2376,7 +2366,10 @@ fn render_live_antigravity_tab(
         } else {
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled("quota not reported", Style::default().fg(TuiColor::DarkGray)),
+                Span::styled(
+                    "quota not reported",
+                    Style::default().fg(TuiColor::DarkGray),
+                ),
             ]));
         }
         lines.push(Line::from(""));
@@ -2539,10 +2532,8 @@ fn render_live_overview_body(
 
     // 30-day avg
     if context.last_30d_active_days > 0 {
-        let avg_cost =
-            context.last_30d_totals.cost_usd / context.last_30d_active_days as f64;
-        let avg_tokens =
-            context.last_30d_totals.total_tokens / context.last_30d_active_days as u64;
+        let avg_cost = context.last_30d_totals.cost_usd / context.last_30d_active_days as f64;
+        let avg_tokens = context.last_30d_totals.total_tokens / context.last_30d_active_days as u64;
         lines.push(Line::from(vec![
             Span::raw(live_key_label("30d avg/day")),
             Span::raw(format!(
@@ -2563,10 +2554,18 @@ fn render_live_overview_body(
             Style::default().add_modifier(Modifier::BOLD),
         )]));
         if let Some(primary) = codex.primary_used_percent {
-            lines.push(live_key_value_line("  Session", format!("{primary:.1}% used"), used_gauge_color(primary)));
+            lines.push(live_key_value_line(
+                "  Session",
+                format!("{primary:.1}% used"),
+                used_gauge_color(primary),
+            ));
         }
         if let Some(weekly) = codex.secondary_used_percent {
-            lines.push(live_key_value_line("  Weekly", format!("{weekly:.1}% used"), used_gauge_color(weekly)));
+            lines.push(live_key_value_line(
+                "  Weekly",
+                format!("{weekly:.1}% used"),
+                used_gauge_color(weekly),
+            ));
         }
         lines.push(Line::from(""));
     }
@@ -2578,10 +2577,18 @@ fn render_live_overview_body(
             Style::default().add_modifier(Modifier::BOLD),
         )]));
         if let Some(primary) = claude.primary_used_percent {
-            lines.push(live_key_value_line("  Session", format!("{primary:.1}% used"), used_gauge_color(primary)));
+            lines.push(live_key_value_line(
+                "  Session",
+                format!("{primary:.1}% used"),
+                used_gauge_color(primary),
+            ));
         }
         if let Some(weekly) = claude.secondary_used_percent {
-            lines.push(live_key_value_line("  Weekly", format!("{weekly:.1}% used"), used_gauge_color(weekly)));
+            lines.push(live_key_value_line(
+                "  Weekly",
+                format!("{weekly:.1}% used"),
+                used_gauge_color(weekly),
+            ));
         }
         lines.push(Line::from(""));
     }
@@ -5063,9 +5070,15 @@ async fn fetch_claude_limits_via_cli() -> Result<OfficialClaudeSnapshot> {
 
     // Retry once if output doesn't look relevant (CodexBar approach).
     let looks_relevant = {
-        let compact: String = clean.to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
-        compact.contains("currentsession") || compact.contains("currentweek")
-            || compact.contains("loadingusage") || compact.contains("failedtoloadusagedata")
+        let compact: String = clean
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        compact.contains("currentsession")
+            || compact.contains("currentweek")
+            || compact.contains("loadingusage")
+            || compact.contains("failedtoloadusagedata")
     };
     if !looks_relevant {
         if debug {
@@ -5077,7 +5090,10 @@ async fn fetch_claude_limits_via_cli() -> Result<OfficialClaudeSnapshot> {
             .context("claude pty retry join failed")??;
         let clean2 = strip_ansi_codes(&raw2);
         if debug {
-            eprintln!("--- claude cli RETRY CLEAN output ({} bytes) ---", clean2.len());
+            eprintln!(
+                "--- claude cli RETRY CLEAN output ({} bytes) ---",
+                clean2.len()
+            );
             eprintln!("{clean2}");
             eprintln!("--- end claude cli retry output ---");
         }
@@ -5142,10 +5158,7 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
 
     // Remove all Claude-related env vars to avoid nested-session detection.
     for (key, _) in std::env::vars() {
-        if key == "CLAUDECODE"
-            || key.starts_with("ANTHROPIC_")
-            || key.starts_with("CLAUDE_CODE")
-        {
+        if key == "CLAUDECODE" || key.starts_with("ANTHROPIC_") || key.starts_with("CLAUDE_CODE") {
             cmd.env_remove(&key);
         }
     }
@@ -5154,7 +5167,10 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
         cmd.cwd(&home);
     }
 
-    let mut child = pair.slave.spawn_command(cmd).context("failed to spawn claude CLI")?;
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .context("failed to spawn claude CLI")?;
     // Drop slave side in parent so reads on master detect EOF properly.
     drop(pair.slave);
 
@@ -5220,8 +5236,7 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
             // Handle trust/safety prompts.
             // Claude CLI asks "Is this a project you created or one you trust?"
             // ANSI stripping may remove spaces, so match generously.
-            let is_trust_dialog = (clean_lower.contains("trust")
-                || raw_lower.contains("trust"))
+            let is_trust_dialog = (clean_lower.contains("trust") || raw_lower.contains("trust"))
                 && (clean_lower.contains("enter to confirm")
                     || raw_lower.contains("enter to confirm")
                     || clean_lower.contains("entertoconfirm"));
@@ -5240,7 +5255,8 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
             }
 
             // Respond to command palette hints (compact match — no spaces).
-            let compact_lower: String = clean_lower.chars().filter(|c| !c.is_whitespace()).collect();
+            let compact_lower: String =
+                clean_lower.chars().filter(|c| !c.is_whitespace()).collect();
             if compact_lower.contains("showplan") {
                 let _ = write_pty(&mut writer, "\r");
             }
@@ -5251,8 +5267,7 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
                 || raw_lower.contains("trust")
                 || clean_lower.contains("entertoconfirm")
                 || raw_lower.contains("enter to confirm");
-            let is_main_prompt =
-                (clean.contains('❯') || clean.contains("> ")) && !has_dialog;
+            let is_main_prompt = (clean.contains('❯') || clean.contains("> ")) && !has_dialog;
             if is_main_prompt {
                 saw_prompt = true;
                 // Give a short settle after seeing prompt.
@@ -5280,7 +5295,14 @@ fn claude_pty_capture(binary: &str) -> Result<String> {
         eprintln!(
             "[pty] startup done ({} bytes, prompt={saw_prompt}), clean tail: {:?}",
             startup_buf.len(),
-            clean.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()
+            clean
+                .chars()
+                .rev()
+                .take(300)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
         );
     }
 
@@ -5479,9 +5501,7 @@ fn parse_claude_usage_text(text: &str) -> Result<OfficialClaudeSnapshot> {
         primary_resets_at: session_reset
             .as_deref()
             .and_then(parse_claude_reset_to_unix),
-        secondary_resets_at: weekly_reset
-            .as_deref()
-            .and_then(parse_claude_reset_to_unix),
+        secondary_resets_at: weekly_reset.as_deref().and_then(parse_claude_reset_to_unix),
     })
 }
 
@@ -5608,7 +5628,9 @@ fn percent_from_line(line: &str) -> Option<(f64, bool)> {
 fn all_percents_from_lines(lines: &[&str]) -> Vec<f64> {
     lines
         .iter()
-        .filter_map(|l| percent_from_line(l).map(|(pct, is_used)| if is_used { pct } else { 100.0 - pct }))
+        .filter_map(|l| {
+            percent_from_line(l).map(|(pct, is_used)| if is_used { pct } else { 100.0 - pct })
+        })
         .collect()
 }
 
@@ -5700,14 +5722,19 @@ fn parse_claude_reset_to_unix(text: &str) -> Option<i64> {
     let tz: Option<Tz> = tz_str.as_deref().and_then(|s| s.parse::<Tz>().ok());
 
     // Try time-only formats: "4:59pm", "4:59PM", "16:59", "2pm".
-    for fmt in &["%I:%M%p", "%I:%M%P", "%I:%M %p", "%H:%M", "%I%p", "%I%P", "%I %p"] {
+    for fmt in &[
+        "%I:%M%p", "%I:%M%P", "%I:%M %p", "%H:%M", "%I%p", "%I%P", "%I %p",
+    ] {
         if let Ok(time) = chrono::NaiveTime::parse_from_str(time_part, fmt) {
             let today = now.date_naive();
             let dt = today.and_time(time);
             let ts = if let Some(tz) = tz {
                 tz.from_local_datetime(&dt).single()?.timestamp()
             } else {
-                now.timezone().from_local_datetime(&dt).single()?.timestamp()
+                now.timezone()
+                    .from_local_datetime(&dt)
+                    .single()?
+                    .timestamp()
             };
             if ts <= now.timestamp() {
                 return Some(ts + 86400);
@@ -5729,7 +5756,10 @@ fn parse_claude_reset_to_unix(text: &str) -> Option<i64> {
             let ts = if let Some(tz) = tz {
                 tz.from_local_datetime(&dt).single()?.timestamp()
             } else {
-                now.timezone().from_local_datetime(&dt).single()?.timestamp()
+                now.timezone()
+                    .from_local_datetime(&dt)
+                    .single()?
+                    .timestamp()
             };
             return Some(ts);
         }
@@ -6037,8 +6067,8 @@ async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
             Some(v) => v,
             None => continue,
         };
-        let ext_port = extract_flag_value("--extension_server_port", cmd)
-            .and_then(|v| v.parse::<u16>().ok());
+        let ext_port =
+            extract_flag_value("--extension_server_port", cmd).and_then(|v| v.parse::<u16>().ok());
         return Ok((pid, csrf, ext_port));
     }
     bail!("Antigravity language server not detected")
@@ -6047,7 +6077,9 @@ async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
 fn extract_flag_value(flag: &str, command: &str) -> Option<String> {
     let idx = command.find(flag)?;
     let after = &command[idx + flag.len()..];
-    let after = after.strip_prefix('=').unwrap_or_else(|| after.trim_start());
+    let after = after
+        .strip_prefix('=')
+        .unwrap_or_else(|| after.trim_start());
     let value = after.split_whitespace().next()?;
     if value.is_empty() {
         return None;
@@ -6117,7 +6149,10 @@ async fn antigravity_find_working_port(ports: &[u16], csrf_token: &str) -> Resul
             return Ok(port);
         }
     }
-    bail!("no working Antigravity API port found among {} candidates", ports.len())
+    bail!(
+        "no working Antigravity API port found among {} candidates",
+        ports.len()
+    )
 }
 
 fn antigravity_http_client() -> Result<reqwest::Client> {
@@ -6204,9 +6239,7 @@ async fn antigravity_fetch_command_model_configs(
     parse_antigravity_command_model_configs(&resp)
 }
 
-fn parse_antigravity_user_status(
-    resp: &serde_json::Value,
-) -> Result<OfficialAntigravitySnapshot> {
+fn parse_antigravity_user_status(resp: &serde_json::Value) -> Result<OfficialAntigravitySnapshot> {
     // Check for error code
     if let Some(code) = resp.get("code") {
         let is_ok = match code {
@@ -6750,9 +6783,24 @@ fn print_membership_estimate(
             println!("official: antigravity plan={plan}");
         }
         let labels = [
-            ("primary", official.primary_label.as_deref(), official.primary_used_percent, official.primary_resets_at),
-            ("secondary", official.secondary_label.as_deref(), official.secondary_used_percent, official.secondary_resets_at),
-            ("tertiary", official.tertiary_label.as_deref(), official.tertiary_used_percent, official.tertiary_resets_at),
+            (
+                "primary",
+                official.primary_label.as_deref(),
+                official.primary_used_percent,
+                official.primary_resets_at,
+            ),
+            (
+                "secondary",
+                official.secondary_label.as_deref(),
+                official.secondary_used_percent,
+                official.secondary_resets_at,
+            ),
+            (
+                "tertiary",
+                official.tertiary_label.as_deref(),
+                official.tertiary_used_percent,
+                official.tertiary_resets_at,
+            ),
         ];
         for (slot, label, used_opt, reset_opt) in labels {
             if let Some(used) = used_opt {
@@ -8659,10 +8707,7 @@ mod tests {
 
         // Gemini Flash is tertiary (10% used)
         assert!((snapshot.tertiary_used_percent.unwrap() - 10.0).abs() < 0.01);
-        assert_eq!(
-            snapshot.tertiary_label.as_deref(),
-            Some("Gemini 2.5 Flash")
-        );
+        assert_eq!(snapshot.tertiary_label.as_deref(), Some("Gemini 2.5 Flash"));
     }
 
     #[test]
