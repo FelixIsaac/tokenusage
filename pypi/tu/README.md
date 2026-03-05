@@ -16,13 +16,13 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravit
     <td valign="top" width="50%">
       <code>tu</code><br/>
       <p align="center">
-        <a href="docs/images/cli-demo-padded.png"><img src="docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
+        <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu gui</code><br/>
       <p align="center">
-        <a href="docs/images/gui-demo.png"><img src="docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
+        <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -30,13 +30,13 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravit
     <td valign="top" width="50%">
       <code>tu img day</code><br/>
       <p align="center">
-        <a href="docs/images/share-demo.png"><img src="docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
+        <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu img week</code><br/>
       <p align="center">
-        <a href="docs/images/share-week-demo.png"><img src="docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
+        <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -44,7 +44,7 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravit
     <td valign="top" colspan="2">
       <code>tu live</code><br/>
       <p align="center">
-        <a href="docs/images/live-demo.png"><img src="docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
+        <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -62,6 +62,12 @@ cargo install tokenusage --bin tu
 
 ```bash
 npm install -g tokenusage
+```
+
+### pip (PyPI)
+
+```bash
+pip install tokenusage
 ```
 
 ### cargo-binstall (prebuilt binary)
