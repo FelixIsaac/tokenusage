@@ -9,7 +9,7 @@ const binPath = path.join(__dirname, '..', 'vendor', binName);
 
 if (!fs.existsSync(binPath)) {
   console.error('[tokenusage] Native binary is missing.');
-  console.error('[tokenusage] Try reinstalling: npm i -g @hanbu97/tokenusage');
+  console.error('[tokenusage] Try reinstalling: npm i -g tokenusage');
   process.exit(1);
 }
 

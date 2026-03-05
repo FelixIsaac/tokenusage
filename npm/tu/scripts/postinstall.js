@@ -1,7 +1,7 @@
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const https = require('node:https');
+const { execSync } = require('node:child_process');
 
 const pkg = require('../package.json');
 
@@ -80,22 +80,52 @@ async function main() {
   }
 
   const isWindows = process.platform === 'win32';
-  const assetName = isWindows
-    ? `tu-${VERSION_TAG}-${target}.exe`
-    : `tu-${VERSION_TAG}-${target}`;
+  const vendorDir = path.join(__dirname, '..', 'vendor');
+  const outFile = path.join(vendorDir, isWindows ? 'tu.exe' : 'tu');
 
-  const url = `https://github.com/${OWNER}/${REPO}/releases/download/${VERSION_TAG}/${assetName}`;
-  const outFile = path.join(__dirname, '..', 'vendor', isWindows ? 'tu.exe' : 'tu');
+  if (isWindows) {
+    // Windows: download bare .exe directly.
+    const assetName = `tu-${VERSION_TAG}-${target}.exe`;
+    const url = `https://github.com/${OWNER}/${REPO}/releases/download/${VERSION_TAG}/${assetName}`;
 
-  try {
-    await downloadWithRedirect(url, outFile);
-    if (!isWindows) {
-      await fs.promises.chmod(outFile, 0o755);
+    try {
+      await downloadWithRedirect(url, outFile);
+      console.log(`[tokenusage] Installed ${assetName}`);
+    } catch (err) {
+      console.warn(`[tokenusage] Failed to download release binary: ${err.message}`);
+      console.warn('[tokenusage] You can still build/install via cargo install tokenusage --bin tu');
     }
-    console.log(`[tokenusage] Installed ${assetName}`);
-  } catch (err) {
-    console.warn(`[tokenusage] Failed to download release binary: ${err.message}`);
-    console.warn('[tokenusage] You can still build/install via cargo install tokenusage --bin tu');
+  } else {
+    // macOS / Linux: download tar.gz archive and extract the binary.
+    const assetName = `tu-${VERSION_TAG}-${target}.tar.gz`;
+    const url = `https://github.com/${OWNER}/${REPO}/releases/download/${VERSION_TAG}/${assetName}`;
+    const archivePath = path.join(vendorDir, assetName);
+
+    try {
+      await downloadWithRedirect(url, archivePath);
+
+      // Extract: archive contains <dir>/tu — extract just the binary.
+      const innerDir = `tu-${VERSION_TAG}-${target}`;
+      execSync(`tar -xzf "${archivePath}" -C "${vendorDir}" "${innerDir}/tu"`, {
+        stdio: 'pipe',
+      });
+
+      // Move the binary from the extracted subdirectory to vendor/.
+      const extractedBin = path.join(vendorDir, innerDir, 'tu');
+      await fs.promises.rename(extractedBin, outFile);
+      await fs.promises.chmod(outFile, 0o755);
+
+      // Clean up archive and extracted directory.
+      await fs.promises.rm(archivePath, { force: true });
+      await fs.promises.rm(path.join(vendorDir, innerDir), { recursive: true, force: true });
+
+      console.log(`[tokenusage] Installed tu from ${assetName}`);
+    } catch (err) {
+      // Clean up on failure.
+      try { await fs.promises.rm(archivePath, { force: true }); } catch {}
+      console.warn(`[tokenusage] Failed to download release binary: ${err.message}`);
+      console.warn('[tokenusage] You can still build/install via cargo install tokenusage --bin tu');
+    }
   }
 }
 
