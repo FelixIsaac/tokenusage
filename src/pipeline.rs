@@ -1712,6 +1712,7 @@ async fn run_blocks_live(
     #[allow(unused_assignments)]
     let mut last_data_refresh = Instant::now();
     let mut first_real_frame_done = false;
+    #[allow(clippy::type_complexity)]
     let mut pending_official_task: Option<
         tokio::task::JoinHandle<(
             Option<OfficialCodexSnapshot>,
@@ -2611,7 +2612,7 @@ fn render_live_overview_body(
                     TuiColor::Red
                 };
                 lines.push(live_key_value_line(
-                    &format!("  {}", model.label),
+                    format!("  {}", model.label),
                     format!("{remaining:.0}% left"),
                     color,
                 ));
@@ -5122,15 +5123,16 @@ fn resolve_claude_binary() -> Result<String> {
         }
     }
     // Well-known paths.
-    for candidate in &[
+    for p in [
         dirs::home_dir().map(|h| h.join(".bun/bin/claude")),
         dirs::home_dir().map(|h| h.join(".npm-global/bin/claude")),
         Some(PathBuf::from("/usr/local/bin/claude")),
-    ] {
-        if let Some(p) = candidate {
-            if p.is_file() {
-                return Ok(p.to_string_lossy().into_owned());
-            }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if p.is_file() {
+            return Ok(p.to_string_lossy().into_owned());
         }
     }
     bail!("Claude CLI binary not found. Install it or set CLAUDE_BIN env var.")
@@ -6406,7 +6408,8 @@ fn build_antigravity_snapshot(
 }
 
 /// Select and prioritise models the same way CodexBar does:
-/// 1. Claude (non-thinking)  2. Gemini Pro Low  3. Gemini Flash
+/// 1. Claude (non-thinking)  2. Gemini Pro Low  3. Gemini Flash.
+///
 /// Fallback: all models sorted by remaining % ascending.
 fn select_antigravity_models(
     models: &[AntigravityModelQuotaSnapshot],
