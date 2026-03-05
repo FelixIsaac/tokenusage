@@ -1,13 +1,31 @@
-# tokenusage (`tu`)
+<p align="center">
+  <img src="assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
+</p>
 
-Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity usage.
+<h1 align="center">tokenusage</h1>
 
-[![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
-[![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
+<p align="center">
+  <em>Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity</em>
+</p>
 
-`tu` scans local session logs and gives one merged token + cost view across Codex, Claude, and Antigravity in CLI, live monitor, and GUI.
+<p align="center">
+  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
+  <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
+  <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
+  <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+</p>
 
-**Benchmark:** up to **214x faster** than `ccusage` on Claude logs, **138x faster** on Codex logs (warm cache). [See full benchmark](#benchmark-details).
+<p align="center">
+  <strong>214x faster</strong> than ccusage on Claude logs · <strong>138x faster</strong> on Codex logs (warm cache) · <a href="#benchmark-details">See benchmark</a>
+</p>
+
+<p align="center">
+  <a href="#screenshots">Screenshots</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#why-tokenusage">Why</a> · <a href="#benchmark-details">Benchmark</a>
+</p>
+
+---
 
 ## Screenshots
 
