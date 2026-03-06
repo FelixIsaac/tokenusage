@@ -53,7 +53,11 @@ pub(crate) enum CostSource {
 #[command(
     name = "tokenusage",
     version,
-    about = "Multi-source token usage analyzer (Rust)"
+    about = "Multi-source token usage analyzer (Rust)",
+    after_help = "GitHub:  https://github.com/hanbu97/tokenusage\n\
+                  Issues:  https://github.com/hanbu97/tokenusage/issues\n\
+                  \n\
+                  If you find this tool useful, please consider giving it a star!"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
