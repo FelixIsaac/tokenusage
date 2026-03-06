@@ -168,12 +168,11 @@ Repo: https://github.com/hanbu97/tokenusage
 
 These are good fits because they are discovery surfaces, not short-lived feeds.
 
-1. `github.com/jtsang4/awesome-claude-code`
-2. `github.com/sourcegraph/awesome-code-ai`
-3. `github.com/hesreallyhim/awesome-claude-code`
-4. `github.com/jqueryscript/awesome-claude-code`
-5. `github.com/sorrycc/awesome-code-agents`
-6. Rust CLI / terminal tooling lists that accept analytics or productivity tools
+1. `github.com/sourcegraph/awesome-code-ai`
+2. `github.com/hesreallyhim/awesome-claude-code`
+3. `github.com/jqueryscript/awesome-claude-code`
+4. `github.com/sorrycc/awesome-code-agents`
+5. Rust CLI / terminal tooling lists that accept analytics or productivity tools
 
 When opening a PR:
 
