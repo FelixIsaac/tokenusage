@@ -22,6 +22,10 @@
 </p>
 
 <p align="center">
+  If <code>tokenusage</code> saves you time, <a href="https://github.com/hanbu97/tokenusage">star the repo</a>. That directly improves discovery for other Codex and Claude users.
+</p>
+
+<p align="center">
   <a href="#screenshots">Screenshots</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#why-tokenusage">Why</a> · <a href="#benchmark-details">Benchmark</a>
 </p>
 
