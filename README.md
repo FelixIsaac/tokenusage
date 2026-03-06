@@ -122,6 +122,11 @@ tu live codex
 tu live claude
 tu live antigravity
 
+# Real-time per-session viewer (htop for tokens)
+tu top
+tu top --active-hours 12    # show sessions active in last 12h
+tu top --active-hours 0     # show all sessions
+
 # GUI dashboard
 tu gui
 

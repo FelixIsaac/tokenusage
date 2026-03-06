@@ -266,6 +266,10 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Live(args)
         }
+        Commands::Top(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Top(args)
+        }
         Commands::Statusline(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(statusline_cfg) =
@@ -301,6 +305,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Session(args) => args.common.config.as_deref(),
         Commands::Blocks(args) => args.common.config.as_deref(),
         Commands::Live(args) => args.common.config.as_deref(),
+        Commands::Top(args) => args.common.config.as_deref(),
         Commands::Statusline(args) => args.common.config.as_deref(),
         Commands::Gui(args) => args.common.config.as_deref(),
     };

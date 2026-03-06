@@ -76,6 +76,8 @@ pub(crate) enum Commands {
     Session(SessionArgs),
     Blocks(BlocksArgs),
     Live(LiveArgs),
+    #[command(about = "Real-time per-session token viewer (htop for tokens)")]
+    Top(TopArgs),
     Statusline(StatuslineArgs),
     Gui(GuiArgs),
 }
@@ -250,6 +252,27 @@ impl From<LiveArgs> for BlocksArgs {
             official_limits: true,
         }
     }
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct TopArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(long, default_value_t = 2, help = "Refresh interval seconds")]
+    pub(crate) refresh_interval: u64,
+    #[arg(
+        long,
+        short = 'n',
+        default_value_t = 50,
+        help = "Max sessions to display"
+    )]
+    pub(crate) limit: usize,
+    #[arg(
+        long,
+        default_value_t = 3,
+        help = "Active window in hours (0 = show all)"
+    )]
+    pub(crate) active_hours: u64,
 }
 
 #[derive(Debug, Args, Clone, Default)]
