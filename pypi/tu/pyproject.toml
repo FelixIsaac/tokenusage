@@ -14,8 +14,8 @@ keywords = [
     "codex-usage",
     "claude-code-usage",
     "token-usage-tracker",
-    "cli",
-    "tui",
+    "antigravity",
+    "ai-coding-cost",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

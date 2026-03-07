@@ -19,6 +19,8 @@ cp "${SRC_README}" "${tmp_file}"
 sed -E \
   -e "s|href=\"docs/|href=\"${REPO_BLOB_BASE}/docs/|g" \
   -e "s|src=\"docs/|src=\"${REPO_RAW_BASE}/docs/|g" \
+  -e "s|src=\"assets/|src=\"${REPO_RAW_BASE}/assets/|g" \
+  -e "s|href=\"assets/|href=\"${REPO_BLOB_BASE}/assets/|g" \
   -e "s|\\]\\(docs/|](${REPO_BLOB_BASE}/docs/|g" \
   -e "s|\\]\\(\\./|](${REPO_BLOB_BASE}/|g" \
   "${tmp_file}" > "${DST_README}"

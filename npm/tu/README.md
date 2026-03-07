@@ -1,26 +1,64 @@
-# tokenusage (`tu`)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
+</p>
 
-Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
+<h1 align="center">tokenusage</h1>
 
-[![CI](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml)
-[![Release](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg)](https://github.com/hanbu97/tokenusage/actions/workflows/release.yml)
+<p align="center">
+  <strong>Stop getting throttled without warning. Know your AI coding costs in 0.08s.</strong>
+</p>
 
-`tu` scans local session logs and gives one merged token + cost view across Codex and Claude in CLI, live monitor, and GUI.
+<p align="center">
+  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
+  <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
+  <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
+  <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+</p>
 
-**Benchmark:** up to **131.1x faster than `ccusage`** on warm runs (**34.5x** on cold runs) with real local Codex logs. [See full benchmark](#benchmark-details).
+<p align="center">
+  English | <a href="./README.zh-cn.md">中文</a>
+</p>
+
+---
+
+### Install in one line
+
+```bash
+npm i -g tokenusage        # or: cargo install tokenusage --bin tu
+```
+
+### Run it
+
+```bash
+tu                          # daily cost report in 0.08s
+```
+
+---
+
+<p align="center">
+  <strong>214x faster</strong> than ccusage on Claude logs · <strong>138x faster</strong> on Codex logs · <a href="#benchmark-details">See benchmark</a>
+</p>
+
+<p align="center">
+  If <code>tokenusage</code> saves you time, <a href="https://github.com/hanbu97/tokenusage">give it a star</a> — it directly helps other Codex and Claude users find it.
+</p>
+
+---
 
 ## Screenshots
 
 <table align="center" width="100%">
   <tr>
     <td valign="top" width="50%">
-      <code>tu</code><br/>
+      <code>tu</code> — daily report<br/>
       <p align="center">
         <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
-      <code>tu gui</code><br/>
+      <code>tu gui</code> — desktop dashboard<br/>
       <p align="center">
         <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
@@ -28,13 +66,13 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
   </tr>
   <tr>
     <td valign="top" width="50%">
-      <code>tu img day</code><br/>
+      <code>tu img day</code> — shareable card<br/>
       <p align="center">
         <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
-      <code>tu img week</code><br/>
+      <code>tu img week</code> — weekly card<br/>
       <p align="center">
         <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
@@ -42,7 +80,7 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
   </tr>
   <tr>
     <td valign="top" colspan="2">
-      <code>tu live codex</code><br/>
+      <code>tu live</code> — real-time TUI monitor<br/>
       <p align="center">
         <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
@@ -50,7 +88,24 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
   </tr>
 </table>
 
+## Why tokenusage
+
+| Problem | tokenusage solution |
+|---|---|
+| Hit rate limits mid-refactor, no warning | `tu live` shows usage in real-time |
+| No idea what AI coding costs per day | `tu` gives daily cost breakdown in 0.08s |
+| Codex + Claude logs in separate places | One merged dashboard across all sources |
+| Existing tools are slow on large logs | 214x faster than ccusage (Rust + parallel scan + cache) |
+| Don't want to upload logs to a cloud | 100% local parsing, no data leaves your machine |
+| Want to share usage stats | `tu img` generates shareable image cards |
+
 ## Install
+
+### npm (recommended)
+
+```bash
+npm install -g tokenusage
+```
 
 ### cargo (crates.io)
 
@@ -58,10 +113,10 @@ Fast Rust CLI/TUI/GUI token usage tracker for Codex usage and Claude Code usage.
 cargo install tokenusage --bin tu
 ```
 
-### npm
+### pip (PyPI)
 
 ```bash
-npm install -g tokenusage
+pip install tokenusage
 ```
 
 ### cargo-binstall (prebuilt binary)
@@ -79,6 +134,7 @@ tu
 # Source-specific
 tu codex
 tu claude
+tu antigravity
 
 # Date filter
 tu --since 2026-02-01 --until 2026-02-28
@@ -87,10 +143,16 @@ tu --since 2026-02-01 --until 2026-02-28
 tu weekly --start-of-week monday
 tu monthly
 
-# Live monitor
+# Live monitor (tabs: Codex / Claude / Antigravity)
 tu live
 tu live codex
 tu live claude
+tu live antigravity
+
+# Real-time per-session viewer (htop for tokens)
+tu top
+tu top --active-hours 12    # show sessions active in last 12h
+tu top --active-hours 0     # show all sessions
 
 # GUI dashboard
 tu gui
@@ -101,20 +163,40 @@ tu img day
 tu img week
 ```
 
-## Why tokenusage
+## Benchmark Details
 
-- Faster feedback loop: native Rust + parallel scan/parsing + incremental cache.
-- One dashboard for both Codex and Claude, with merged totals and per-model breakdown.
-- Share-ready image card (`tu img`) for posting your token/cost trend.
-- Works in terminal and desktop GUI without sending your logs to a cloud service.
+**Setup:**
+
+- Machine: Apple M3 Max, macOS 15.6.1
+- `tu` version: `1.2.6` · `ccusage` version: `18.0.8` · `@ccusage/codex` version: `18.0.8`
+- Default mode (no date filters, online pricing, network enabled)
+
+**Codex** — 91 JSONL files, 1.7 GB (`~/.codex/sessions`)
+
+| | `tu codex` | `bunx @ccusage/codex` | Speedup |
+|---|---:|---:|---:|
+| Cold (rebuild cache) | **0.92s** | 20.76s | **22.6x** |
+| Warm (best of 5 / avg of 3) | **0.15s** | 20.76s | **138x** |
+
+**Claude** — 1 521 JSONL files, 2.2 GB (`~/.claude/projects`)
+
+| | `tu claude` | `bunx ccusage` | Speedup |
+|---|---:|---:|---:|
+| Cold (rebuild cache) | **0.73s** | 17.15s | **23.5x** |
+| Warm (best of 5 / avg of 3) | **0.08s** | 17.15s | **214x** |
+
+> Results vary by hardware, filesystem cache state, and log volume.
+
+For a detailed feature comparison, see [tokenusage vs ccusage](https://github.com/hanbu97/tokenusage/blob/main/docs/compare/tokenusage-vs-ccusage.md).
 
 ## FAQ
 
 ### Where does the data come from?
 
-From local log directories only:
+From local log directories and IDE probes:
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+- Antigravity: probed from running IDE language server (no log files needed)
 
 You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
 
@@ -126,34 +208,10 @@ You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
 
 Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
 
-## Benchmark Details
-
-Benchmark setup:
-
-- Machine: Apple M3 Max, macOS 15.6.1
-- Dataset: `~/.codex/sessions` (71 JSONL files, ~537 MB), date range `2025-09-01` to `2026-02-28`
-- `tu` version: `1.1.2`
-- `@ccusage/codex` version: `18.0.8`
-- Both in default mode (online pricing behavior, network enabled)
-
-Results:
-
-| Tool | Command | Time |
-|---|---|---:|
-| `tu` (cold, rebuild cache) | `tu codex --rebuild-cache -s 2025-09-01 -u 2026-02-28` | **0.19s** |
-| `@ccusage/codex` (single run) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.56s** |
-| `tu` (warm, avg of 10 runs) | `tu codex -s 2025-09-01 -u 2026-02-28` | **0.052s** |
-| `@ccusage/codex` (warm, avg of 10 runs) | `ccusage-codex daily -s 2025-09-01 -u 2026-02-28` | **6.819s** |
-
-- Cold-run speedup: about **34.5x**
-- Warm-run speedup: about **131.1x**
-
-> Notes: results vary by hardware, filesystem cache state, and log volume.
-
 ## Command Overview
 
 ```text
-tu [daily|codex|claude|monthly|weekly|img|session|blocks|live|statusline|gui]
+tu [daily|codex|claude|antigravity|monthly|weekly|img|session|blocks|live|statusline|gui]
 ```
 
 Useful commands:

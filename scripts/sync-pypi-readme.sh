@@ -13,11 +13,19 @@ if [[ "$(uname)" == "Darwin" ]]; then
   sed -i '' \
     -e "s|src=\"docs/|src=\"${RAW_BASE}/docs/|g" \
     -e "s|href=\"docs/|href=\"${RAW_BASE}/docs/|g" \
+    -e "s|src=\"assets/|src=\"${RAW_BASE}/assets/|g" \
+    -e "s|href=\"assets/|href=\"${RAW_BASE}/assets/|g" \
+    -e "s|href=\"\\./LICENSE\"|href=\"${RAW_BASE}/LICENSE\"|g" \
+    -e "s|href=\"\\./README\\.zh-cn\\.md\"|href=\"${RAW_BASE}/README.zh-cn.md\"|g" \
     "${DEST}"
 else
   sed -i \
     -e "s|src=\"docs/|src=\"${RAW_BASE}/docs/|g" \
     -e "s|href=\"docs/|href=\"${RAW_BASE}/docs/|g" \
+    -e "s|src=\"assets/|src=\"${RAW_BASE}/assets/|g" \
+    -e "s|href=\"assets/|href=\"${RAW_BASE}/assets/|g" \
+    -e "s|href=\"\\./LICENSE\"|href=\"${RAW_BASE}/LICENSE\"|g" \
+    -e "s|href=\"\\./README\\.zh-cn\\.md\"|href=\"${RAW_BASE}/README.zh-cn.md\"|g" \
     "${DEST}"
 fi
 

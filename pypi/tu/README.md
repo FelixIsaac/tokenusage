@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
+  <img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
 </p>
 
 <h1 align="center">tokenusage</h1>
 
 <p align="center">
-  <em>Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity</em>
+  <strong>Stop getting throttled without warning. Know your AI coding costs in 0.08s.</strong>
 </p>
 
 <p align="center">
@@ -14,15 +14,35 @@
   <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
   <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
   <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+  <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
 </p>
 
 <p align="center">
-  <strong>214x faster</strong> than ccusage on Claude logs · <strong>138x faster</strong> on Codex logs (warm cache) · <a href="#benchmark-details">See benchmark</a>
+  English | <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/README.zh-cn.md">中文</a>
+</p>
+
+---
+
+### Install in one line
+
+```bash
+npm i -g tokenusage        # or: cargo install tokenusage --bin tu
+```
+
+### Run it
+
+```bash
+tu                          # daily cost report in 0.08s
+```
+
+---
+
+<p align="center">
+  <strong>214x faster</strong> than ccusage on Claude logs · <strong>138x faster</strong> on Codex logs · <a href="#benchmark-details">See benchmark</a>
 </p>
 
 <p align="center">
-  <a href="#screenshots">Screenshots</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#why-tokenusage">Why</a> · <a href="#benchmark-details">Benchmark</a>
+  If <code>tokenusage</code> saves you time, <a href="https://github.com/hanbu97/tokenusage">give it a star</a> — it directly helps other Codex and Claude users find it.
 </p>
 
 ---
@@ -32,13 +52,13 @@
 <table align="center" width="100%">
   <tr>
     <td valign="top" width="50%">
-      <code>tu</code><br/>
+      <code>tu</code> — daily report<br/>
       <p align="center">
         <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
-      <code>tu gui</code><br/>
+      <code>tu gui</code> — desktop dashboard<br/>
       <p align="center">
         <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
@@ -46,13 +66,13 @@
   </tr>
   <tr>
     <td valign="top" width="50%">
-      <code>tu img day</code><br/>
+      <code>tu img day</code> — shareable card<br/>
       <p align="center">
         <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
-      <code>tu img week</code><br/>
+      <code>tu img week</code> — weekly card<br/>
       <p align="center">
         <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
@@ -60,7 +80,7 @@
   </tr>
   <tr>
     <td valign="top" colspan="2">
-      <code>tu live</code><br/>
+      <code>tu live</code> — real-time TUI monitor<br/>
       <p align="center">
         <a href="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
@@ -68,18 +88,29 @@
   </tr>
 </table>
 
+## Why tokenusage
+
+| Problem | tokenusage solution |
+|---|---|
+| Hit rate limits mid-refactor, no warning | `tu live` shows usage in real-time |
+| No idea what AI coding costs per day | `tu` gives daily cost breakdown in 0.08s |
+| Codex + Claude logs in separate places | One merged dashboard across all sources |
+| Existing tools are slow on large logs | 214x faster than ccusage (Rust + parallel scan + cache) |
+| Don't want to upload logs to a cloud | 100% local parsing, no data leaves your machine |
+| Want to share usage stats | `tu img` generates shareable image cards |
+
 ## Install
+
+### npm (recommended)
+
+```bash
+npm install -g tokenusage
+```
 
 ### cargo (crates.io)
 
 ```bash
 cargo install tokenusage --bin tu
-```
-
-### npm
-
-```bash
-npm install -g tokenusage
 ```
 
 ### pip (PyPI)
@@ -132,32 +163,6 @@ tu img day
 tu img week
 ```
 
-## Why tokenusage
-
-- Faster feedback loop: native Rust + parallel scan/parsing + incremental cache.
-- One dashboard for Codex, Claude, and Antigravity, with merged totals and per-model breakdown.
-- Share-ready image card (`tu img`) for posting your token/cost trend.
-- Works in terminal and desktop GUI without sending your logs to a cloud service.
-
-## FAQ
-
-### Where does the data come from?
-
-From local log directories and IDE probes:
-- Claude: `~/.config/claude/projects`, `~/.claude/projects`
-- Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
-- Antigravity: probed from running IDE language server (no log files needed)
-
-You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
-
-### How is cost estimated?
-
-`tu` uses OpenRouter pricing when available, caches it for 6 hours, and falls back to built-in offline rates when network pricing is unavailable.
-
-### Is my data private?
-
-Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
-
 ## Benchmark Details
 
 **Setup:**
@@ -181,6 +186,27 @@ Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless
 | Warm (best of 5 / avg of 3) | **0.08s** | 17.15s | **214x** |
 
 > Results vary by hardware, filesystem cache state, and log volume.
+
+For a detailed feature comparison, see [tokenusage vs ccusage](docs/compare/tokenusage-vs-ccusage.md).
+
+## FAQ
+
+### Where does the data come from?
+
+From local log directories and IDE probes:
+- Claude: `~/.config/claude/projects`, `~/.claude/projects`
+- Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+- Antigravity: probed from running IDE language server (no log files needed)
+
+You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
+
+### How is cost estimated?
+
+`tu` uses OpenRouter pricing when available, caches it for 6 hours, and falls back to built-in offline rates when network pricing is unavailable.
+
+### Is my data private?
+
+Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
 
 ## Command Overview
 
