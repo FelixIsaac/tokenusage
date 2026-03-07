@@ -1261,15 +1261,17 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
         // Render
         render_top_frame(
             &mut session,
-            &sessions_display,
-            &rates,
-            &total_display,
-            total_rate,
-            sort_key,
-            &tz,
-            live_runtime.is_none(),
-            show_all,
-            merge_projects,
+            &TopFrameState {
+                sessions: &sessions_display,
+                rates: &rates,
+                total: &total_display,
+                total_rate,
+                sort_key,
+                tz: &tz,
+                loading: live_runtime.is_none(),
+                show_all,
+                merge_projects,
+            },
         )?;
 
         // Handle input (non-blocking)
@@ -1306,18 +1308,33 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
     Ok(())
 }
 
-fn render_top_frame(
-    session: &mut BlocksLiveSession,
-    sessions: &[TopSession],
-    rates: &HashMap<String, f64>,
-    total: &TokenCounts,
+struct TopFrameState<'a> {
+    sessions: &'a [TopSession],
+    rates: &'a HashMap<String, f64>,
+    total: &'a TokenCounts,
     total_rate: f64,
     sort_key: TopSortKey,
-    tz: &TimeZoneMode,
+    tz: &'a TimeZoneMode,
     loading: bool,
     show_all: bool,
     merge_projects: bool,
+}
+
+fn render_top_frame(
+    session: &mut BlocksLiveSession,
+    state: &TopFrameState<'_>,
 ) -> Result<()> {
+    let TopFrameState {
+        sessions,
+        rates,
+        total,
+        total_rate,
+        sort_key,
+        tz,
+        loading,
+        show_all,
+        merge_projects,
+    } = state;
     session.terminal.draw(|frame| {
         let area = frame.area();
 
@@ -1332,8 +1349,8 @@ fn render_top_frame(
             .split(area);
 
         // Header
-        let status = if loading { " [loading...]" } else { "" };
-        let mode = if show_all { "all" } else { "active" };
+        let status = if *loading { " [loading...]" } else { "" };
+        let mode = if *show_all { "all" } else { "active" };
         let header_text = format!(
             " tokenusage top — {} sessions ({mode}) | ${:.2} | {:.0} tok/min{}",
             sessions.len(),
@@ -1470,7 +1487,7 @@ fn render_top_frame(
             if i > 0 {
                 footer_spans.push(Span::raw("  "));
             }
-            let style = if *sk == sort_key {
+            let style = if *sk == *sort_key {
                 Style::default()
                     .fg(TuiColor::Cyan)
                     .add_modifier(Modifier::BOLD)
@@ -1479,12 +1496,12 @@ fn render_top_frame(
             };
             footer_spans.push(Span::styled(format!("[{key}]{label}"), style));
         }
-        let all_label = if show_all { "active" } else { "all" };
+        let all_label = if *show_all { "active" } else { "all" };
         footer_spans.push(Span::styled(
             format!("  [a]{all_label}"),
             Style::default().fg(TuiColor::DarkGray),
         ));
-        let merge_style = if merge_projects {
+        let merge_style = if *merge_projects {
             Style::default()
                 .fg(TuiColor::Cyan)
                 .add_modifier(Modifier::BOLD)
