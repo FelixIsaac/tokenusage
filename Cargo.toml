@@ -1,6 +1,6 @@
 [package]
 name = "tokenusage"
-version = "1.3.2"
+version = "1.3.3"
 edition = "2024"
 description = "Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity usage."
 license = "MIT"
