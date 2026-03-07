@@ -1320,10 +1320,7 @@ struct TopFrameState<'a> {
     merge_projects: bool,
 }
 
-fn render_top_frame(
-    session: &mut BlocksLiveSession,
-    state: &TopFrameState<'_>,
-) -> Result<()> {
+fn render_top_frame(session: &mut BlocksLiveSession, state: &TopFrameState<'_>) -> Result<()> {
     let TopFrameState {
         sessions,
         rates,
