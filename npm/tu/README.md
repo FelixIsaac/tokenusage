@@ -97,6 +97,7 @@ tu                          # daily cost report in 0.08s
 | Codex + Claude logs in separate places | One merged dashboard across all sources |
 | Existing tools are slow on large logs | 214x faster than ccusage (Rust + parallel scan + cache) |
 | Don't want to upload logs to a cloud | 100% local parsing, no data leaves your machine |
+| Want coding-time context, not just raw tokens | `tu` keeps the classic token table by default; `--with-activity` opt-in adds coding time and tokens/hour |
 | Want to share usage stats | `tu img` generates shareable image cards |
 
 ## Install
@@ -129,7 +130,8 @@ cargo binstall tokenusage --no-confirm
 
 ```bash
 # Daily report (default)
-tu
+tu                          # classic merged token report
+tu --tui                    # same report in terminal UI
 
 # Source-specific
 tu codex
@@ -142,6 +144,22 @@ tu --since 2026-02-01 --until 2026-02-28
 # Weekly / monthly
 tu weekly --start-of-week monday
 tu monthly
+
+# Native time views inferred from local AI usage
+tu today
+tu activity
+tu activity --days 14
+tu activity --project tokenusage
+
+# Add locally inferred coding activity columns (Coding / Tok/hr)
+tu --with-activity
+tu --with-activity --tui
+tu live --with-activity
+
+# Native local heartbeat collector
+tu heartbeat watch .
+tu heartbeat stats
+tu heartbeat ping src/main.rs --write
 
 # Live monitor (tabs: Codex / Claude / Antigravity)
 tu live
@@ -204,6 +222,21 @@ You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
 
 `tu` uses OpenRouter pricing when available, caches it for 6 hours, and falls back to built-in offline rates when network pricing is unavailable.
 
+### How does `--with-activity` work?
+
+`tu` infers coding activity locally from your machine. By default it clusters nearby AI usage events into active windows. If you enable the native heartbeat collector (`tu heartbeat watch ...`), `tu` will prefer heartbeat-backed activity on days with sufficient heartbeat coverage and fall back to token-event inference elsewhere.
+
+From that local activity signal, `tu` derives:
+
+- coding time
+- tokens per coding hour
+- cost per coding hour
+- project / language / source breakdowns
+
+The dedicated time views (`tu today`, `tu activity`) enable this automatically. `--with-activity` adds the same local activity context to daily/weekly/monthly reports and `tu live`.
+
+By default, `tu` keeps the original merged token report layout. The extra `Coding` / `Tok/hr` columns only appear when activity context is explicitly enabled with `--with-activity`, or when you use the dedicated time views.
+
 ### Is my data private?
 
 Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
@@ -211,13 +244,19 @@ Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless
 ## Command Overview
 
 ```text
-tu [daily|codex|claude|antigravity|monthly|weekly|img|session|blocks|live|statusline|gui]
+tu [daily|today|activity|heartbeat|codex|claude|antigravity|monthly|weekly|img|session|blocks|live|top|statusline|gui]
 ```
 
 Useful commands:
+- `tu --tui`
+- `tu --with-activity --tui`
 - `tu daily --tui`
 - `tu daily --json`
 - `tu daily --jq '.rows[0]'`
+- `tu today`
+- `tu activity --days 14`
+- `tu heartbeat watch .`
+- `tu heartbeat stats`
 - `tu blocks --active`
 - `tu blocks --live`
 - `tu live`
