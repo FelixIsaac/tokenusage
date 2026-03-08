@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::cli::{
-    BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod, ImgArgs,
-    ImgPeriod, LiveArgs, MonthlyArgs, SessionArgs, SortOrder, StatuslineArgs, VisualBurnRate,
-    WeekStart, WeeklyArgs,
+    ActivityArgs, BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod,
+    ImgArgs, ImgPeriod, LiveArgs, MonthlyArgs, SessionArgs, SortOrder, StatuslineArgs, TodayArgs,
+    VisualBurnRate, WeekStart, WeeklyArgs,
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -18,6 +18,8 @@ struct ConfigFile {
 #[derive(Debug, Default, Deserialize)]
 struct CommandConfigs {
     daily: Option<DailyConfig>,
+    today: Option<TodayConfig>,
+    activity: Option<ActivityConfig>,
     codex: Option<DailyConfig>,
     claude: Option<DailyConfig>,
     monthly: Option<MonthlyConfig>,
@@ -66,6 +68,8 @@ struct CommonConfig {
     rebuild_cache: Option<bool>,
     #[serde(alias = "pricingFile")]
     pricing_file: Option<String>,
+    #[serde(alias = "withActivity")]
+    with_activity: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -75,6 +79,22 @@ struct DailyConfig {
     tui: Option<bool>,
     instances: Option<bool>,
     project: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TodayConfig {
+    #[serde(flatten)]
+    common: CommonConfig,
+    project: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ActivityConfig {
+    #[serde(flatten)]
+    common: CommonConfig,
+    project: Option<String>,
+    days: Option<u32>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -189,6 +209,23 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Daily(args)
         }
+        Commands::Today(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(today_cfg) = config.commands.as_ref().and_then(|c| c.today.as_ref()) {
+                apply_common_config(&mut args.common, Some(&today_cfg.common));
+                apply_today_config(&mut args, today_cfg);
+            }
+            Commands::Today(args)
+        }
+        Commands::Activity(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(activity_cfg) = config.commands.as_ref().and_then(|c| c.activity.as_ref()) {
+                apply_common_config(&mut args.common, Some(&activity_cfg.common));
+                apply_activity_config(&mut args, activity_cfg);
+            }
+            Commands::Activity(args)
+        }
+        Commands::Heartbeat(args) => Commands::Heartbeat(args),
         Commands::Codex(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
@@ -296,6 +333,9 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
 fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
     let explicit = match command {
         Commands::Daily(args) => args.common.config.as_deref(),
+        Commands::Today(args) => args.common.config.as_deref(),
+        Commands::Activity(args) => args.common.config.as_deref(),
+        Commands::Heartbeat(_) => None,
         Commands::Codex(args) => args.common.config.as_deref(),
         Commands::Claude(args) => args.common.config.as_deref(),
         Commands::Antigravity(args) => args.config.as_deref(),
@@ -375,6 +415,7 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_false(&mut common.no_incremental_cache, cfg.no_incremental_cache);
     merge_if_false(&mut common.rebuild_cache, cfg.rebuild_cache);
     merge_if_none(&mut common.pricing_file, &cfg.pricing_file);
+    merge_if_false(&mut common.with_activity, cfg.with_activity);
 }
 
 fn apply_daily_config(args: &mut DailyArgs, cfg: &DailyConfig) {
@@ -384,6 +425,16 @@ fn apply_daily_config(args: &mut DailyArgs, cfg: &DailyConfig) {
 }
 
 fn apply_monthly_config(_args: &mut MonthlyArgs, _cfg: &MonthlyConfig) {}
+
+fn apply_today_config(args: &mut TodayArgs, cfg: &TodayConfig) {
+    merge_if_none(&mut args.project, &cfg.project);
+}
+
+fn apply_activity_config(args: &mut ActivityArgs, cfg: &ActivityConfig) {
+    merge_if_none(&mut args.project, &cfg.project);
+    merge_if_u32_default(&mut args.days, cfg.days, 7);
+    merge_if_usize_default(&mut args.limit, cfg.limit, 5);
+}
 
 fn apply_weekly_config(args: &mut WeeklyArgs, cfg: &WeeklyConfig) {
     merge_if_default(

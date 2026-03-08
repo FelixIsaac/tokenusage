@@ -24,7 +24,7 @@ enum Message {
     ChartBarHovered(ChartKind, usize),
     ChartBarHoverCleared(ChartKind),
     Ignore,
-    ReportLoaded(Result<DailyReport, String>),
+    ReportLoaded(Box<Result<DailyReport, String>>),
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +135,9 @@ pub(crate) fn run_gui(args: GuiArgs) -> Result<()> {
         .antialiasing(true)
         .run_with(|| {
             let state = GuiState::from_args(args);
-            let task = Task::perform(load_report(state.request()), Message::ReportLoaded);
+            let task = Task::perform(load_report(state.request()), |result| {
+                Message::ReportLoaded(Box::new(result))
+            });
             (state, task)
         })
         .map_err(|err| anyhow!("failed to run GUI: {err}"))
@@ -182,7 +184,9 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.hovered_cost_bar = None;
             state.loading = true;
             state.error = None;
-            Task::perform(load_report(state.request()), Message::ReportLoaded)
+            Task::perform(load_report(state.request()), |result| {
+                Message::ReportLoaded(Box::new(result))
+            })
         }
         Message::UseMonthly => {
             if state.period == ReportPeriod::Monthly {
@@ -193,7 +197,9 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.hovered_cost_bar = None;
             state.loading = true;
             state.error = None;
-            Task::perform(load_report(state.request()), Message::ReportLoaded)
+            Task::perform(load_report(state.request()), |result| {
+                Message::ReportLoaded(Box::new(result))
+            })
         }
         Message::UseWeekly => {
             if state.period == ReportPeriod::Weekly {
@@ -204,14 +210,18 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.hovered_cost_bar = None;
             state.loading = true;
             state.error = None;
-            Task::perform(load_report(state.request()), Message::ReportLoaded)
+            Task::perform(load_report(state.request()), |result| {
+                Message::ReportLoaded(Box::new(result))
+            })
         }
         Message::Refresh => {
             state.loading = true;
             state.error = None;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            Task::perform(load_report(state.request()), Message::ReportLoaded)
+            Task::perform(load_report(state.request()), |result| {
+                Message::ReportLoaded(Box::new(result))
+            })
         }
         Message::ChartBarHovered(kind, index) => {
             match kind {
@@ -229,6 +239,7 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
         }
         Message::Ignore => Task::none(),
         Message::ReportLoaded(result) => {
+            let result = *result;
             state.loading = false;
             match result {
                 Ok(report) => {

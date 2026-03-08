@@ -1,6 +1,10 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 
+use crate::heartbeat::{
+    DEFAULT_HEARTBEAT_PULSE_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, HeartbeatEntityKind,
+};
+
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SortOrder {
@@ -67,6 +71,12 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Daily(DailyArgs),
+    #[command(about = "Daily coding activity view inferred from local usage")]
+    Today(TodayArgs),
+    #[command(about = "Coding activity view with per-day breakdowns")]
+    Activity(ActivityArgs),
+    #[command(about = "Native local heartbeat collector and stats")]
+    Heartbeat(HeartbeatArgs),
     Codex(DailyArgs),
     Claude(DailyArgs),
     Antigravity(AntigravityArgs),
@@ -143,6 +153,8 @@ pub(crate) struct CommonArgs {
     pub(crate) rebuild_cache: bool,
     #[arg(long, help = "Optional pricing override JSON file")]
     pub(crate) pricing_file: Option<String>,
+    #[arg(long, help = "Enrich reports with locally inferred coding activity")]
+    pub(crate) with_activity: bool,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -155,6 +167,118 @@ pub(crate) struct DailyArgs {
     pub(crate) instances: bool,
     #[arg(long, short = 'p', help = "Filter specific project")]
     pub(crate) project: Option<String>,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct TodayArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct ActivityArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+    #[arg(
+        long,
+        default_value_t = 7,
+        help = "Default trailing days when --since/--until are omitted"
+    )]
+    pub(crate) days: u32,
+    #[arg(long, default_value_t = 5, help = "Breakdown rows per section")]
+    pub(crate) limit: usize,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct HeartbeatArgs {
+    #[command(subcommand)]
+    pub(crate) command: HeartbeatCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum HeartbeatCommand {
+    Ping(HeartbeatPingArgs),
+    Watch(HeartbeatWatchArgs),
+    Stats(HeartbeatStatsArgs),
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct HeartbeatPingArgs {
+    #[arg(help = "Entity path or identifier")]
+    pub(crate) entity: Option<String>,
+    #[arg(long, value_enum, default_value_t = HeartbeatEntityKind::File)]
+    pub(crate) kind: HeartbeatEntityKind,
+    #[arg(long, short = 'p', help = "Override project name")]
+    pub(crate) project: Option<String>,
+    #[arg(long, help = "Override language name")]
+    pub(crate) language: Option<String>,
+    #[arg(long, help = "Optional VCS branch name")]
+    pub(crate) branch: Option<String>,
+    #[arg(long, default_value = "manual", help = "Collector origin label")]
+    pub(crate) origin: String,
+    #[arg(long, help = "Mark this heartbeat as a write event")]
+    pub(crate) write: bool,
+    #[arg(long, help = "Override heartbeat timestamp (RFC3339)")]
+    pub(crate) time: Option<String>,
+    #[arg(long, default_value_t = DEFAULT_HEARTBEAT_PULSE_SECS, help = "Pulse length in seconds")]
+    pub(crate) pulse_seconds: u16,
+    #[arg(long, default_value_t = DEFAULT_HEARTBEAT_TIMEOUT_SECS, help = "Idle timeout in seconds")]
+    pub(crate) timeout_seconds: u16,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct HeartbeatWatchArgs {
+    #[arg(
+        value_name = "PATH",
+        help = "Paths to watch recursively (default: current dir)"
+    )]
+    pub(crate) paths: Vec<String>,
+    #[arg(long, short = 'p', help = "Override project name")]
+    pub(crate) project: Option<String>,
+    #[arg(long, default_value = "watch", help = "Collector origin label")]
+    pub(crate) origin: String,
+    #[arg(long, default_value_t = DEFAULT_HEARTBEAT_PULSE_SECS, help = "Minimum seconds between heartbeats per entity")]
+    pub(crate) pulse_seconds: u16,
+    #[arg(long, default_value_t = 750, help = "Watcher debounce in milliseconds")]
+    pub(crate) debounce_ms: u64,
+    #[arg(long, help = "Only emit write/modify heartbeats")]
+    pub(crate) writes_only: bool,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct HeartbeatStatsArgs {
+    #[arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")]
+    pub(crate) since: Option<String>,
+    #[arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")]
+    pub(crate) until: Option<String>,
+    #[arg(
+        long,
+        default_value_t = 7,
+        help = "Trailing days when no explicit date range is given"
+    )]
+    pub(crate) days: u32,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+    #[arg(
+        long,
+        short = 'z',
+        help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"
+    )]
+    pub(crate) timezone: Option<String>,
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+    #[arg(
+        long,
+        short = 'q',
+        help = "Process JSON output with jq expression (implies --json)"
+    )]
+    pub(crate) jq: Option<String>,
+    #[arg(long, default_value_t = 5, help = "Breakdown rows per section")]
+    pub(crate) limit: usize,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -399,9 +523,9 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     let should_insert_daily = match first {
         None => true,
         Some(
-            "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "monthly" | "weekly" | "img"
-            | "session" | "blocks" | "live" | "statusline" | "gui" | "codex" | "claude"
-            | "antigravity",
+            "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
+            | "heartbeat" | "monthly" | "weekly" | "img" | "session" | "blocks" | "live" | "top"
+            | "statusline" | "gui" | "codex" | "claude" | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,

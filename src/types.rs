@@ -96,6 +96,18 @@ impl TokenCounts {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct ActivitySummary {
+    pub(crate) total_seconds: u64,
+    pub(crate) text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) top_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) top_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) top_source: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UsageEvent {
     pub(crate) timestamp: DateTime<Utc>,
@@ -422,12 +434,16 @@ pub(crate) struct DailyRow {
     pub(crate) totals: TokenCounts,
     pub(crate) models: BTreeMap<String, TokenCounts>,
     pub(crate) sources: BTreeMap<String, TokenCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) activity: Option<ActivitySummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DailyReport {
     pub(crate) daily: Vec<DailyRow>,
     pub(crate) totals: TokenCounts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) activity_totals: Option<ActivitySummary>,
     pub(crate) stats: ParseStats,
 }
 

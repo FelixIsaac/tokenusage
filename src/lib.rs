@@ -1,6 +1,8 @@
+mod activity;
 mod cli;
 mod config;
 mod gui;
+mod heartbeat;
 mod output;
 mod pipeline;
 mod share;
@@ -19,6 +21,9 @@ pub async fn run() -> Result<()> {
 
     match command {
         Commands::Daily(args) => pipeline::run_daily(args).await,
+        Commands::Today(args) => pipeline::run_today(args).await,
+        Commands::Activity(args) => pipeline::run_activity(args).await,
+        Commands::Heartbeat(args) => heartbeat::run(args).await,
         Commands::Codex(mut args) => {
             args.common.no_claude = true;
             args.common.no_codex = false;

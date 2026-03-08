@@ -92,6 +92,7 @@ tu                          # 0.08 秒出日报
 | Codex 和 Claude 日志分散在不同目录 | 一个统一仪表盘，合并所有数据源 |
 | 现有工具在大日志上很慢 | 比 ccusage 快 214 倍（Rust + 并行扫描 + 缓存） |
 | 不想把日志上传到云端 | 100% 本地解析，数据不离开你的电脑 |
+| 不只想看 token，还想看编码时间与效率 | 默认 `tu` 保持经典 token 报表；`--with-activity` 按需增加 coding time 与 tokens/hour |
 | 想分享使用统计 | `tu img` 生成可分享的图片卡 |
 
 ## 安装
@@ -124,7 +125,8 @@ cargo binstall tokenusage --no-confirm
 
 ```bash
 # 日报（默认）
-tu
+tu                          # 经典合并 token 报表
+tu --tui                    # 同一份报表的终端 UI
 
 # 指定数据源
 tu codex
@@ -137,6 +139,22 @@ tu --since 2026-02-01 --until 2026-02-28
 # 周报 / 月报
 tu weekly --start-of-week monday
 tu monthly
+
+# 基于本地 AI 使用记录推断的时间视图
+tu today
+tu activity
+tu activity --days 14
+tu activity --project tokenusage
+
+# 给合并后的 token 报表增加 activity 列（Coding / Tok/hr）
+tu --with-activity
+tu --with-activity --tui
+tu live --with-activity
+
+# 原生本地 heartbeat 采集层
+tu heartbeat watch .
+tu heartbeat stats
+tu heartbeat ping src/main.rs --write
 
 # 实时监控（标签页: Codex / Claude / Antigravity）
 tu live
@@ -194,6 +212,21 @@ tu img week
 ### 如何估算费用?
 
 `tu` 优先使用 OpenRouter 在线定价（缓存 6 小时），网络不可用时回退到内置离线费率。
+
+### `--with-activity` 是怎么工作的?
+
+`tu` 会直接从本地机器推断编码活跃时间。默认情况下它会把相近的 AI usage 事件聚合成活跃窗口；如果你启用了原生 heartbeat 采集层（`tu heartbeat watch ...`），那么在 heartbeat 覆盖足够的日期上会优先使用 heartbeat，在其他日期回退到 token 事件推断。
+
+基于这套本地 activity 信号，`tu` 会得到：
+
+- coding time
+- tokens per coding hour
+- cost per coding hour
+- project / language / source breakdowns
+
+专门的时间视图命令 `tu today` / `tu activity` 会自动启用这一能力。`--with-activity` 会把同一套本地 activity 上下文合并进日/周/月报表和 `tu live`。
+
+默认情况下，`tu` 会保持原来的合并 token 报表列布局。只有在显式启用 `--with-activity`，或使用专门的时间视图时，才会显示额外的 `Coding` / `Tok/hr` 列。
 
 ### 数据隐私安全吗?
 

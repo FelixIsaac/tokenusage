@@ -12,6 +12,10 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
+use comfy_table::{
+    Attribute, Cell as TableCell, Color as TableColor, ContentArrangement, Row as TableRow,
+    Table as TextTable, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
+};
 use crossbeam_channel::{Receiver, bounded};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -20,25 +24,35 @@ use crossterm::terminal::{
 };
 use ignore::WalkBuilder;
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color as TuiColor, Modifier, Style};
+use ratatui::symbols;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{
+    Axis, Block, Borders, Cell, Chart, Dataset, Gauge, GraphType, Paragraph, Row, Table, Wrap,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use terminal_size::{Width, terminal_size};
 use tokio::fs;
 
+use crate::activity::{
+    ActivityBreakdownStat, ActivityDataset, ActivityHourlyBucket, activity_enabled,
+    fetch_activity_dataset, format_activity_duration,
+};
 use crate::cli::{
-    AntigravityArgs, BlocksArgs, CommonArgs, CostSource, DailyArgs, MonthlyArgs, SessionArgs,
-    SortOrder, StatuslineArgs, TopArgs, VisualBurnRate, WeekStart, WeeklyArgs,
+    ActivityArgs, AntigravityArgs, BlocksArgs, CommonArgs, CostSource, DailyArgs, MonthlyArgs,
+    SessionArgs, SortOrder, StatuslineArgs, TodayArgs, TopArgs, VisualBurnRate, WeekStart,
+    WeeklyArgs,
 };
 use crate::output::{print_report_table_with_options, run_report_tui};
 use crate::types::{
-    CodexParseState, CodexRawUsage, DailyReport, DailyRow, DateFilter, DiscoveredFile,
-    LEGACY_CODEX_FALLBACK_MODEL, ParseLineResult, ParseStats, ParseStatsAtomic, ParsedLine,
-    PricingRate, PricingTable, SourceConfig, SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
+    ActivitySummary, CodexParseState, CodexRawUsage, DailyReport, DailyRow, DateFilter,
+    DiscoveredFile, LEGACY_CODEX_FALLBACK_MODEL, ParseLineResult, ParseStats, ParseStatsAtomic,
+    ParsedLine, PricingRate, PricingTable, SourceConfig, SourceKind, TokenCounts, UsageAccumulator,
+    UsageEvent,
 };
 
 #[derive(Debug, Clone)]
@@ -395,6 +409,8 @@ struct LiveFrameContext<'a> {
     today_totals: TokenCounts,
     last_30d_totals: TokenCounts,
     last_30d_active_days: u32,
+    today_activity: Option<ActivitySummary>,
+    last_30d_activity: Option<ActivitySummary>,
     active: Option<&'a ActiveBlockSummary>,
     active_tab: LiveTab,
 }
@@ -414,6 +430,8 @@ impl<'a> LiveFrameContext<'a> {
         today_totals: TokenCounts,
         last_30d_totals: TokenCounts,
         last_30d_active_days: u32,
+        today_activity: Option<ActivitySummary>,
+        last_30d_activity: Option<ActivitySummary>,
         active: Option<&'a ActiveBlockSummary>,
         active_tab: LiveTab,
     ) -> Self {
@@ -439,6 +457,8 @@ impl<'a> LiveFrameContext<'a> {
             today_totals,
             last_30d_totals,
             last_30d_active_days,
+            today_activity,
+            last_30d_activity,
             active,
             active_tab,
         }
@@ -464,6 +484,104 @@ pub(crate) enum ReportPeriod {
     Daily,
     Monthly,
     Weekly,
+}
+
+async fn enrich_rows_with_activity(
+    common: &CommonArgs,
+    period: ReportPeriod,
+    instances: bool,
+    tz: &TimeZoneMode,
+    project_filter: Option<&str>,
+    events: &[UsageEvent],
+    mut rows: Vec<DailyRow>,
+) -> Result<(Vec<DailyRow>, Option<ActivitySummary>)> {
+    if !activity_enabled(common) || rows.is_empty() {
+        return Ok((rows, None));
+    }
+
+    let Some(dataset) = fetch_activity_dataset(common, tz, events, project_filter).await? else {
+        return Ok((rows, None));
+    };
+
+    for row in &mut rows {
+        row.activity = activity_summary_for_row(&dataset, period, instances, &row.date);
+    }
+
+    let totals = report_date_bounds(events, tz)
+        .and_then(|(range_start, range_end)| dataset.summary_for_range(range_start, range_end));
+
+    Ok((rows, totals))
+}
+
+fn report_date_bounds(events: &[UsageEvent], tz: &TimeZoneMode) -> Option<(NaiveDate, NaiveDate)> {
+    let mut min_day: Option<NaiveDate> = None;
+    let mut max_day: Option<NaiveDate> = None;
+
+    for event in events {
+        let day = local_date(event.timestamp, tz);
+        min_day = Some(match min_day {
+            Some(current) => current.min(day),
+            None => day,
+        });
+        max_day = Some(match max_day {
+            Some(current) => current.max(day),
+            None => day,
+        });
+    }
+
+    Some((min_day?, max_day?))
+}
+
+fn activity_summary_for_row(
+    dataset: &ActivityDataset,
+    period: ReportPeriod,
+    instances: bool,
+    key: &str,
+) -> Option<ActivitySummary> {
+    if instances && period == ReportPeriod::Daily {
+        let (project_name, day) = parse_instance_day_key(key)?;
+        return dataset.project_summary_for_day(day, project_name);
+    }
+
+    match period {
+        ReportPeriod::Daily => {
+            let day = NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()?;
+            dataset.summary_for_day(day)
+        }
+        ReportPeriod::Weekly => {
+            let start = NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()?;
+            let end = start
+                .checked_add_signed(chrono::TimeDelta::days(6))
+                .unwrap_or(start);
+            dataset.summary_for_range(start, end)
+        }
+        ReportPeriod::Monthly => {
+            let (start, end) = parse_month_bounds(key)?;
+            dataset.summary_for_range(start, end)
+        }
+    }
+}
+
+fn parse_instance_day_key(key: &str) -> Option<(&str, NaiveDate)> {
+    let (project_name, day_text) = key.rsplit_once(" | ")?;
+    let day = NaiveDate::parse_from_str(day_text, "%Y-%m-%d").ok()?;
+    Some((project_name, day))
+}
+
+fn parse_month_bounds(key: &str) -> Option<(NaiveDate, NaiveDate)> {
+    let (year_text, month_text) = key.split_once('-')?;
+    let year = year_text.parse::<i32>().ok()?;
+    let month = month_text.parse::<u32>().ok()?;
+    let start = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)?
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)?
+    };
+    let end = next
+        .checked_sub_signed(chrono::TimeDelta::days(1))
+        .unwrap_or(start);
+    Some((start, end))
 }
 
 const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
@@ -735,7 +853,18 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
         }
     });
 
-    let report = build_report_from_rows(rows, loaded.stats);
+    let (rows, activity_totals) = enrich_rows_with_activity(
+        &args.common,
+        ReportPeriod::Daily,
+        args.instances,
+        &tz,
+        args.project.as_deref(),
+        &events,
+        rows,
+    )
+    .await?;
+
+    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
 
     if use_json {
         emit_json(&report, args.common.jq.as_deref())
@@ -758,18 +887,31 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
         format!("{:04}-{:02}", day.year(), day.month())
     });
 
-    let report = build_report_from_rows(rows, loaded.stats);
+    let (rows, activity_totals) = enrich_rows_with_activity(
+        &args.common,
+        ReportPeriod::Monthly,
+        false,
+        &tz,
+        None,
+        &loaded.events,
+        rows,
+    )
+    .await?;
+
+    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
 
     if use_json {
         #[derive(Serialize)]
         struct MonthlyOut {
             monthly: Vec<DailyRow>,
             totals: TokenCounts,
+            activity_totals: Option<ActivitySummary>,
             stats: ParseStats,
         }
         let out = MonthlyOut {
             monthly: report.daily,
             totals: report.totals,
+            activity_totals: report.activity_totals,
             stats: report.stats,
         };
         emit_json(&out, args.common.jq.as_deref())
@@ -777,6 +919,7 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
         let show = DailyReport {
             daily: report.daily,
             totals: report.totals,
+            activity_totals: report.activity_totals,
             stats: report.stats,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
@@ -796,18 +939,31 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
         format!("{}", start.format("%Y-%m-%d"))
     });
 
-    let report = build_report_from_rows(rows, loaded.stats);
+    let (rows, activity_totals) = enrich_rows_with_activity(
+        &args.common,
+        ReportPeriod::Weekly,
+        false,
+        &tz,
+        None,
+        &loaded.events,
+        rows,
+    )
+    .await?;
+
+    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
 
     if use_json {
         #[derive(Serialize)]
         struct WeeklyOut {
             weekly: Vec<DailyRow>,
             totals: TokenCounts,
+            activity_totals: Option<ActivitySummary>,
             stats: ParseStats,
         }
         let out = WeeklyOut {
             weekly: report.daily,
             totals: report.totals,
+            activity_totals: report.activity_totals,
             stats: report.stats,
         };
         emit_json(&out, args.common.jq.as_deref())
@@ -815,12 +971,1239 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
         let show = DailyReport {
             daily: report.daily,
             totals: report.totals,
+            activity_totals: report.activity_totals,
             stats: report.stats,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
         print_debug(&show.stats, &args.common);
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ActivityOverview {
+    start: String,
+    end: String,
+    days_in_range: u32,
+    active_days: u32,
+    totals: TokenCounts,
+    activity: Option<ActivitySummary>,
+    avg_coding_per_day: Option<String>,
+    tokens_per_hour: Option<u64>,
+    cost_per_hour: Option<f64>,
+    top_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TodayHourlyRow {
+    hour: u8,
+    label: String,
+    coding_seconds: u64,
+    coding_text: String,
+    tokens: TokenCounts,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TodayProjectBreakdowns {
+    projects: Vec<ActivityBreakdownStat>,
+    languages: Vec<ActivityBreakdownStat>,
+    sources: Vec<ActivityBreakdownStat>,
+    models: Vec<TokenBreakdownStat>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ActivityRangeBreakdowns {
+    projects: Vec<ActivityBreakdownStat>,
+    languages: Vec<ActivityBreakdownStat>,
+    sources: Vec<ActivityBreakdownStat>,
+    models: Vec<TokenBreakdownStat>,
+}
+
+#[derive(Debug, Clone)]
+struct ActivityReportBuildOptions<'a> {
+    tz: &'a TimeZoneMode,
+    order: &'a SortOrder,
+    start: NaiveDate,
+    end: NaiveDate,
+    stats: ParseStats,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TokenBreakdownStat {
+    name: String,
+    total_tokens: u64,
+    cost_usd: f64,
+    percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TodayOut {
+    date: String,
+    overview: ActivityOverview,
+    hourly: Vec<TodayHourlyRow>,
+    breakdowns: TodayProjectBreakdowns,
+    stats: ParseStats,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ActivityOut {
+    overview: ActivityOverview,
+    daily: Vec<DailyRow>,
+    breakdowns: ActivityRangeBreakdowns,
+    stats: ParseStats,
+}
+
+pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let today = tz.now_date();
+    args.common.with_activity = true;
+    args.common.since = Some(today.to_string());
+    args.common.until = Some(today.to_string());
+
+    let use_json = should_emit_json(&args.common);
+    let loaded = load_usage(&args.common, &tz).await?;
+    let LoadedUsage { events, stats } = loaded;
+    let filtered_events = filter_events_by_project(events, args.project.as_deref());
+    let day_totals = aggregate_token_counts(&filtered_events);
+    let models = token_breakdowns_by_model(&filtered_events, 5);
+
+    let dataset =
+        fetch_activity_dataset(&args.common, &tz, &filtered_events, args.project.as_deref())
+            .await?
+            .unwrap_or_default();
+    let activity = dataset.summary_for_day(today);
+    let hourly_activity = dataset.hourly_buckets_for_day(today, None);
+    let hourly_tokens = aggregate_hourly_token_counts(&filtered_events, today, &tz);
+    let hourly_rows = join_hourly_rows(&hourly_activity, &hourly_tokens);
+    let overview = build_activity_overview(
+        today,
+        today,
+        u32::from(day_totals.total_tokens > 0 || activity.is_some()),
+        &filtered_events,
+        activity.as_ref(),
+    );
+    let breakdowns = TodayProjectBreakdowns {
+        projects: enrich_activity_breakdowns_with_tokens(
+            dataset.project_breakdowns(today, today, 5),
+            &aggregate_usage_totals_by_project(&filtered_events),
+        ),
+        languages: enrich_activity_breakdowns_with_tokens(
+            dataset.language_breakdowns(today, today, 5),
+            &aggregate_usage_totals_by_language(&filtered_events),
+        ),
+        sources: enrich_activity_breakdowns_with_tokens(
+            dataset.source_breakdowns(today, today, 5),
+            &aggregate_usage_totals_by_source(&filtered_events),
+        ),
+        models,
+    };
+
+    if use_json {
+        let out = TodayOut {
+            date: today.to_string(),
+            overview,
+            hourly: hourly_rows,
+            breakdowns,
+            stats,
+        };
+        emit_json(&out, args.common.jq.as_deref())
+    } else {
+        print_today_view(
+            &today.to_string(),
+            &overview,
+            &hourly_rows,
+            &breakdowns,
+            day_totals.total_tokens,
+        );
+        print_debug(&stats, &args.common);
+        Ok(())
+    }
+}
+
+pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    args.common.with_activity = true;
+    apply_default_activity_range(&mut args.common, &tz, args.days)?;
+
+    let start = parse_date_filter(args.common.since.as_deref())?.unwrap_or_else(|| {
+        tz.now_date()
+            .checked_sub_signed(chrono::TimeDelta::days(6))
+            .unwrap_or_else(|| tz.now_date())
+    });
+    let end = parse_date_filter(args.common.until.as_deref())?.unwrap_or_else(|| tz.now_date());
+    let use_json = should_emit_json(&args.common);
+
+    let loaded = load_usage(&args.common, &tz).await?;
+    let LoadedUsage { events, stats } = loaded;
+    let filtered_events = filter_events_by_project(events, args.project.as_deref());
+    let dataset =
+        fetch_activity_dataset(&args.common, &tz, &filtered_events, args.project.as_deref())
+            .await?
+            .unwrap_or_default();
+    let report = build_activity_daily_report(
+        &filtered_events,
+        &dataset,
+        ActivityReportBuildOptions {
+            tz: &tz,
+            order: &args.common.order,
+            start,
+            end,
+            stats: stats.clone(),
+        },
+    );
+    let overview = build_activity_overview(
+        start,
+        end,
+        report.daily.len() as u32,
+        &filtered_events,
+        report.activity_totals.as_ref(),
+    );
+    let breakdowns = ActivityRangeBreakdowns {
+        projects: enrich_activity_breakdowns_with_tokens(
+            dataset.project_breakdowns(start, end, args.limit.max(1)),
+            &aggregate_usage_totals_by_project(&filtered_events),
+        ),
+        languages: enrich_activity_breakdowns_with_tokens(
+            dataset.language_breakdowns(start, end, args.limit.max(1)),
+            &aggregate_usage_totals_by_language(&filtered_events),
+        ),
+        sources: enrich_activity_breakdowns_with_tokens(
+            dataset.source_breakdowns(start, end, args.limit.max(1)),
+            &aggregate_usage_totals_by_source(&filtered_events),
+        ),
+        models: token_breakdowns_by_model(&filtered_events, args.limit.max(1)),
+    };
+
+    if use_json {
+        let out = ActivityOut {
+            overview,
+            daily: report.daily,
+            breakdowns,
+            stats: report.stats,
+        };
+        emit_json(&out, args.common.jq.as_deref())
+    } else {
+        print_activity_overview("Activity", &overview);
+        println!();
+        print_report_table_with_options(&report, args.common.compact, false);
+        print_activity_breakdown_section("Projects", &breakdowns.projects);
+        print_activity_breakdown_section("Languages", &breakdowns.languages);
+        print_source_model_breakdown_section(&breakdowns.sources, &breakdowns.models);
+        print_debug(&report.stats, &args.common);
+        Ok(())
+    }
+}
+
+fn apply_default_activity_range(
+    common: &mut CommonArgs,
+    tz: &TimeZoneMode,
+    days: u32,
+) -> Result<()> {
+    let fallback_days = days.max(1);
+    let today = tz.now_date();
+
+    match (
+        parse_date_filter(common.since.as_deref())?,
+        parse_date_filter(common.until.as_deref())?,
+    ) {
+        (None, None) => {
+            let start = today
+                .checked_sub_signed(chrono::TimeDelta::days(i64::from(fallback_days - 1)))
+                .unwrap_or(today);
+            common.since = Some(start.to_string());
+            common.until = Some(today.to_string());
+        }
+        (None, Some(until)) => {
+            let start = until
+                .checked_sub_signed(chrono::TimeDelta::days(i64::from(fallback_days - 1)))
+                .unwrap_or(until);
+            common.since = Some(start.to_string());
+        }
+        (Some(_), None) => {
+            common.until = Some(today.to_string());
+        }
+        (Some(_), Some(_)) => {}
+    }
+
+    Ok(())
+}
+
+fn filter_events_by_project(
+    events: Vec<UsageEvent>,
+    project_filter: Option<&str>,
+) -> Vec<UsageEvent> {
+    events
+        .into_iter()
+        .filter(|event| event_matches_project(event, project_filter))
+        .collect()
+}
+
+fn event_matches_project(event: &UsageEvent, project_filter: Option<&str>) -> bool {
+    match project_filter {
+        Some(project_filter) => event
+            .project
+            .as_deref()
+            .is_some_and(|project| project.contains(project_filter)),
+        None => true,
+    }
+}
+
+fn aggregate_token_counts(events: &[UsageEvent]) -> TokenCounts {
+    events
+        .iter()
+        .fold(TokenCounts::default(), |mut acc, event| {
+            acc.add_assign(event.usage.to_counts());
+            acc
+        })
+}
+
+fn aggregate_hourly_token_counts(
+    events: &[UsageEvent],
+    day: NaiveDate,
+    tz: &TimeZoneMode,
+) -> Vec<TokenCounts> {
+    let mut buckets = std::iter::repeat_with(TokenCounts::default)
+        .take(24)
+        .collect::<Vec<_>>();
+
+    for event in events {
+        if local_date(event.timestamp, tz) != day {
+            continue;
+        }
+        let hour = tz.hour_of(event.timestamp) as usize;
+        if let Some(bucket) = buckets.get_mut(hour) {
+            bucket.add_assign(event.usage.to_counts());
+        }
+    }
+
+    buckets
+}
+
+fn join_hourly_rows(
+    activity_rows: &[ActivityHourlyBucket],
+    token_rows: &[TokenCounts],
+) -> Vec<TodayHourlyRow> {
+    (0usize..24)
+        .map(|hour| {
+            let activity = activity_rows
+                .get(hour)
+                .cloned()
+                .unwrap_or(ActivityHourlyBucket {
+                    hour: hour as u8,
+                    total_seconds: 0,
+                    text: "0s".to_string(),
+                });
+            let totals = token_rows.get(hour).cloned().unwrap_or_default();
+            TodayHourlyRow {
+                hour: hour as u8,
+                label: format!("{hour:02}:00-{:02}:00", (hour + 1) % 24),
+                coding_seconds: activity.total_seconds,
+                coding_text: activity.text,
+                tokens: totals,
+            }
+        })
+        .collect()
+}
+
+fn build_activity_daily_report(
+    events: &[UsageEvent],
+    dataset: &ActivityDataset,
+    options: ActivityReportBuildOptions<'_>,
+) -> DailyReport {
+    let mut grouped: BTreeMap<NaiveDate, GroupAggregate> = BTreeMap::new();
+    for event in events {
+        let day = local_date(event.timestamp, options.tz);
+        grouped.entry(day).or_default().add_event(event);
+    }
+
+    let mut rows = Vec::new();
+    let mut cursor = options.start;
+    while cursor <= options.end {
+        let token_group = grouped.remove(&cursor);
+        let activity = dataset.summary_for_day(cursor);
+        if token_group.is_none() && activity.is_none() {
+            cursor = cursor
+                .checked_add_signed(chrono::TimeDelta::days(1))
+                .unwrap_or(options.end.succ_opt().unwrap_or(options.end));
+            continue;
+        }
+
+        let (totals, models, sources) = if let Some(group) = token_group {
+            (
+                group.totals.to_counts(),
+                group
+                    .by_model
+                    .into_iter()
+                    .map(|(model, totals)| (model, totals.to_counts()))
+                    .collect::<BTreeMap<_, _>>(),
+                group
+                    .by_source
+                    .into_iter()
+                    .map(|(source, totals)| (source.as_str().to_string(), totals.to_counts()))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        } else {
+            (TokenCounts::default(), BTreeMap::new(), BTreeMap::new())
+        };
+
+        rows.push(DailyRow {
+            date: cursor.format("%Y-%m-%d").to_string(),
+            totals,
+            models,
+            sources,
+            activity,
+        });
+
+        cursor = cursor
+            .checked_add_signed(chrono::TimeDelta::days(1))
+            .unwrap_or(options.end.succ_opt().unwrap_or(options.end));
+    }
+
+    if *options.order == SortOrder::Desc {
+        rows.reverse();
+    }
+
+    let activity_totals = dataset.summary_for_range(options.start, options.end);
+
+    build_report_from_rows(rows, activity_totals, options.stats)
+}
+
+fn build_activity_overview(
+    start: NaiveDate,
+    end: NaiveDate,
+    active_days: u32,
+    events: &[UsageEvent],
+    activity: Option<&ActivitySummary>,
+) -> ActivityOverview {
+    let totals = aggregate_token_counts(events);
+    let days_in_range = (end - start).num_days().max(0) as u32 + 1;
+    let top_model = token_breakdowns_by_model(events, 1)
+        .into_iter()
+        .next()
+        .map(|row| row.name);
+    let (tokens_per_hour, cost_per_hour) = activity_rate(activity, &totals).unwrap_or((0, 0.0));
+
+    ActivityOverview {
+        start: start.to_string(),
+        end: end.to_string(),
+        days_in_range,
+        active_days,
+        totals,
+        activity: activity.cloned(),
+        avg_coding_per_day: activity.map(|summary| {
+            format_activity_duration(summary.total_seconds / u64::from(days_in_range.max(1)))
+        }),
+        tokens_per_hour: activity
+            .filter(|summary| summary.total_seconds > 0)
+            .map(|_| tokens_per_hour),
+        cost_per_hour: activity
+            .filter(|summary| summary.total_seconds > 0)
+            .map(|_| cost_per_hour),
+        top_model,
+    }
+}
+
+fn activity_rate(activity: Option<&ActivitySummary>, totals: &TokenCounts) -> Option<(u64, f64)> {
+    let summary = activity?;
+    if summary.total_seconds == 0 {
+        return None;
+    }
+    let hours = summary.total_seconds as f64 / 3600.0;
+    if hours <= f64::EPSILON {
+        return None;
+    }
+    Some((
+        (totals.total_tokens as f64 / hours).round().max(0.0) as u64,
+        totals.cost_usd / hours,
+    ))
+}
+
+fn token_breakdowns_by_model(events: &[UsageEvent], limit: usize) -> Vec<TokenBreakdownStat> {
+    let mut totals = HashMap::<String, TokenCounts>::new();
+    let mut grand_total = 0u64;
+
+    for event in events {
+        let counts = event.usage.to_counts();
+        grand_total = grand_total.saturating_add(counts.total_tokens);
+        totals
+            .entry(event.model.clone())
+            .or_default()
+            .add_assign(counts);
+    }
+
+    let mut rows = totals.into_iter().collect::<Vec<_>>();
+    rows.sort_by(|(name_a, counts_a), (name_b, counts_b)| {
+        counts_b
+            .total_tokens
+            .cmp(&counts_a.total_tokens)
+            .then_with(|| name_a.cmp(name_b))
+    });
+    rows.truncate(limit.max(1));
+
+    rows.into_iter()
+        .map(|(name, counts)| TokenBreakdownStat {
+            name,
+            total_tokens: counts.total_tokens,
+            cost_usd: counts.cost_usd,
+            percent: if grand_total == 0 {
+                0.0
+            } else {
+                (counts.total_tokens as f64 / grand_total as f64) * 100.0
+            },
+        })
+        .collect()
+}
+
+fn aggregate_usage_totals_by_project(events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+    aggregate_usage_totals_by(events, |event| Some(project_label_for_activity(event)))
+}
+
+fn aggregate_usage_totals_by_language(_events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+    HashMap::new()
+}
+
+fn aggregate_usage_totals_by_source(events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+    aggregate_usage_totals_by(events, |event| {
+        Some(activity_source_label(event.source).to_string())
+    })
+}
+
+fn aggregate_usage_totals_by<F>(
+    events: &[UsageEvent],
+    mut label_fn: F,
+) -> HashMap<String, TokenCounts>
+where
+    F: FnMut(&UsageEvent) -> Option<String>,
+{
+    let mut totals = HashMap::<String, TokenCounts>::new();
+    for event in events {
+        let Some(label) = label_fn(event) else {
+            continue;
+        };
+        let counts = event.usage.to_counts();
+        totals
+            .entry(label)
+            .and_modify(|value| value.add_assign(counts.clone()))
+            .or_insert(counts);
+    }
+    totals
+}
+
+fn enrich_activity_breakdowns_with_tokens(
+    mut rows: Vec<ActivityBreakdownStat>,
+    usage_totals: &HashMap<String, TokenCounts>,
+) -> Vec<ActivityBreakdownStat> {
+    for row in &mut rows {
+        if let Some(counts) = usage_totals.get(&row.name) {
+            row.total_tokens = counts.total_tokens;
+            row.cost_usd = counts.cost_usd;
+        }
+    }
+    rows
+}
+
+fn project_label_for_activity(event: &UsageEvent) -> String {
+    if let Some(project) = event.project.as_deref().map(str::trim)
+        && !project.is_empty()
+    {
+        return project.to_string();
+    }
+
+    let path = std::path::Path::new(&event.file_path);
+    if let Some(parent) = path.parent().and_then(|value| value.file_name()) {
+        let name = parent.to_string_lossy().trim().to_string();
+        if !name.is_empty() {
+            return name;
+        }
+    }
+
+    "unknown".to_string()
+}
+
+fn activity_source_label(source: SourceKind) -> &'static str {
+    match source {
+        SourceKind::Claude => "Claude",
+        SourceKind::Codex => "Codex",
+    }
+}
+
+fn print_activity_overview(title: &str, overview: &ActivityOverview) {
+    if overview.start == overview.end {
+        println!("{title} {}", overview.start);
+    } else {
+        println!("{title} {} -> {}", overview.start, overview.end);
+    }
+    println!(
+        "{:<12} {} {:>5.1}%  {}/{}",
+        "Active days",
+        render_progress_meter(
+            overview.active_days as f64 / overview.days_in_range.max(1) as f64,
+            18
+        ),
+        overview.active_days as f64 / overview.days_in_range.max(1) as f64 * 100.0,
+        overview.active_days,
+        overview.days_in_range
+    );
+    if let Some(activity) = overview.activity.as_ref() {
+        println!(
+            "{:<12} {} {:>5.1}%  {}",
+            "Day cover",
+            render_progress_meter(activity.total_seconds as f64 / 86_400.0, 18),
+            activity.total_seconds as f64 / 86_400.0 * 100.0,
+            activity.text
+        );
+    }
+
+    let inline_metrics = should_render_activity_metrics_inline(overview);
+    let mut table = create_text_table();
+    table.add_row(TableRow::from(vec![
+        metric_value_cell(
+            "Coding",
+            overview
+                .activity
+                .as_ref()
+                .map(|summary| summary.text.as_str())
+                .unwrap_or("-"),
+            Some(TableColor::Green),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Avg / day",
+            overview.avg_coding_per_day.as_deref().unwrap_or("-"),
+            Some(TableColor::Green),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Tokens",
+            &format_u64(overview.totals.total_tokens),
+            Some(TableColor::Cyan),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Cost",
+            &format_usd(overview.totals.cost_usd),
+            Some(TableColor::Green),
+            inline_metrics,
+        ),
+    ]));
+    table.add_row(TableRow::from(vec![
+        metric_value_cell(
+            "Tok / hr",
+            &overview
+                .tokens_per_hour
+                .map(format_u64)
+                .unwrap_or_else(|| "-".to_string()),
+            Some(TableColor::Yellow),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Cost / hr",
+            &overview
+                .cost_per_hour
+                .map(format_usd)
+                .unwrap_or_else(|| "-".to_string()),
+            Some(TableColor::Yellow),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Top model",
+            overview.top_model.as_deref().unwrap_or("-"),
+            Some(TableColor::White),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Top project",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_project.as_deref())
+                .unwrap_or("-"),
+            Some(TableColor::White),
+            inline_metrics,
+        ),
+    ]));
+    table.add_row(TableRow::from(vec![
+        metric_value_cell(
+            "Top lang",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_language.as_deref())
+                .unwrap_or("-"),
+            Some(TableColor::White),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Top source",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_source.as_deref())
+                .unwrap_or("-"),
+            Some(TableColor::White),
+            inline_metrics,
+        ),
+        metric_value_cell(
+            "Range",
+            &if overview.start == overview.end {
+                overview.start.clone()
+            } else {
+                format!("{} -> {}", overview.start, overview.end)
+            },
+            Some(TableColor::DarkGrey),
+            inline_metrics,
+        ),
+        value_cell("", None),
+    ]));
+    println!("{table}");
+}
+
+fn print_today_view(
+    date: &str,
+    overview: &ActivityOverview,
+    hourly: &[TodayHourlyRow],
+    breakdowns: &TodayProjectBreakdowns,
+    total_tokens: u64,
+) {
+    print_activity_overview("Today", overview);
+
+    let render_chart = should_render_today_hourly_chart(hourly);
+    if !render_chart
+        && let Some(peak) = hourly
+            .iter()
+            .max_by(|a, b| {
+                a.coding_seconds
+                    .cmp(&b.coding_seconds)
+                    .then_with(|| a.tokens.total_tokens.cmp(&b.tokens.total_tokens))
+            })
+            .filter(|row| row.coding_seconds > 0 || row.tokens.total_tokens > 0)
+    {
+        let mut peak_table = create_text_table();
+        peak_table.set_header(vec![
+            header_cell("Peak window"),
+            header_cell("Coding"),
+            header_cell("Tokens"),
+            header_cell("Cost"),
+        ]);
+        peak_table.add_row(TableRow::from(vec![
+            value_cell(&peak.label, Some(TableColor::White)),
+            value_cell(
+                if peak.coding_seconds > 0 {
+                    &peak.coding_text
+                } else {
+                    "-"
+                },
+                Some(TableColor::Green),
+            ),
+            value_cell(
+                &format_u64(peak.tokens.total_tokens),
+                Some(TableColor::Cyan),
+            ),
+            value_cell(&format_usd(peak.tokens.cost_usd), Some(TableColor::Green)),
+        ]));
+        println!("{peak_table}");
+    } else if !render_chart && total_tokens == 0 {
+        println!("{:<14} -", "Peak hour");
+    }
+
+    println!();
+    if render_chart {
+        print_today_hourly_chart(hourly);
+    } else {
+        print_today_hourly_table(hourly);
+    }
+
+    print_activity_breakdown_section("Projects", &breakdowns.projects);
+    print_activity_breakdown_section("Languages", &breakdowns.languages);
+    print_source_model_breakdown_section(&breakdowns.sources, &breakdowns.models);
+    println!();
+    println!("Date          {date}");
+}
+
+fn print_activity_breakdown_section(title: &str, rows: &[ActivityBreakdownStat]) {
+    if rows.is_empty() {
+        return;
+    }
+
+    println!();
+    let mut table = create_text_table();
+    let show_tokens = rows.iter().any(|row| row.total_tokens > 0);
+    let show_cost = rows.iter().any(|row| row.cost_usd > 0.0);
+    if show_tokens && show_cost {
+        table.set_header(vec![
+            header_cell(title),
+            header_cell("Coding"),
+            header_cell("Tokens"),
+            header_cell("Cost"),
+            header_cell("Share"),
+        ]);
+        for row in rows {
+            table.add_row(TableRow::from(vec![
+                value_cell(
+                    &truncate_display_text(&row.name, 28),
+                    Some(TableColor::White),
+                ),
+                value_cell(&row.text, Some(TableColor::Green)),
+                value_cell(&format_u64(row.total_tokens), Some(TableColor::Cyan)),
+                value_cell(&format_usd(row.cost_usd), Some(TableColor::Green)),
+                value_cell(
+                    &format!(
+                        "{} {:>5.1}%",
+                        render_progress_meter(row.percent / 100.0, 10),
+                        row.percent
+                    ),
+                    Some(TableColor::Yellow),
+                ),
+            ]));
+        }
+    } else if show_tokens {
+        table.set_header(vec![
+            header_cell(title),
+            header_cell("Coding"),
+            header_cell("Tokens"),
+            header_cell("Share"),
+        ]);
+        for row in rows {
+            table.add_row(TableRow::from(vec![
+                value_cell(
+                    &truncate_display_text(&row.name, 28),
+                    Some(TableColor::White),
+                ),
+                value_cell(&row.text, Some(TableColor::Green)),
+                value_cell(&format_u64(row.total_tokens), Some(TableColor::Cyan)),
+                value_cell(
+                    &format!(
+                        "{} {:>5.1}%",
+                        render_progress_meter(row.percent / 100.0, 10),
+                        row.percent
+                    ),
+                    Some(TableColor::Yellow),
+                ),
+            ]));
+        }
+    } else {
+        table.set_header(vec![
+            header_cell(title),
+            header_cell("Coding"),
+            header_cell("Share"),
+        ]);
+        for row in rows {
+            table.add_row(TableRow::from(vec![
+                value_cell(
+                    &truncate_display_text(&row.name, 28),
+                    Some(TableColor::White),
+                ),
+                value_cell(&row.text, Some(TableColor::Green)),
+                value_cell(
+                    &format!(
+                        "{} {:>5.1}%",
+                        render_progress_meter(row.percent / 100.0, 10),
+                        row.percent
+                    ),
+                    Some(TableColor::Yellow),
+                ),
+            ]));
+        }
+    }
+    println!("{table}");
+}
+
+fn should_render_today_hourly_chart(hourly: &[TodayHourlyRow]) -> bool {
+    detect_terminal_width() >= 96
+        && hourly
+            .iter()
+            .filter(|row| row.coding_seconds > 0 || row.tokens.total_tokens > 0)
+            .count()
+            >= 2
+}
+
+fn print_today_hourly_chart(hourly: &[TodayHourlyRow]) {
+    let max_tokens = hourly
+        .iter()
+        .map(|row| row.tokens.total_tokens)
+        .max()
+        .unwrap_or(0);
+    if max_tokens == 0 {
+        print_today_hourly_table(hourly);
+        return;
+    }
+
+    let peak = hourly
+        .iter()
+        .max_by_key(|row| row.tokens.total_tokens)
+        .expect("non-empty hourly chart points");
+    let chart_width = detect_terminal_width().saturating_sub(2).clamp(88, 140) as u16;
+    let chart_height = 13u16;
+    let y_max = pretty_axis_upper_bound(max_tokens);
+    let y_mid = y_max / 2;
+    let points = hourly
+        .iter()
+        .map(|row| (f64::from(row.hour), row.tokens.total_tokens as f64))
+        .collect::<Vec<_>>();
+    let backend = TestBackend::new(chart_width, chart_height);
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(_) => {
+            print_today_hourly_table(hourly);
+            return;
+        }
+    };
+
+    let x_labels = vec![
+        Span::raw("00"),
+        Span::raw("06"),
+        Span::raw("12"),
+        Span::raw("18"),
+        Span::raw("23"),
+    ];
+    let y_labels = vec![
+        Span::raw("0"),
+        Span::raw(format_token_compact(y_mid)),
+        Span::raw(format_token_compact(y_max)),
+    ];
+    let title = format!(
+        "Hourly tokens · peak {} @ {}",
+        format_token_compact(peak.tokens.total_tokens),
+        peak.label
+    );
+
+    if terminal
+        .draw(|frame| {
+            let dataset = Dataset::default()
+                .marker(symbols::Marker::HalfBlock)
+                .style(Style::default().fg(TuiColor::Cyan))
+                .graph_type(GraphType::Bar)
+                .data(&points);
+            let chart = Chart::new(vec![dataset])
+                .block(Block::bordered().title(title.as_str()))
+                .x_axis(
+                    Axis::default()
+                        .bounds([0.0, 23.0])
+                        .labels(x_labels.clone())
+                        .style(Style::default().fg(TuiColor::DarkGray)),
+                )
+                .y_axis(
+                    Axis::default()
+                        .bounds([0.0, y_max as f64])
+                        .labels(y_labels.clone())
+                        .style(Style::default().fg(TuiColor::DarkGray)),
+                );
+            frame.render_widget(chart, frame.area());
+        })
+        .is_err()
+    {
+        print_today_hourly_table(hourly);
+        return;
+    }
+
+    for line in ratatui_buffer_lines(terminal.backend().buffer()) {
+        println!("{line}");
+    }
+}
+
+fn print_today_hourly_table(hourly: &[TodayHourlyRow]) {
+    let mut hourly_table = create_text_table();
+    hourly_table.set_header(vec![
+        header_cell("Window"),
+        header_cell("Coding"),
+        header_cell("Tokens"),
+        header_cell("Cost"),
+    ]);
+    let mut visible_rows = 0usize;
+    for row in hourly {
+        if row.coding_seconds == 0 && row.tokens.total_tokens == 0 {
+            continue;
+        }
+        visible_rows += 1;
+        hourly_table.add_row(TableRow::from(vec![
+            value_cell(&row.label, Some(TableColor::White)),
+            value_cell(&row.coding_text, Some(TableColor::Green)),
+            value_cell(&format_u64(row.tokens.total_tokens), Some(TableColor::Cyan)),
+            value_cell(&format_usd(row.tokens.cost_usd), Some(TableColor::Green)),
+        ]));
+    }
+    if visible_rows == 0 {
+        hourly_table.add_row(TableRow::from(vec![
+            value_cell("No active hours", Some(TableColor::DarkGrey)),
+            value_cell("-", Some(TableColor::DarkGrey)),
+            value_cell("0", Some(TableColor::DarkGrey)),
+            value_cell("$0.00", Some(TableColor::DarkGrey)),
+        ]));
+    }
+    println!("{hourly_table}");
+}
+
+fn print_token_breakdown_section(title: &str, rows: &[TokenBreakdownStat]) {
+    if rows.is_empty() {
+        return;
+    }
+
+    println!();
+    let mut table = create_text_table();
+    table.set_header(vec![
+        header_cell(title),
+        header_cell("Tokens"),
+        header_cell("Cost"),
+        header_cell("Share"),
+    ]);
+    for row in rows {
+        table.add_row(TableRow::from(vec![
+            value_cell(
+                &truncate_display_text(&row.name, 32),
+                Some(TableColor::White),
+            ),
+            value_cell(&format_u64(row.total_tokens), Some(TableColor::Cyan)),
+            value_cell(&format_usd(row.cost_usd), Some(TableColor::Green)),
+            value_cell(
+                &format!(
+                    "{} {:>5.1}%",
+                    render_progress_meter(row.percent / 100.0, 10),
+                    row.percent
+                ),
+                Some(TableColor::Yellow),
+            ),
+        ]));
+    }
+    println!("{table}");
+}
+
+fn print_source_model_breakdown_section(
+    sources: &[ActivityBreakdownStat],
+    models: &[TokenBreakdownStat],
+) {
+    if let (Some(source), Some(model)) = (sources.first(), models.first())
+        && sources.len() == 1
+        && models.len() == 1
+    {
+        println!();
+        let mut table = create_text_table();
+        table.set_header(vec![
+            header_cell("Source"),
+            header_cell("Model"),
+            header_cell("Coding"),
+            header_cell("Tokens"),
+            header_cell("Cost"),
+        ]);
+        table.add_row(TableRow::from(vec![
+            value_cell(
+                &truncate_display_text(&source.name, 18),
+                Some(TableColor::White),
+            ),
+            value_cell(
+                &truncate_display_text(&model.name, 28),
+                Some(TableColor::White),
+            ),
+            value_cell(&source.text, Some(TableColor::Green)),
+            value_cell(&format_u64(model.total_tokens), Some(TableColor::Cyan)),
+            value_cell(&format_usd(model.cost_usd), Some(TableColor::Green)),
+        ]));
+        println!("{table}");
+        return;
+    }
+
+    print_activity_breakdown_section("Sources", sources);
+    print_token_breakdown_section("Models", models);
+}
+
+fn create_text_table() -> TextTable {
+    let mut table = TextTable::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    table
+}
+
+fn header_cell(text: &str) -> TableCell {
+    let mut cell = TableCell::new(text).add_attribute(Attribute::Bold);
+    if std::io::stdout().is_terminal() {
+        cell = cell.fg(TableColor::Cyan);
+    }
+    cell
+}
+
+fn value_cell(text: &str, color: Option<TableColor>) -> TableCell {
+    let mut cell = TableCell::new(text);
+    if std::io::stdout().is_terminal()
+        && let Some(color) = color
+    {
+        cell = cell.fg(color);
+    }
+    cell
+}
+
+fn metric_value_cell(
+    label: &str,
+    value: &str,
+    color: Option<TableColor>,
+    inline: bool,
+) -> TableCell {
+    let content = if inline {
+        format!("{label}: {value}")
+    } else {
+        format!("{label}\n{value}")
+    };
+    let mut cell = TableCell::new(content);
+    if inline {
+        cell = cell.add_attribute(Attribute::Bold);
+    }
+    if std::io::stdout().is_terminal()
+        && let Some(color) = color
+    {
+        cell = cell.fg(color);
+    }
+    cell
+}
+
+fn should_render_activity_metrics_inline(overview: &ActivityOverview) -> bool {
+    let width = detect_terminal_width();
+    let row_1 = estimated_metric_row_width(&[
+        (
+            "Coding",
+            overview
+                .activity
+                .as_ref()
+                .map(|summary| summary.text.as_str())
+                .unwrap_or("-"),
+        ),
+        (
+            "Avg / day",
+            overview.avg_coding_per_day.as_deref().unwrap_or("-"),
+        ),
+        ("Tokens", &format_u64(overview.totals.total_tokens)),
+        ("Cost", &format_usd(overview.totals.cost_usd)),
+    ]);
+    let row_2 = estimated_metric_row_width(&[
+        (
+            "Tok / hr",
+            &overview
+                .tokens_per_hour
+                .map(format_u64)
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "Cost / hr",
+            &overview
+                .cost_per_hour
+                .map(format_usd)
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        ("Top model", overview.top_model.as_deref().unwrap_or("-")),
+        (
+            "Top project",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_project.as_deref())
+                .unwrap_or("-"),
+        ),
+    ]);
+    let range_text = if overview.start == overview.end {
+        overview.start.clone()
+    } else {
+        format!("{} -> {}", overview.start, overview.end)
+    };
+    let row_3 = estimated_metric_row_width(&[
+        (
+            "Top lang",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_language.as_deref())
+                .unwrap_or("-"),
+        ),
+        (
+            "Top source",
+            overview
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.top_source.as_deref())
+                .unwrap_or("-"),
+        ),
+        ("Range", &range_text),
+        ("", ""),
+    ]);
+    width >= row_1.max(row_2).max(row_3)
+}
+
+fn estimated_metric_row_width(metrics: &[(&str, &str)]) -> usize {
+    let content = metrics
+        .iter()
+        .map(|(label, value)| {
+            if label.is_empty() {
+                4usize
+            } else {
+                label.chars().count() + value.chars().count() + 6
+            }
+        })
+        .sum::<usize>();
+    content + metrics.len().saturating_mul(3) + 8
+}
+
+fn detect_terminal_width() -> usize {
+    if let Ok(raw) = std::env::var("COLUMNS")
+        && let Ok(cols) = raw.parse::<usize>()
+        && cols > 0
+    {
+        return cols;
+    }
+    if let Some((Width(cols), _)) = terminal_size() {
+        return usize::from(cols);
+    }
+    160
+}
+
+fn pretty_axis_upper_bound(value: u64) -> u64 {
+    if value == 0 {
+        return 1;
+    }
+    let magnitude = 10u64.pow(value.ilog10());
+    for factor in [1u64, 2, 5, 10] {
+        let candidate = magnitude.saturating_mul(factor);
+        if candidate >= value {
+            return candidate;
+        }
+    }
+    value
+}
+
+fn ratatui_buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .map(|cells| {
+            let mut line = String::new();
+            for cell in cells {
+                line.push_str(cell.symbol());
+            }
+            line.trim_end().to_string()
+        })
+        .collect()
+}
+
+fn render_progress_meter(ratio: f64, width: usize) -> String {
+    let clamped = ratio.clamp(0.0, 1.0);
+    let filled = (clamped * width as f64).round() as usize;
+    let mut bar = String::with_capacity(width);
+    for idx in 0..width {
+        if idx < filled {
+            bar.push('█');
+        } else {
+            bar.push('░');
+        }
+    }
+    format!("[{bar}]")
+}
+
+fn truncate_display_text(value: &str, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out = value.chars().take(keep).collect::<String>();
+    out.push('…');
+    out
 }
 
 pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
@@ -982,12 +2365,14 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
                 totals: row.totals.clone(),
                 models: row.models.clone(),
                 sources: row.sources.clone(),
+                activity: None,
             })
             .collect::<Vec<_>>();
 
         let show = DailyReport {
             daily: rows,
             totals: json_report.totals,
+            activity_totals: None,
             stats: json_report.stats,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
@@ -1617,12 +3002,14 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
                 totals: row.totals.clone(),
                 models: row.models.clone(),
                 sources: BTreeMap::new(),
+                activity: None,
             })
             .collect::<Vec<_>>();
 
         let show = DailyReport {
             daily: rows,
             totals: json_report.totals,
+            activity_totals: None,
             stats: json_report.stats,
         };
 
@@ -2196,19 +3583,30 @@ async fn run_blocks_live(
         let cached = load_live_frame_cache();
         let today_str = tz.now_date().to_string();
         // Only use cached today_totals if the date matches; otherwise zero.
-        let (cached_today, cached_30d, cached_30d_days) = match cached.as_ref() {
-            Some(c) if c.cached_date == today_str => (
-                c.today_totals.clone(),
-                c.last_30d_totals.clone(),
-                c.last_30d_active_days,
-            ),
-            Some(c) => (
-                TokenCounts::default(),
-                c.last_30d_totals.clone(),
-                c.last_30d_active_days,
-            ),
-            None => (TokenCounts::default(), TokenCounts::default(), 0),
-        };
+        let (cached_today, cached_30d, cached_30d_days, cached_today_activity, cached_30d_activity) =
+            match cached.as_ref() {
+                Some(c) if c.cached_date == today_str => (
+                    c.today_totals.clone(),
+                    c.last_30d_totals.clone(),
+                    c.last_30d_active_days,
+                    c.today_activity.clone(),
+                    c.last_30d_activity.clone(),
+                ),
+                Some(c) => (
+                    TokenCounts::default(),
+                    c.last_30d_totals.clone(),
+                    c.last_30d_active_days,
+                    None,
+                    c.last_30d_activity.clone(),
+                ),
+                None => (
+                    TokenCounts::default(),
+                    TokenCounts::default(),
+                    0,
+                    None,
+                    None,
+                ),
+            };
         // Use cached official snapshots if the caller didn't provide them.
         if official_codex.is_none() {
             if let Some(ref c) = cached {
@@ -2242,6 +3640,16 @@ async fn run_blocks_live(
             cached_today,
             cached_30d,
             cached_30d_days,
+            if activity_enabled(&args.common) {
+                cached_today_activity
+            } else {
+                None
+            },
+            if activity_enabled(&args.common) {
+                cached_30d_activity
+            } else {
+                None
+            },
             None,
             active_tab,
         );
@@ -2270,6 +3678,9 @@ async fn run_blocks_live(
             Vec<String>,
         )>,
     > = None;
+    let mut activity_dataset: Option<ActivityDataset> = None;
+    let mut last_activity_refresh = Instant::now() - Duration::from_secs(3600);
+    let activity_refresh_interval = Duration::from_secs(60);
     // Cooldown for official limits refresh.  Starts at 30s, doubles on
     // failure (caps at 5 minutes) so we don't hammer Claude's /usage
     // endpoint when it is rate-limited or broken.
@@ -2390,6 +3801,15 @@ async fn run_blocks_live(
         }
 
         let loaded = live_rt.load(tz);
+        let activity_today = local_date(now, tz);
+        if activity_enabled(&args.common)
+            && (activity_dataset.is_none()
+                || last_activity_refresh.elapsed() >= activity_refresh_interval)
+        {
+            activity_dataset =
+                fetch_activity_dataset(&args.common, tz, &loaded.events, None).await?;
+            last_activity_refresh = Instant::now();
+        }
         let membership_estimate =
             estimate_membership_from_logs(&loaded.events, now, live_window_secs);
         let inferred_limit = membership_estimate
@@ -2410,6 +3830,11 @@ async fn run_blocks_live(
         );
         let (today_totals, last_30d_totals, last_30d_active_days) =
             aggregate_recent_costs(&loaded.events, now, tz, selected_source);
+        let (today_activity, last_30d_activity) = if activity_enabled(&args.common) {
+            summarize_live_activity(activity_dataset.as_ref(), activity_today)
+        } else {
+            (None, None)
+        };
         let mut frame_context = LiveFrameContext::new(
             now,
             tz,
@@ -2427,6 +3852,8 @@ async fn run_blocks_live(
             today_totals,
             last_30d_totals,
             last_30d_active_days,
+            today_activity,
+            last_30d_activity,
             active.as_ref(),
             active_tab,
         );
@@ -2443,6 +3870,8 @@ async fn run_blocks_live(
             today_totals: frame_context.today_totals.clone(),
             last_30d_totals: frame_context.last_30d_totals.clone(),
             last_30d_active_days: frame_context.last_30d_active_days,
+            today_activity: frame_context.today_activity.clone(),
+            last_30d_activity: frame_context.last_30d_activity.clone(),
             official_codex: official_codex.clone(),
             official_claude: official_claude.clone(),
             official_antigravity: official_antigravity.clone(),
@@ -2626,6 +4055,22 @@ fn aggregate_recent_costs(
     }
 
     (today_totals, last_30d_totals, active_days.len() as u32)
+}
+
+fn summarize_live_activity(
+    dataset: Option<&ActivityDataset>,
+    today: NaiveDate,
+) -> (Option<ActivitySummary>, Option<ActivitySummary>) {
+    let Some(dataset) = dataset else {
+        return (None, None);
+    };
+    let start = today
+        .checked_sub_signed(chrono::TimeDelta::days(29))
+        .unwrap_or(today);
+    (
+        dataset.summary_for_day(today),
+        dataset.summary_for_range(start, today),
+    )
 }
 
 struct BlocksLiveSession {
@@ -3805,6 +5250,72 @@ fn live_key_value_line(
     ])
 }
 
+fn activity_hourly_values(summary: &ActivitySummary, totals: &TokenCounts) -> Option<(u64, f64)> {
+    if summary.total_seconds == 0 {
+        return None;
+    }
+    let hours = summary.total_seconds as f64 / 3600.0;
+    if hours <= f64::EPSILON {
+        return None;
+    }
+    Some((
+        (totals.total_tokens as f64 / hours).round().max(0.0) as u64,
+        totals.cost_usd / hours,
+    ))
+}
+
+fn append_activity_lines(
+    lines: &mut Vec<Line<'static>>,
+    key_prefix: &str,
+    summary: Option<&ActivitySummary>,
+    totals: &TokenCounts,
+) {
+    let Some(summary) = summary else {
+        return;
+    };
+
+    let label = if key_prefix.is_empty() {
+        "Coding".to_string()
+    } else {
+        format!("{key_prefix} coding")
+    };
+    lines.push(live_key_value_line(
+        label,
+        summary.text.clone(),
+        TuiColor::LightGreen,
+    ));
+
+    if let Some((tokens_per_hour, cost_per_hour)) = activity_hourly_values(summary, totals) {
+        let rate_label = if key_prefix.is_empty() {
+            "Tok / coding hr".to_string()
+        } else {
+            format!("{key_prefix} tok/hr")
+        };
+        lines.push(Line::from(vec![
+            Span::raw(live_key_label(&rate_label)),
+            Span::styled(
+                format!(
+                    "{} | {}/hr",
+                    format_u64(tokens_per_hour),
+                    format_usd(cost_per_hour)
+                ),
+                Style::default()
+                    .fg(TuiColor::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    if key_prefix.is_empty() {
+        if let Some(project) = summary.top_project.as_deref() {
+            lines.push(live_key_value_line("Top project", project, TuiColor::White));
+        }
+        if let Some(language) = summary.top_language.as_deref() {
+            lines.push(live_key_value_line("Top lang", language, TuiColor::Gray));
+        }
+    }
+}
+
 fn live_current_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![Span::styled(
         "Current",
@@ -3833,6 +5344,18 @@ fn live_current_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
             ),
             TuiColor::Green,
         ));
+        append_activity_lines(
+            &mut lines,
+            "",
+            context.today_activity.as_ref(),
+            &context.today_totals,
+        );
+        append_activity_lines(
+            &mut lines,
+            "30d",
+            context.last_30d_activity.as_ref(),
+            &context.last_30d_totals,
+        );
         return lines;
     };
 
@@ -3903,6 +5426,12 @@ fn live_current_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
         ),
         TuiColor::Green,
     ));
+    append_activity_lines(
+        &mut lines,
+        "",
+        context.today_activity.as_ref(),
+        &context.today_totals,
+    );
     lines.push(live_key_value_line(
         "Last 30d",
         format!(
@@ -3912,6 +5441,12 @@ fn live_current_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'static>> {
         ),
         TuiColor::Green,
     ));
+    append_activity_lines(
+        &mut lines,
+        "30d",
+        context.last_30d_activity.as_ref(),
+        &context.last_30d_totals,
+    );
 
     lines
 }
@@ -4421,7 +5956,7 @@ pub(crate) async fn collect_report(
         ReportPeriod::Daily => {
             let events = loaded
                 .events
-                .into_iter()
+                .iter()
                 .filter(|event| match project.as_deref() {
                     Some(project_filter) => event
                         .project
@@ -4429,6 +5964,7 @@ pub(crate) async fn collect_report(
                         .is_some_and(|p| p.contains(project_filter)),
                     None => true,
                 })
+                .cloned()
                 .collect::<Vec<_>>();
 
             build_group_rows(&events, &common.order, |event| {
@@ -4455,7 +5991,18 @@ pub(crate) async fn collect_report(
         }),
     };
 
-    Ok(build_report_from_rows(rows, loaded.stats))
+    let (rows, activity_totals) = enrich_rows_with_activity(
+        &common,
+        period,
+        instances,
+        &tz,
+        project.as_deref(),
+        &loaded.events,
+        rows,
+    )
+    .await?;
+
+    Ok(build_report_from_rows(rows, activity_totals, loaded.stats))
 }
 
 pub(crate) async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {
@@ -5564,6 +7111,8 @@ struct LiveFrameCache {
     today_totals: TokenCounts,
     last_30d_totals: TokenCounts,
     last_30d_active_days: u32,
+    today_activity: Option<ActivitySummary>,
+    last_30d_activity: Option<ActivitySummary>,
     official_codex: Option<OfficialCodexSnapshot>,
     official_claude: Option<OfficialClaudeSnapshot>,
     official_antigravity: Option<OfficialAntigravitySnapshot>,
@@ -7429,7 +8978,11 @@ fn emit_json<T: Serialize>(value: &T, jq: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn build_report_from_rows(rows: Vec<DailyRow>, stats: ParseStats) -> DailyReport {
+fn build_report_from_rows(
+    rows: Vec<DailyRow>,
+    activity_totals: Option<ActivitySummary>,
+    stats: ParseStats,
+) -> DailyReport {
     let totals = rows.iter().fold(TokenCounts::default(), |mut acc, row| {
         acc.add_assign(row.totals.clone());
         acc
@@ -7438,6 +8991,7 @@ fn build_report_from_rows(rows: Vec<DailyRow>, stats: ParseStats) -> DailyReport
     DailyReport {
         daily: rows,
         totals,
+        activity_totals,
         stats,
     }
 }
@@ -7467,6 +9021,7 @@ where
                 .into_iter()
                 .map(|(source, totals)| (source.as_str().to_string(), totals.to_counts()))
                 .collect::<BTreeMap<_, _>>(),
+            activity: None,
         })
         .collect::<Vec<_>>();
 
