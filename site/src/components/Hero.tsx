@@ -6,10 +6,12 @@ function TiltCard({
   children,
   className = "",
   style,
+  onClick,
 }: {
   children: ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  onClick?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
@@ -41,6 +43,7 @@ function TiltCard({
       onMouseMove={handleMove}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={handleLeave}
+      onClick={onClick}
     >
       <div
         className="glass relative overflow-hidden rounded-2xl h-full"
@@ -427,6 +430,7 @@ export default function Hero() {
           <TiltCard
             className="absolute top-[2%] left-[12%] w-[62%] z-10"
             style={{ rotate: "-2deg" }}
+            onClick={() => document.getElementById("tour-gui")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu gui
@@ -438,6 +442,7 @@ export default function Hero() {
           <TiltCard
             className="absolute top-0 right-[0%] w-[46%] z-20"
             style={{ rotate: "2.5deg" }}
+            onClick={() => document.getElementById("tour-daily")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu
@@ -449,6 +454,7 @@ export default function Hero() {
           <TiltCard
             className="absolute bottom-[12%] left-[22%] w-[25%] z-45"
             style={{ rotate: "-3deg" }}
+            onClick={() => document.getElementById("tour-img")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img week
@@ -460,6 +466,7 @@ export default function Hero() {
           <TiltCard
             className="absolute bottom-[24%] right-[2%] w-[40%] z-25"
             style={{ rotate: "-1.5deg" }}
+            onClick={() => document.getElementById("tour-img")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img day
@@ -471,6 +478,7 @@ export default function Hero() {
           <TiltCard
             className="absolute bottom-0 left-[14%] w-[72%] z-40"
             style={{ rotate: "1deg" }}
+            onClick={() => document.getElementById("tour-live")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu live

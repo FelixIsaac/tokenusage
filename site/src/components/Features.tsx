@@ -1,8 +1,10 @@
 import { motion } from "framer-motion";
 
+
 const FEATURES = [
   {
     cmd: "tu",
+    tourKey: "daily",
     meta: "Daily, weekly, monthly",
     title: "Fast merged token reports",
     desc: "Keep the classic token report by default. Add activity context only when you want it.",
@@ -11,6 +13,7 @@ const FEATURES = [
   },
   {
     cmd: "tu live",
+    tourKey: "live",
     meta: "Official limits + forecast",
     title: "See limits before they hurt",
     desc: "Watch 5h and weekly windows, current burn, projected end, and official limit state in one view.",
@@ -19,6 +22,7 @@ const FEATURES = [
   },
   {
     cmd: "tu today",
+    tourKey: "today",
     meta: "Time and efficiency",
     title: "Activity views with heartbeat support",
     desc: "Infer coding time locally from AI usage events, or tighten it with the native heartbeat collector.",
@@ -26,6 +30,7 @@ const FEATURES = [
   },
   {
     cmd: "tu gui",
+    tourKey: "gui",
     meta: "Desktop visibility",
     title: "Desktop dashboard with charts",
     desc: "Full-screen dashboard for scrolling reports, trend charts, filters, and visual summaries.",
@@ -74,7 +79,16 @@ export default function Features() {
         viewport={{ once: true, margin: "-5%" }}
       >
         {FEATURES.map((f) => (
-          <motion.article key={f.cmd} className="glass p-5.5 group" variants={item}>
+          <motion.article
+            key={f.cmd}
+            className="glass p-5.5 group cursor-pointer"
+            variants={item}
+            onClick={() => {
+              document.getElementById(`tour-${f.tourKey}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+          >
             <div className="flex items-center justify-between gap-4.5 mb-3.5 text-text-dim text-[0.86rem]">
               <code className="px-2.5 py-2 rounded-[10px] bg-[rgba(8,17,30,0.82)] border border-[rgba(116,150,198,0.2)] text-cyan">
                 {f.cmd}

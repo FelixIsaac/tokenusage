@@ -140,9 +140,11 @@ export default function Tour() {
             return (
               <div
                 key={step.key}
+                id={`tour-${step.key}`}
                 ref={(el) => { stepRefs.current[i] = el; }}
-                className="glass min-h-[380px] p-4.5 lg:min-h-[440px] transition-opacity duration-300 scroll-mt-24"
+                className="glass min-h-[380px] p-4.5 lg:min-h-[440px] transition-opacity duration-300 scroll-mt-24 cursor-pointer"
                 style={{ opacity: active === step.key ? 1 : 0.4 }}
+                onClick={() => { if (active !== step.key) handleClick(step.key); }}
               >
                 <div className="flex items-center justify-between gap-5 mb-4">
                   <span className="font-[family-name:var(--font-display)] text-lg">{panel.title}</span>
@@ -159,6 +161,8 @@ export default function Tour() {
                 {panel.cast && (
                   <CastPlayer
                     src={panel.cast}
+                    active={active === step.key}
+                    onRequestActivate={() => handleClick(step.key)}
                     className="w-full h-[380px] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] [&_.ap-player]:!bg-transparent [&_.ap-terminal]:!bg-transparent"
                   />
                 )}
