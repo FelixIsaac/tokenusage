@@ -31,7 +31,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hanbu97/tokenusage"
+Homepage = "https://tokenusage.org"
 Repository = "https://github.com/hanbu97/tokenusage"
 Issues = "https://github.com/hanbu97/tokenusage/issues"
 

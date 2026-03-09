@@ -1,13 +1,13 @@
 {
   "name": "tokenusage",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity. 214x faster than ccusage.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hanbu97/tokenusage.git"
   },
-  "homepage": "https://github.com/hanbu97/tokenusage",
+  "homepage": "https://tokenusage.org",
   "bugs": {
     "url": "https://github.com/hanbu97/tokenusage/issues"
   },
