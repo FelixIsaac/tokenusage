@@ -541,8 +541,8 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         None => true,
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
-            | "heartbeat" | "monthly" | "weekly" | "week" | "img" | "session" | "blocks" | "live" | "top"
-            | "statusline" | "gui" | "codex" | "claude" | "antigravity",
+            | "heartbeat" | "monthly" | "weekly" | "week" | "img" | "session" | "blocks" | "live"
+            | "top" | "statusline" | "gui" | "codex" | "claude" | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
