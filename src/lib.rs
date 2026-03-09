@@ -73,7 +73,7 @@ fn run_with_throttle(delay_ms: u64) -> Result<()> {
     let reader = BufReader::new(stdout);
     let mut out = std::io::stdout().lock();
 
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let _ = writeln!(out, "{}", line);
         let _ = out.flush();
         std::thread::sleep(delay);
