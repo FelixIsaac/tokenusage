@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Copy, Check } from "lucide-react";
+import CastPlayer from "./CastPlayer";
 
 function CmdCopy({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -34,22 +35,23 @@ function CmdCopy({ text }: { text: string }) {
   );
 }
 
-/* ---------- left-panel data (unchanged) ---------- */
+/* ---------- left-panel data ---------- */
 const LEFT_PANELS: Record<string, {
   title: string; link: string; linkLabel: string;
   img?: string; alt?: string;
+  cast?: string;
   images?: { src: string; alt: string }[];
   content?: { heading: string; body: string; commands: string[] };
 }> = {
-  daily: { title: "Merged CLI report", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Quick start", img: "/assets/media/cli-demo-padded.png", alt: "CLI report demo" },
-  live:  { title: "Live monitor", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Live docs", img: "/assets/media/live-demo.png", alt: "Live monitor demo" },
-  top:   { title: "Session top", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Top docs", content: { heading: "Per-session real-time view", body: "Streams token counts across all active sessions with configurable refresh and active window filtering.", commands: ["tu top", "tu top --active-hours 12", "tu top --active-hours 0"] } },
-  today: { title: "Today view", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Activity docs", content: { heading: "Daily activity snapshot", body: "Turns raw token events into a time-based view of how AI coding happened today — projects, models, and cost per hour.", commands: ["tu today", "tu today --project myapp"] } },
-  activity: { title: "Activity view", link: "https://github.com/hanbu97/tokenusage#how-does---with-activity-work", linkLabel: "Activity docs", content: { heading: "Coding activity over time", body: "Track how your AI usage evolves day-by-day with configurable date ranges and project filtering.", commands: ["tu activity", "tu activity --days 14", "tu activity --project tokenusage"] } },
-  heartbeat: { title: "Heartbeat system", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Heartbeat docs", content: { heading: "Native local heartbeat", body: "Watch directories for file changes and build a local coding timeline — no cloud, no extensions needed.", commands: ["tu heartbeat watch .", "tu heartbeat stats", "tu heartbeat ping src/main.rs --write"] } },
+  daily: { title: "Merged CLI report", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Quick start", cast: "/assets/casts/tu-daily.cast" },
+  live:  { title: "Live monitor", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Live docs", cast: "/assets/casts/tu-live.cast" },
+  top:   { title: "Session top", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Top docs", cast: "/assets/casts/tu-top.cast" },
+  today: { title: "Today view", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Activity docs", cast: "/assets/casts/tu-today.cast" },
+  activity: { title: "Activity view", link: "https://github.com/hanbu97/tokenusage#how-does---with-activity-work", linkLabel: "Activity docs", cast: "/assets/casts/tu-activity.cast" },
+  heartbeat: { title: "Heartbeat system", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Heartbeat docs", cast: "/assets/casts/tu-heartbeat.cast" },
   img:   { title: "Share cards", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Image docs", images: [{ src: "/assets/media/share-demo.png", alt: "Daily share card" }, { src: "/assets/media/share-week-demo.png", alt: "Weekly share card" }] },
   gui:   { title: "GUI dashboard", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "GUI docs", img: "/assets/media/gui-demo.png", alt: "GUI dashboard demo" },
-  periods: { title: "Period reports", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Period docs", content: { heading: "Flexible time aggregation", body: "Group usage by week or month with customizable week boundaries and full date range filtering.", commands: ["tu weekly", "tu weekly --start-of-week monday", "tu monthly"] } },
+  periods: { title: "Period reports", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Period docs", cast: "/assets/casts/tu-weekly.cast" },
   statusline: { title: "Statusline", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Statusline docs", content: { heading: "Embed in your workflow", body: "Outputs a compact status string for tmux, Neovim, or any tool that reads shell output. Includes session cost, limits, and burn rate.", commands: ["tu statusline", "tu statusline --visual-burn-rate emoji"] } },
 };
 
@@ -69,6 +71,7 @@ const STEPS = [
 
 export default function Tour() {
   const [active, setActive] = useState("daily");
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const stepRefs = useRef<(HTMLDivElement | null)[]>([]);
   const manualRef = useRef(false);
@@ -84,26 +87,29 @@ export default function Tour() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  // Scroll-driven activation: observe each left panel section
+  // Scroll-driven activation: last panel whose top crossed the 30% viewport line
   useEffect(() => {
-    const observers: IntersectionObserver[] = [];
     const keys = STEPS.map((s) => s.key);
+    let ticking = false;
 
-    stepRefs.current.forEach((el, i) => {
-      if (!el) return;
-      const obs = new IntersectionObserver(
-        ([entry]) => {
-          if (entry.isIntersecting && !manualRef.current) {
-            setActive(keys[i]);
-          }
-        },
-        { rootMargin: "-35% 0px -35% 0px", threshold: 0.1 },
-      );
-      obs.observe(el);
-      observers.push(obs);
-    });
+    const onScroll = () => {
+      if (ticking || manualRef.current) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const line = window.innerHeight * 0.3;
+        let bestIdx = 0;
+        stepRefs.current.forEach((el, i) => {
+          if (!el) return;
+          if (el.getBoundingClientRect().top <= line) bestIdx = i;
+        });
+        setActive(keys[bestIdx]);
+        ticking = false;
+      });
+    };
 
-    return () => observers.forEach((o) => o.disconnect());
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   return (
@@ -150,23 +156,42 @@ export default function Tour() {
                   </a>
                 </div>
 
-                {panel.img && (
-                  <img
-                    src={panel.img}
-                    alt={panel.alt}
-                    className="w-full h-[calc(100%-58px)] object-contain rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)]"
+                {panel.cast && (
+                  <CastPlayer
+                    src={panel.cast}
+                    className="w-full h-[380px] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] [&_.ap-player]:!bg-transparent [&_.ap-terminal]:!bg-transparent"
                   />
                 )}
 
+                {panel.img && (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSrc(panel.img!)}
+                    className="w-full h-[calc(100%-58px)] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
+                  >
+                    <img
+                      src={panel.img}
+                      alt={panel.alt}
+                      className="w-full h-full object-contain"
+                    />
+                  </button>
+                )}
+
                 {panel.images && (
-                  <div className="grid grid-cols-2 gap-3 h-[calc(100%-58px)]">
+                  <div className="grid grid-cols-2 gap-3 h-[380px]">
                     {panel.images.map((img) => (
-                      <img
+                      <button
                         key={img.src}
-                        src={img.src}
-                        alt={img.alt}
-                        className="w-full h-full object-contain rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)]"
-                      />
+                        type="button"
+                        onClick={() => setPreviewSrc(img.src)}
+                        className="w-full h-full rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
+                      >
+                        <img
+                          src={img.src}
+                          alt={img.alt}
+                          className="w-full h-full object-contain"
+                        />
+                      </button>
                     ))}
                   </div>
                 )}
@@ -227,6 +252,39 @@ export default function Tour() {
           ))}
         </div>
       </div>
+
+      {/* Image preview dialog */}
+      <AnimatePresence>
+        {previewSrc && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,6,14,0.85)] backdrop-blur-sm cursor-pointer"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setPreviewSrc(null)}
+          >
+            <div className="relative cursor-default" onClick={(e) => e.stopPropagation()}>
+              <motion.img
+                src={previewSrc}
+                alt="Preview"
+                className="max-w-[90vw] max-h-[85vh] rounded-2xl border border-[rgba(122,146,186,0.25)] shadow-2xl"
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              />
+              <button
+                type="button"
+                onClick={() => setPreviewSrc(null)}
+                className="absolute -top-3 -right-3 w-8 h-8 rounded-full border border-[rgba(122,146,186,0.3)] bg-[rgba(8,17,31,0.9)] text-text-soft flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(20,40,70,0.9)] hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   );
 }

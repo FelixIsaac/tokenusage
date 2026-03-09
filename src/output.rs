@@ -920,6 +920,9 @@ fn create_table(width: usize) -> Table {
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_width(table_width)
         .set_content_arrangement(ContentArrangement::DynamicFullWidth);
+    if !io::stdout().is_terminal() && std::env::var("CLICOLOR_FORCE").is_ok() {
+        table.enforce_styling();
+    }
     table
 }
 

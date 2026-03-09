@@ -81,6 +81,7 @@ pub(crate) enum Commands {
     Claude(DailyArgs),
     Antigravity(AntigravityArgs),
     Monthly(MonthlyArgs),
+    #[command(alias = "week")]
     Weekly(WeeklyArgs),
     Img(ImgArgs),
     Session(SessionArgs),
@@ -155,6 +156,14 @@ pub(crate) struct CommonArgs {
     pub(crate) pricing_file: Option<String>,
     #[arg(long, help = "Enrich reports with locally inferred coding activity")]
     pub(crate) with_activity: bool,
+    #[arg(
+        long = "slow",
+        short = 'S',
+        num_args = 0..=1,
+        default_missing_value = "60",
+        help = "Slow output for long content (optional: ms per line, default 30)"
+    )]
+    pub(crate) slow: Option<u64>,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -279,6 +288,14 @@ pub(crate) struct HeartbeatStatsArgs {
     pub(crate) jq: Option<String>,
     #[arg(long, default_value_t = 5, help = "Breakdown rows per section")]
     pub(crate) limit: usize,
+    #[arg(
+        long = "slow",
+        short = 'S',
+        num_args = 0..=1,
+        default_missing_value = "60",
+        help = "Slow output for long content (optional: ms per line, default 60)"
+    )]
+    pub(crate) slow: Option<u64>,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -524,7 +541,7 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         None => true,
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
-            | "heartbeat" | "monthly" | "weekly" | "img" | "session" | "blocks" | "live" | "top"
+            | "heartbeat" | "monthly" | "weekly" | "week" | "img" | "session" | "blocks" | "live" | "top"
             | "statusline" | "gui" | "codex" | "claude" | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,

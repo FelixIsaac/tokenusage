@@ -6,3 +6,7 @@ pypi/tu/*.egg-info/
 __pycache__/
 docs/reports/
 assets/branding/social-preview.png
+examples/
+.tu/
+
+site/.next/

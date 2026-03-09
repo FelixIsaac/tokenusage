@@ -715,18 +715,25 @@ fn print_heartbeat_stats(out: &HeartbeatStatsOut) {
     }
 }
 
+fn use_styled_output() -> bool {
+    std::io::stdout().is_terminal() || std::env::var("CLICOLOR_FORCE").is_ok()
+}
+
 fn create_text_table() -> TextTable {
     let mut table = TextTable::new();
     table
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic);
+    if !std::io::stdout().is_terminal() && std::env::var("CLICOLOR_FORCE").is_ok() {
+        table.enforce_styling();
+    }
     table
 }
 
 fn header_cell(text: &str) -> TableCell {
     let mut cell = TableCell::new(text).add_attribute(Attribute::Bold);
-    if std::io::stdout().is_terminal() {
+    if use_styled_output() {
         cell = cell.fg(TableColor::Cyan);
     }
     cell
@@ -734,7 +741,7 @@ fn header_cell(text: &str) -> TableCell {
 
 fn value_label_cell(text: &str) -> TableCell {
     let mut cell = TableCell::new(text).add_attribute(Attribute::Bold);
-    if std::io::stdout().is_terminal() {
+    if use_styled_output() {
         cell = cell.fg(TableColor::DarkGrey);
     }
     cell
@@ -742,7 +749,7 @@ fn value_label_cell(text: &str) -> TableCell {
 
 fn value_cell(text: &str, color: Option<TableColor>) -> TableCell {
     let mut cell = TableCell::new(text);
-    if std::io::stdout().is_terminal()
+    if use_styled_output()
         && let Some(color) = color
     {
         cell = cell.fg(color);
