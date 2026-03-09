@@ -34,7 +34,7 @@ export default function Footer() {
             Star on GitHub
           </a>
           <a
-            href="mailto:hanbu97@proton.me"
+            href="mailto:contact@tokenusage.org"
             className="inline-flex items-center rounded-full border border-[rgba(112,145,188,0.28)] bg-[rgba(10,22,38,0.62)] px-5 py-3 font-[family-name:var(--font-display)] text-[0.8rem] tracking-wider text-text-soft transition-all hover:-translate-y-0.5 hover:border-cyan/30"
           >
             Contact us
