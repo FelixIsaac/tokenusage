@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Orbitron";
+  src: url("/assets/fonts/Orbitron[wght].ttf") format("truetype");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Audiowide";
+  src: url("/assets/fonts/Audiowide-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --color-bg: #07111f;
+  --color-bg-soft: rgba(9, 20, 34, 0.82);
+  --color-panel: rgba(12, 24, 42, 0.84);
+  --color-panel-strong: rgba(9, 19, 34, 0.94);
+  --color-line: rgba(125, 156, 198, 0.18);
+  --color-line-strong: rgba(122, 221, 214, 0.4);
+  --color-text-primary: #f3f6fb;
+  --color-text-soft: rgba(221, 231, 246, 0.78);
+  --color-text-dim: rgba(166, 185, 214, 0.62);
+  --color-cyan: #63e7e1;
+  --color-teal: #46cfd0;
+  --color-lime: #8ef3a6;
+  --color-gold: #f3d38f;
+  --color-purple: #b3a1ff;
+  --color-pink: #ff8fd7;
+  --color-blue: #77b7ff;
+  --font-display: "Orbitron", sans-serif;
+  --font-accent: "Audiowide", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+  background: linear-gradient(180deg, #060d18 0%, #07111f 40%, #081120 100%);
+  color: var(--color-text-primary);
+  font-family: "Avenir Next", "Segoe UI Variable Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.glass {
+  background:
+    linear-gradient(180deg, rgba(14, 27, 46, 0.92), rgba(8, 18, 33, 0.9)),
+    linear-gradient(135deg, rgba(80, 236, 224, 0.06), transparent 46%);
+  border: 1px solid var(--color-line);
+  border-radius: 22px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(93, 170, 202, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(93, 170, 202, 0.08) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 42%, transparent 92%);
+}
+
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-50% - 9px)); }
+}
+
+@keyframes scroll-dot {
+  0% { opacity: 0; transform: translateY(0); }
+  30% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(12px); }
+}
+
+::selection {
+  background: rgba(99, 231, 225, 0.28);
+  color: #f3f6fb;
+}

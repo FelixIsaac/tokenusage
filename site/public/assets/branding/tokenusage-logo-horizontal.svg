@@ -1,0 +1,29 @@
+<svg width="1200" height="320" viewBox="0 0 1200 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#071225"/>
+      <stop offset="1" stop-color="#0A1B34"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="296" y1="74" x2="950" y2="248" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#48E8FF"/>
+      <stop offset="1" stop-color="#60FFAE"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="24" fill="url(#bg)"/>
+  <rect x="2" y="2" width="1196" height="316" rx="22" stroke="#274A73" stroke-width="4"/>
+
+  <!-- angular icon block -->
+  <g transform="translate(44,44)">
+    <path d="M46 0H186L232 46V186L186 232H46L0 186V46L46 0Z" fill="#0A1D38" stroke="#355A84" stroke-width="3"/>
+    <path d="M62 74C80 48 148 48 166 74C148 64 80 64 62 74Z" fill="url(#accent)"/>
+    <rect x="110" y="76" width="8" height="36" rx="4" fill="url(#accent)"/>
+    <path d="M78 126C78 170 150 170 150 126" stroke="url(#accent)" stroke-width="28" stroke-linecap="round"/>
+  </g>
+
+  <!-- concise wordmark -->
+  <text x="304" y="142" fill="url(#accent)" font-size="96" font-weight="700" letter-spacing="5" font-family="Orbitron, Audiowide, 'Segoe UI', sans-serif">TOKENUSAGE</text>
+  <text x="308" y="206" fill="#95B4D1" font-size="31" font-weight="500" letter-spacing="2" font-family="Orbitron, Audiowide, 'Segoe UI', sans-serif">MULTI-SOURCE TOKEN TRACKER</text>
+
+  <path d="M306 232H948" stroke="#4CE5FF" stroke-width="3" stroke-linecap="square" opacity="0.45"/>
+</svg>
