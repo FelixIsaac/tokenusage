@@ -1,20 +1,28 @@
 //! # tokenusage
 //!
-//! Fast token usage tracker for Codex, Claude Code, and Antigravity.
+//! Fast, zero-config token usage tracker for **Codex**, **Claude Code**, and
+//! **Antigravity**.  Parses local log files produced by AI coding assistants
+//! and computes per-model, per-day, and per-session token counts with
+//! estimated USD costs.
 //!
-//! This crate provides both a CLI tool (`tu`) and a library API for
-//! programmatically analyzing AI coding assistant token usage from local logs.
+//! This crate is **dual-use**:
 //!
-//! ## Library usage
+//! | Use case | Feature | What you get |
+//! |----------|---------|--------------|
+//! | CLI binary (`tu`) | `cli` (default) | Full terminal UI, TUI dashboard, image export, GUI |
+//! | Library dependency | no default features | Programmatic access to parsed usage data |
 //!
-//! Add `tokenusage` as a dependency **without** the default `cli` feature:
+//! ## Quick start (library)
+//!
+//! Add `tokenusage` as a dependency **without** the default `cli` feature so
+//! you only pull in the lightweight parsing core:
 //!
 //! ```toml
 //! [dependencies]
 //! tokenusage = { version = "1.5", default-features = false }
 //! ```
 //!
-//! Then use the public API:
+//! ### Fetch a full usage snapshot
 //!
 //! ```no_run
 //! use tokenusage::{Config, ReportPeriod};
@@ -29,6 +37,76 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ### Generate a daily cost report
+//!
+//! ```no_run
+//! use tokenusage::{Config, ReportPeriod};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let report = tokenusage::daily_report(
+//!     Config::default(),
+//!     ReportPeriod::Daily,
+//!     false,   // instances (per-session breakdown)
+//!     None,    // project filter
+//! ).await?;
+//!
+//! for row in &report.daily {
+//!     println!("{}: {} total tokens, ${:.4}",
+//!         row.date, row.totals.total_tokens, row.totals.cost_usd);
+//! }
+//! println!("Grand total: ${:.4}", report.totals.cost_usd);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Filter by date range
+//!
+//! ```no_run
+//! use tokenusage::Config;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let config = Config {
+//!     since: Some("2025-06-01".into()),
+//!     until: Some("2025-06-30".into()),
+//!     ..Config::default()
+//! };
+//! let events = tokenusage::load_events(config).await?;
+//! println!("June events: {}", events.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Architecture overview
+//!
+//! ```text
+//!  Log files on disk
+//!    (Claude ~/.claude/projects/*/,  Codex ~/.codex/sessions/*)
+//!         |
+//!         v
+//!  +--------------+     +--------------+     +---------------+
+//!  |  Discovery   | --> |   Parsing    | --> |  Aggregation  |
+//!  |  (sources)   |     | (rayon par.) |     | (reports/snap)|
+//!  +--------------+     +--------------+     +---------------+
+//!         |                    |                     |
+//!    SourceConfig         UsageEvent           DailyReport
+//!    DiscoveredFile       ParseStats          UsageSnapshot
+//! ```
+//!
+//! 1. **Discovery** — Scans configured root directories for JSONL log files.
+//! 2. **Parsing** — Parallel (rayon) extraction of [`UsageEvent`]s with
+//!    incremental caching for repeated runs.
+//! 3. **Aggregation** — Groups events into [`DailyReport`] rows or returns a
+//!    raw [`UsageSnapshot`].
+//!
+//! ## Feature flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `cli`   | **yes** | Enables the `tu` binary and all terminal/GUI dependencies (clap, ratatui, iced, etc.) |
+//!
+//! When `cli` is disabled the crate compiles with only the core parsing and
+//! reporting logic — no terminal, no GUI, no image export dependencies.
 
 mod activity;
 pub mod api;
@@ -68,6 +146,13 @@ use clap::Parser;
 #[cfg(feature = "cli")]
 use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
 
+/// Run the CLI application.
+///
+/// This is the main entry point for the `tu` binary.  It parses command-line
+/// arguments, applies config-file overrides, and dispatches to the appropriate
+/// subcommand.
+///
+/// Only available when the `cli` feature is enabled (default).
 #[cfg(feature = "cli")]
 pub async fn run() -> Result<()> {
     let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));

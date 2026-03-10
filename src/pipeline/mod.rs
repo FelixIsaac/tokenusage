@@ -62,14 +62,28 @@ use crate::types::{
     UsageEvent,
 };
 
+/// Timezone strategy for date grouping.
+///
+/// Controls how UTC timestamps from log files are mapped to local dates.
+/// This affects which "day" an event falls into for daily reports.
+///
+/// # Variants
+///
+/// - `Local` — Use the system's local timezone (default).
+/// - `Utc` — Group by UTC date.
+/// - `Named(tz)` — Use a specific IANA timezone (e.g. `Asia/Tokyo`).
 #[derive(Debug, Clone)]
 pub enum TimeZoneMode {
+    /// System local timezone.
     Local,
+    /// UTC (no offset).
     Utc,
+    /// A specific IANA timezone.
     Named(Tz),
 }
 
 impl TimeZoneMode {
+    /// Convert a UTC timestamp to a local date under this timezone.
     pub fn date_of(&self, ts: DateTime<Utc>) -> NaiveDate {
         match self {
             TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
@@ -78,6 +92,7 @@ impl TimeZoneMode {
         }
     }
 
+    /// Extract the hour (0–23) from a UTC timestamp under this timezone.
     pub fn hour_of(&self, ts: DateTime<Utc>) -> u32 {
         match self {
             TimeZoneMode::Local => ts.with_timezone(&Local).hour(),
@@ -86,6 +101,7 @@ impl TimeZoneMode {
         }
     }
 
+    /// Today's date under this timezone.
     pub fn now_date(&self) -> NaiveDate {
         self.date_of(Utc::now())
     }
@@ -157,9 +173,28 @@ struct LiveUsageRuntime {
     last_cache_flush_at: Instant,
 }
 
+/// Complete snapshot of parsed token usage data.
+///
+/// Returned by [`usage_snapshot`](crate::usage_snapshot).  Contains every
+/// parsed event, parsing diagnostics, and the timezone used for date grouping.
+///
+/// # Example
+///
+/// ```no_run
+/// use tokenusage::Config;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let snap = tokenusage::usage_snapshot(Config::default()).await?;
+/// println!("{} events from {} files", snap.events.len(), snap.stats.files_discovered);
+/// # Ok(())
+/// # }
+/// ```
 pub struct UsageSnapshot {
+    /// All parsed events, sorted by timestamp (ascending).
     pub events: Vec<UsageEvent>,
+    /// Parsing diagnostics (file counts, line counts, error counts).
     pub stats: ParseStats,
+    /// Timezone used for date grouping in this snapshot.
     pub timezone: TimeZoneMode,
 }
 
@@ -486,10 +521,17 @@ enum BurnStatus {
     High,
 }
 
+/// Time granularity for report grouping.
+///
+/// Passed to [`daily_report`](crate::daily_report) to control how events
+/// are bucketed into [`DailyRow`](crate::DailyRow) entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportPeriod {
+    /// One row per calendar day.
     Daily,
+    /// One row per calendar month.
     Monthly,
+    /// One row per week (see [`WeekStart`](crate::WeekStart) for first-day configuration).
     Weekly,
 }
 
