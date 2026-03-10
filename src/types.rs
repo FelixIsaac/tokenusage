@@ -6,13 +6,13 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum SourceKind {
+pub enum SourceKind {
     Claude,
     Codex,
 }
 
 impl SourceKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             SourceKind::Claude => "claude",
             SourceKind::Codex => "codex",
@@ -21,30 +21,30 @@ impl SourceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SourceConfig {
-    pub(crate) kind: SourceKind,
-    pub(crate) roots: Vec<PathBuf>,
+pub struct SourceConfig {
+    pub kind: SourceKind,
+    pub roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DiscoveredFile {
-    pub(crate) source: SourceKind,
-    pub(crate) root: PathBuf,
-    pub(crate) path: PathBuf,
+pub struct DiscoveredFile {
+    pub source: SourceKind,
+    pub root: PathBuf,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub(crate) struct UsageAccumulator {
-    pub(crate) input_tokens: u64,
-    pub(crate) cache_creation_input_tokens: u64,
-    pub(crate) cache_read_input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) reasoning_output_tokens: u64,
-    pub(crate) cost_usd: f64,
+pub struct UsageAccumulator {
+    pub input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub cost_usd: f64,
 }
 
 impl UsageAccumulator {
-    pub(crate) fn add(&mut self, other: UsageAccumulator) {
+    pub fn add(&mut self, other: UsageAccumulator) {
         self.input_tokens += other.input_tokens;
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
         self.cache_read_input_tokens += other.cache_read_input_tokens;
@@ -53,14 +53,14 @@ impl UsageAccumulator {
         self.cost_usd += other.cost_usd;
     }
 
-    pub(crate) fn total_tokens(self) -> u64 {
+    pub fn total_tokens(self) -> u64 {
         self.input_tokens
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
             + self.output_tokens
     }
 
-    pub(crate) fn to_counts(self) -> TokenCounts {
+    pub fn to_counts(self) -> TokenCounts {
         TokenCounts {
             input_tokens: self.input_tokens,
             cache_creation_input_tokens: self.cache_creation_input_tokens,
@@ -74,18 +74,18 @@ impl UsageAccumulator {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct TokenCounts {
-    pub(crate) input_tokens: u64,
-    pub(crate) cache_creation_input_tokens: u64,
-    pub(crate) cache_read_input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) reasoning_output_tokens: u64,
-    pub(crate) total_tokens: u64,
-    pub(crate) cost_usd: f64,
+pub struct TokenCounts {
+    pub input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
 }
 
 impl TokenCounts {
-    pub(crate) fn add_assign(&mut self, other: TokenCounts) {
+    pub fn add_assign(&mut self, other: TokenCounts) {
         self.input_tokens += other.input_tokens;
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
         self.cache_read_input_tokens += other.cache_read_input_tokens;
@@ -97,36 +97,36 @@ impl TokenCounts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct ActivitySummary {
-    pub(crate) total_seconds: u64,
-    pub(crate) text: String,
+pub struct ActivitySummary {
+    pub total_seconds: u64,
+    pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) top_project: Option<String>,
+    pub top_project: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) top_language: Option<String>,
+    pub top_language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) top_source: Option<String>,
+    pub top_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct UsageEvent {
-    pub(crate) timestamp: DateTime<Utc>,
-    pub(crate) source: SourceKind,
-    pub(crate) model: String,
-    pub(crate) session: String,
-    pub(crate) project: Option<String>,
-    pub(crate) file_path: String,
-    pub(crate) usage: UsageAccumulator,
+pub struct UsageEvent {
+    pub timestamp: DateTime<Utc>,
+    pub source: SourceKind,
+    pub model: String,
+    pub session: String,
+    pub project: Option<String>,
+    pub file_path: String,
+    pub usage: UsageAccumulator,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct DateFilter {
-    pub(crate) since: Option<NaiveDate>,
-    pub(crate) until: Option<NaiveDate>,
+pub struct DateFilter {
+    pub since: Option<NaiveDate>,
+    pub until: Option<NaiveDate>,
 }
 
 impl DateFilter {
-    pub(crate) fn allows(self, day: NaiveDate) -> bool {
+    pub fn allows(self, day: NaiveDate) -> bool {
         if let Some(since) = self.since
             && day < since
         {
@@ -142,31 +142,31 @@ impl DateFilter {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ParseStatsAtomic {
-    pub(crate) files_discovered: AtomicUsize,
-    pub(crate) files_open_failed: AtomicUsize,
-    pub(crate) lines_total: AtomicUsize,
-    pub(crate) lines_parsed: AtomicUsize,
-    pub(crate) lines_filtered: AtomicUsize,
-    pub(crate) lines_invalid_json: AtomicUsize,
-    pub(crate) lines_missing_usage: AtomicUsize,
-    pub(crate) lines_unknown_pricing: AtomicUsize,
+pub struct ParseStatsAtomic {
+    pub files_discovered: AtomicUsize,
+    pub files_open_failed: AtomicUsize,
+    pub lines_total: AtomicUsize,
+    pub lines_parsed: AtomicUsize,
+    pub lines_filtered: AtomicUsize,
+    pub lines_invalid_json: AtomicUsize,
+    pub lines_missing_usage: AtomicUsize,
+    pub lines_unknown_pricing: AtomicUsize,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ParseStats {
-    pub(crate) files_discovered: usize,
-    pub(crate) files_open_failed: usize,
-    pub(crate) lines_total: usize,
-    pub(crate) lines_parsed: usize,
-    pub(crate) lines_filtered: usize,
-    pub(crate) lines_invalid_json: usize,
-    pub(crate) lines_missing_usage: usize,
-    pub(crate) lines_unknown_pricing: usize,
+pub struct ParseStats {
+    pub files_discovered: usize,
+    pub files_open_failed: usize,
+    pub lines_total: usize,
+    pub lines_parsed: usize,
+    pub lines_filtered: usize,
+    pub lines_invalid_json: usize,
+    pub lines_missing_usage: usize,
+    pub lines_unknown_pricing: usize,
 }
 
 impl ParseStatsAtomic {
-    pub(crate) fn snapshot(&self) -> ParseStats {
+    pub fn snapshot(&self) -> ParseStats {
         ParseStats {
             files_discovered: self.files_discovered.load(Ordering::Relaxed),
             files_open_failed: self.files_open_failed.load(Ordering::Relaxed),
@@ -181,37 +181,37 @@ impl ParseStatsAtomic {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct PricingRate {
-    pub(crate) input_per_million: f64,
-    pub(crate) output_per_million: f64,
+pub struct PricingRate {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
     #[serde(default)]
-    pub(crate) cache_creation_per_million: f64,
+    pub cache_creation_per_million: f64,
     #[serde(default)]
-    pub(crate) cache_read_per_million: f64,
+    pub cache_read_per_million: f64,
     #[serde(default)]
-    pub(crate) reasoning_output_per_million: f64,
+    pub reasoning_output_per_million: f64,
     #[serde(default)]
-    pub(crate) tier_threshold_tokens: Option<u64>,
+    pub tier_threshold_tokens: Option<u64>,
     #[serde(default)]
-    pub(crate) input_above_per_million: Option<f64>,
+    pub input_above_per_million: Option<f64>,
     #[serde(default)]
-    pub(crate) output_above_per_million: Option<f64>,
+    pub output_above_per_million: Option<f64>,
     #[serde(default)]
-    pub(crate) cache_creation_above_per_million: Option<f64>,
+    pub cache_creation_above_per_million: Option<f64>,
     #[serde(default)]
-    pub(crate) cache_read_above_per_million: Option<f64>,
+    pub cache_read_above_per_million: Option<f64>,
     #[serde(default)]
-    pub(crate) reasoning_output_above_per_million: Option<f64>,
+    pub reasoning_output_above_per_million: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PricingTable {
-    pub(crate) exact: HashMap<String, PricingRate>,
-    pub(crate) prefixes: Vec<(String, PricingRate)>,
+pub struct PricingTable {
+    pub exact: HashMap<String, PricingRate>,
+    pub prefixes: Vec<(String, PricingRate)>,
 }
 
 impl PricingTable {
-    pub(crate) fn default_table() -> Self {
+    pub fn default_table() -> Self {
         // Approximate defaults for offline estimation.
         let mut table = PricingTable::default();
 
@@ -278,13 +278,13 @@ impl PricingTable {
         table
     }
 
-    pub(crate) fn merge_exact(&mut self, overrides: HashMap<String, PricingRate>) {
+    pub fn merge_exact(&mut self, overrides: HashMap<String, PricingRate>) {
         for (model, rate) in overrides {
             self.exact.insert(canonical_model_key(&model), rate);
         }
     }
 
-    pub(crate) fn find_rate(&self, model: &str) -> Option<&PricingRate> {
+    pub fn find_rate(&self, model: &str) -> Option<&PricingRate> {
         let model_key = canonical_model_key(model);
         if let Some(rate) = self.exact.get(&model_key) {
             return Some(rate);
@@ -294,7 +294,7 @@ impl PricingTable {
             .find_map(|(prefix, rate)| model_key.starts_with(prefix).then_some(rate))
     }
 
-    pub(crate) fn estimate_cost(&self, model: &str, usage: UsageAccumulator) -> Option<f64> {
+    pub fn estimate_cost(&self, model: &str, usage: UsageAccumulator) -> Option<f64> {
         let rate = self.find_rate(model)?;
         let threshold = tier_threshold(rate);
         let separate_reasoning_pricing = has_separate_reasoning_pricing(rate);
@@ -389,29 +389,29 @@ fn canonical_model_key(model: &str) -> String {
 }
 
 #[derive(Debug)]
-pub(crate) struct ParsedLine {
-    pub(crate) event: UsageEvent,
-    pub(crate) used_unknown_pricing: bool,
+pub struct ParsedLine {
+    pub event: UsageEvent,
+    pub used_unknown_pricing: bool,
 }
 
 #[derive(Debug)]
-pub(crate) enum ParseLineResult {
+pub enum ParseLineResult {
     Parsed(ParsedLine),
     InvalidJson,
     MissingUsage,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub(crate) struct CodexRawUsage {
-    pub(crate) input_tokens: u64,
-    pub(crate) cached_input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) reasoning_output_tokens: u64,
-    pub(crate) total_tokens: u64,
+pub struct CodexRawUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
 }
 
 impl CodexRawUsage {
-    pub(crate) fn is_zero(self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.input_tokens == 0
             && self.cached_input_tokens == 0
             && self.output_tokens == 0
@@ -420,42 +420,42 @@ impl CodexRawUsage {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct CodexParseState {
-    pub(crate) current_model: Option<String>,
-    pub(crate) current_model_is_fallback: bool,
-    pub(crate) previous_totals: Option<CodexRawUsage>,
+pub struct CodexParseState {
+    pub current_model: Option<String>,
+    pub current_model_is_fallback: bool,
+    pub previous_totals: Option<CodexRawUsage>,
 }
 
-pub(crate) const LEGACY_CODEX_FALLBACK_MODEL: &str = "gpt-5";
+pub const LEGACY_CODEX_FALLBACK_MODEL: &str = "gpt-5";
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct DailyRow {
-    pub(crate) date: String,
-    pub(crate) totals: TokenCounts,
-    pub(crate) models: BTreeMap<String, TokenCounts>,
-    pub(crate) sources: BTreeMap<String, TokenCounts>,
+pub struct DailyRow {
+    pub date: String,
+    pub totals: TokenCounts,
+    pub models: BTreeMap<String, TokenCounts>,
+    pub sources: BTreeMap<String, TokenCounts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) activity: Option<ActivitySummary>,
+    pub activity: Option<ActivitySummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct DailyReport {
-    pub(crate) daily: Vec<DailyRow>,
-    pub(crate) totals: TokenCounts,
+pub struct DailyReport {
+    pub daily: Vec<DailyRow>,
+    pub totals: TokenCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) activity_totals: Option<ActivitySummary>,
-    pub(crate) stats: ParseStats,
+    pub activity_totals: Option<ActivitySummary>,
+    pub stats: ParseStats,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum TableLayout {
+pub enum TableLayout {
     Compact,
     Standard,
     Full,
 }
 
 impl TableLayout {
-    pub(crate) fn from_terminal_width(width: usize) -> Self {
+    pub fn from_terminal_width(width: usize) -> Self {
         if width <= 110 {
             Self::Compact
         } else if width <= 160 {
@@ -465,7 +465,7 @@ impl TableLayout {
         }
     }
 
-    pub(crate) fn model_line_limit(self) -> usize {
+    pub fn model_line_limit(self) -> usize {
         match self {
             Self::Compact => 2,
             Self::Standard => 4,
@@ -473,7 +473,7 @@ impl TableLayout {
         }
     }
 
-    pub(crate) fn model_char_limit(self) -> usize {
+    pub fn model_char_limit(self) -> usize {
         match self {
             Self::Compact => 24,
             Self::Standard => 38,

@@ -1,22 +1,29 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, NaiveDate, TimeDelta, Utc};
-use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "cli")]
+use std::io::IsTerminal;
+#[cfg(feature = "cli")]
+use std::process::{Command, Stdio};
+#[cfg(feature = "cli")]
 use comfy_table::{
     Attribute, Cell as TableCell, Color as TableColor, ContentArrangement, Row as TableRow,
     Table as TextTable, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
 };
+#[cfg(feature = "cli")]
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "cli")]
 use crate::activity::{dataset_from_heartbeats, format_activity_duration};
+#[cfg(feature = "cli")]
 use crate::cli::{
     HeartbeatArgs, HeartbeatCommand, HeartbeatPingArgs, HeartbeatStatsArgs, HeartbeatWatchArgs,
 };
@@ -48,7 +55,8 @@ struct CachedHeartbeatFile {
     records: Vec<HeartbeatRecord>,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum HeartbeatEntityKind {
     #[default]
@@ -117,6 +125,7 @@ struct HeartbeatStatsOut {
     stats_path: String,
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run(args: HeartbeatArgs) -> Result<()> {
     match args.command {
         HeartbeatCommand::Ping(args) => run_ping(args).await,
@@ -242,6 +251,42 @@ fn read_heartbeat_file_cached(path: &Path) -> Result<Vec<HeartbeatRecord>> {
 
     Ok(records)
 }
+
+// ---------------------------------------------------------------------------
+// Shared utilities (used by library path)
+// ---------------------------------------------------------------------------
+
+fn heartbeat_file_path_for_utc_day(day: NaiveDate) -> Result<PathBuf> {
+    Ok(heartbeat_dir()?.join(format!("{day}.jsonl")))
+}
+
+fn heartbeat_dir() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("TU_HEARTBEAT_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(base) = dirs::data_local_dir() {
+        return Ok(base.join("tokenusage").join("heartbeats"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        return Ok(home.join(".tokenusage").join("heartbeats"));
+    }
+    bail!("Failed to resolve heartbeat data directory");
+}
+
+fn heartbeat_local_date(ts: DateTime<Utc>, tz: &TimeZoneMode) -> NaiveDate {
+    match tz {
+        TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
+        TimeZoneMode::Utc => ts.date_naive(),
+        TimeZoneMode::Named(tz) => ts.with_timezone(tz).date_naive(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CLI-only: everything below is gated behind the `cli` feature.
+// ---------------------------------------------------------------------------
+
+cfg_if::cfg_if! {
+if #[cfg(feature = "cli")] {
 
 async fn run_ping(args: HeartbeatPingArgs) -> Result<()> {
     let record = build_ping_record(&args)?;
@@ -796,31 +841,6 @@ fn emit_json<T: Serialize>(value: &T, jq: Option<&str>) -> Result<()> {
     }
 }
 
-fn heartbeat_file_path_for_utc_day(day: NaiveDate) -> Result<PathBuf> {
-    Ok(heartbeat_dir()?.join(format!("{day}.jsonl")))
-}
-
-fn heartbeat_dir() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("TU_HEARTBEAT_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(base) = dirs::data_local_dir() {
-        return Ok(base.join("tokenusage").join("heartbeats"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        return Ok(home.join(".tokenusage").join("heartbeats"));
-    }
-    bail!("Failed to resolve heartbeat data directory");
-}
-
-fn heartbeat_local_date(ts: DateTime<Utc>, tz: &TimeZoneMode) -> NaiveDate {
-    match tz {
-        TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
-        TimeZoneMode::Utc => ts.date_naive(),
-        TimeZoneMode::Named(tz) => ts.with_timezone(tz).date_naive(),
-    }
-}
-
 fn parse_timezone_mode(input: Option<&str>) -> Result<TimeZoneMode> {
     let Some(raw) = input else {
         return Ok(TimeZoneMode::Local);
@@ -966,6 +986,9 @@ fn truncate_text(value: &str, max_chars: usize) -> String {
     truncated.push('…');
     truncated
 }
+
+} // if cfg(feature = "cli")
+} // cfg_if!
 
 #[cfg(test)]
 mod tests {

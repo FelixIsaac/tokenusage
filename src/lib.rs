@@ -1,18 +1,74 @@
+//! # tokenusage
+//!
+//! Fast token usage tracker for Codex, Claude Code, and Antigravity.
+//!
+//! This crate provides both a CLI tool (`tu`) and a library API for
+//! programmatically analyzing AI coding assistant token usage from local logs.
+//!
+//! ## Library usage
+//!
+//! Add `tokenusage` as a dependency **without** the default `cli` feature:
+//!
+//! ```toml
+//! [dependencies]
+//! tokenusage = { version = "1.5", default-features = false }
+//! ```
+//!
+//! Then use the public API:
+//!
+//! ```no_run
+//! use tokenusage::{Config, ReportPeriod};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let config = Config::default();
+//! let snapshot = tokenusage::usage_snapshot(config).await?;
+//! for event in &snapshot.events {
+//!     println!("{}: {} ({} tokens)",
+//!         event.timestamp, event.model, event.usage.total_tokens());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 mod activity;
+pub mod api;
 mod cli;
+#[cfg(feature = "cli")]
 mod config;
+#[cfg(feature = "cli")]
 mod gui;
 mod heartbeat;
+#[cfg(feature = "cli")]
 mod output;
 mod pipeline;
+#[cfg(feature = "cli")]
 mod share;
 mod types;
 
-use anyhow::Result;
-use clap::Parser;
+// ---------------------------------------------------------------------------
+// Public re-exports for library consumers
+// ---------------------------------------------------------------------------
 
+pub use api::{Config, SortOrder, WeekStart};
+pub use api::{daily_report, daily_report_with_week_start, load_events, parse_stats, usage_snapshot};
+pub use pipeline::{ReportPeriod, TimeZoneMode, UsageSnapshot};
+pub use types::{
+    ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats,
+    PricingRate, PricingTable, SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
+};
+
+// ---------------------------------------------------------------------------
+// CLI entry point — only available with `cli` feature
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "cli")]
+use anyhow::Result;
+#[cfg(feature = "cli")]
+use clap::Parser;
+#[cfg(feature = "cli")]
 use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
 
+#[cfg(feature = "cli")]
 pub async fn run() -> Result<()> {
     let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));
 
@@ -27,6 +83,7 @@ pub async fn run() -> Result<()> {
     }
 }
 
+#[cfg(feature = "cli")]
 fn extract_throttle(cmd: &Commands) -> u64 {
     match cmd {
         Commands::Daily(a) | Commands::Codex(a) | Commands::Claude(a) => a.common.slow,
@@ -50,8 +107,7 @@ fn extract_throttle(cmd: &Commands) -> u64 {
     .unwrap_or(0)
 }
 
-/// Re-invoke the same binary without `--throttle`, piping stdout line-by-line
-/// with a delay between each line. Pure Rust, no libc/unsafe needed.
+#[cfg(feature = "cli")]
 fn run_with_throttle(delay_ms: u64) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
@@ -86,6 +142,7 @@ fn run_with_throttle(delay_ms: u64) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 fn args_without_slow() -> Vec<String> {
     let mut result = Vec::new();
     let mut skip_next = false;
@@ -106,6 +163,7 @@ fn args_without_slow() -> Vec<String> {
     result
 }
 
+#[cfg(feature = "cli")]
 async fn dispatch(command: Commands) -> Result<()> {
     match command {
         Commands::Daily(args) => pipeline::run_daily(args).await,

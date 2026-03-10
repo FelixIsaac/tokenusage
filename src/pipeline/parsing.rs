@@ -24,7 +24,6 @@ use crate::types::{
 
 use super::*;
 use super::pricing::*;
-use super::statusline::unix_now_secs;
 
 pub(super) fn parse_files_with_cache(
     files: &[DiscoveredFile],

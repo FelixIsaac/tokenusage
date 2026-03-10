@@ -7,19 +7,25 @@ use serde::Serialize;
 use crate::activity::{
     ActivityDataset, activity_enabled, fetch_activity_dataset,
 };
+use crate::cli::{CommonArgs, SortOrder};
+#[cfg(feature = "cli")]
 use crate::cli::{
-    ActivityArgs, AntigravityArgs, CommonArgs, DailyArgs, MonthlyArgs, SessionArgs, SortOrder,
+    ActivityArgs, AntigravityArgs, DailyArgs, MonthlyArgs, SessionArgs,
     TodayArgs, WeeklyArgs,
 };
+#[cfg(feature = "cli")]
 use crate::output::{print_report_table_with_options, run_report_tui};
 use crate::types::{
     ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent,
 };
 
 use super::*;
+#[cfg(feature = "cli")]
 use super::activity_report::*;
+#[cfg(feature = "cli")]
 use super::official::{fetch_antigravity_official_limits, select_antigravity_models};
 use super::parsing::load_usage;
+#[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
 
 pub(super) async fn enrich_rows_with_activity(
@@ -120,6 +126,7 @@ pub(super) fn parse_month_bounds(key: &str) -> Option<(NaiveDate, NaiveDate)> {
     Some((start, end))
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
 
@@ -179,6 +186,7 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
     }
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
@@ -230,6 +238,7 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     }
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
@@ -283,6 +292,7 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
 }
 
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let today = tz.now_date();
@@ -350,6 +360,7 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
     }
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     args.common.with_activity = true;
@@ -425,6 +436,7 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
 }
 
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.timezone.as_deref())?;
     let snapshot = fetch_antigravity_official_limits()
@@ -491,6 +503,7 @@ pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 pub(super) fn quota_bar(remaining_pct: f64) -> String {
     let width: usize = 20;
     let filled = ((remaining_pct / 100.0) * width as f64).round() as usize;
@@ -509,6 +522,7 @@ pub(super) fn quota_bar(remaining_pct: f64) -> String {
     )
 }
 
+#[cfg(feature = "cli")]
 pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
@@ -605,7 +619,7 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 
-pub(crate) async fn collect_report(
+pub async fn collect_report(
     common: CommonArgs,
     period: ReportPeriod,
     instances: bool,
@@ -668,7 +682,7 @@ pub(crate) async fn collect_report(
     Ok(build_report_from_rows(rows, activity_totals, loaded.stats))
 }
 
-pub(crate) async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {
+pub async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {
     let timezone = parse_timezone_mode(common.timezone.as_deref())?;
     let loaded = load_usage(&common, &timezone).await?;
     Ok(UsageSnapshot {

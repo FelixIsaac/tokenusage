@@ -1,21 +1,29 @@
+#[cfg(feature = "cli")]
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 
+#[cfg(feature = "cli")]
 use crate::heartbeat::{
     DEFAULT_HEARTBEAT_PULSE_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, HeartbeatEntityKind,
 };
 
-#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+// ---------------------------------------------------------------------------
+// Shared enums — available with or without `cli` feature
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum SortOrder {
+pub enum SortOrder {
     #[default]
     Asc,
     Desc,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum WeekStart {
+pub enum WeekStart {
     #[default]
     Sunday,
     Monday,
@@ -26,9 +34,10 @@ pub(crate) enum WeekStart {
     Saturday,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum VisualBurnRate {
+pub enum VisualBurnRate {
     #[default]
     Off,
     Emoji,
@@ -36,23 +45,90 @@ pub(crate) enum VisualBurnRate {
     EmojiText,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
-pub(crate) enum CostSource {
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum CostSource {
     #[default]
-    #[value(name = "auto")]
+    #[cfg_attr(feature = "cli", value(name = "auto"))]
     #[serde(rename = "auto")]
     Auto,
-    #[value(name = "derived")]
+    #[cfg_attr(feature = "cli", value(name = "derived"))]
     #[serde(rename = "derived")]
     Derived,
-    #[value(name = "cc")]
+    #[cfg_attr(feature = "cli", value(name = "cc"))]
     #[serde(rename = "cc")]
     Cc,
-    #[value(name = "both")]
+    #[cfg_attr(feature = "cli", value(name = "both"))]
     #[serde(rename = "both")]
     Both,
 }
 
+// ---------------------------------------------------------------------------
+// CommonArgs — shared struct, clap attributes conditional on `cli` feature
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(feature = "cli", derive(Args))]
+#[derive(Debug, Clone, Default)]
+pub struct CommonArgs {
+    #[cfg_attr(feature = "cli", arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)"))]
+    pub since: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)"))]
+    pub until: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, short = 'j', help = "Output JSON report"))]
+    pub json: bool,
+    #[cfg_attr(feature = "cli", arg(long, short = 'q', help = "Process JSON output with jq expression (implies --json)"))]
+    pub jq: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, short = 'd', help = "Show debug summary"))]
+    pub debug: bool,
+    #[cfg_attr(feature = "cli", arg(long, default_value_t = 5, help = "Debug sample count"))]
+    pub debug_samples: usize,
+    #[cfg_attr(feature = "cli", arg(long, short = 'o', value_enum, default_value_t = SortOrder::Asc))]
+    pub order: SortOrder,
+    #[cfg_attr(feature = "cli", arg(long, short = 'b', help = "Show per-model breakdown"))]
+    pub breakdown: bool,
+    #[cfg_attr(feature = "cli", arg(long, short = 'O', help = "Use offline pricing behavior"))]
+    pub offline: bool,
+    #[cfg_attr(feature = "cli", arg(long, short = 'z', help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"))]
+    pub timezone: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, short = 'l', help = "Locale for date/time formatting"))]
+    pub locale: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Path to config JSON"))]
+    pub config: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Force compact table mode"))]
+    pub compact: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Worker thread count (default: CPU cores)"))]
+    pub workers: Option<usize>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Claude source"))]
+    pub no_claude: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Codex source"))]
+    pub no_codex: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Antigravity quota probe"))]
+    pub no_antigravity: bool,
+    #[cfg_attr(feature = "cli", arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable"))]
+    pub claude_projects_dir: Vec<String>,
+    #[cfg_attr(feature = "cli", arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable"))]
+    pub codex_sessions_dir: Vec<String>,
+    #[cfg_attr(feature = "cli", arg(long = "ignore-path", help = "Ignore paths containing this substring (repeatable)"))]
+    pub ignore_path: Vec<String>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable built-in heavy directory ignore list"))]
+    pub no_default_ignores: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable incremental parse cache"))]
+    pub no_incremental_cache: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Rebuild incremental parse cache from scratch"))]
+    pub rebuild_cache: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Optional pricing override JSON file"))]
+    pub pricing_file: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Enrich reports with locally inferred coding activity"))]
+    pub with_activity: bool,
+    #[cfg_attr(feature = "cli", arg(long = "slow", short = 'S', num_args = 0..=1, default_missing_value = "60", help = "Slow output for long content (optional: ms per line, default 30)"))]
+    pub slow: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// CLI-only types — only available when `cli` feature is enabled
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "cli")]
 #[derive(Debug, Parser)]
 #[command(
     name = "tokenusage",
@@ -68,6 +144,7 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Commands>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Daily(DailyArgs),
@@ -93,79 +170,7 @@ pub(crate) enum Commands {
     Gui(GuiArgs),
 }
 
-#[derive(Debug, Args, Clone, Default)]
-pub(crate) struct CommonArgs {
-    #[arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")]
-    pub(crate) since: Option<String>,
-    #[arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")]
-    pub(crate) until: Option<String>,
-    #[arg(long, short = 'j', help = "Output JSON report")]
-    pub(crate) json: bool,
-    #[arg(
-        long,
-        short = 'q',
-        help = "Process JSON output with jq expression (implies --json)"
-    )]
-    pub(crate) jq: Option<String>,
-    #[arg(long, short = 'd', help = "Show debug summary")]
-    pub(crate) debug: bool,
-    #[arg(long, default_value_t = 5, help = "Debug sample count")]
-    pub(crate) debug_samples: usize,
-    #[arg(long, short = 'o', value_enum, default_value_t = SortOrder::Asc)]
-    pub(crate) order: SortOrder,
-    #[arg(long, short = 'b', help = "Show per-model breakdown")]
-    pub(crate) breakdown: bool,
-    #[arg(long, short = 'O', help = "Use offline pricing behavior")]
-    pub(crate) offline: bool,
-    #[arg(
-        long,
-        short = 'z',
-        help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"
-    )]
-    pub(crate) timezone: Option<String>,
-    #[arg(long, short = 'l', help = "Locale for date/time formatting")]
-    pub(crate) locale: Option<String>,
-    #[arg(long, help = "Path to config JSON")]
-    pub(crate) config: Option<String>,
-    #[arg(long, help = "Force compact table mode")]
-    pub(crate) compact: bool,
-    #[arg(long, help = "Worker thread count (default: CPU cores)")]
-    pub(crate) workers: Option<usize>,
-    #[arg(long, help = "Disable Claude source")]
-    pub(crate) no_claude: bool,
-    #[arg(long, help = "Disable Codex source")]
-    pub(crate) no_codex: bool,
-    #[arg(long, help = "Disable Antigravity quota probe")]
-    pub(crate) no_antigravity: bool,
-    #[arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable")]
-    pub(crate) claude_projects_dir: Vec<String>,
-    #[arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable")]
-    pub(crate) codex_sessions_dir: Vec<String>,
-    #[arg(
-        long = "ignore-path",
-        help = "Ignore paths containing this substring (repeatable)"
-    )]
-    pub(crate) ignore_path: Vec<String>,
-    #[arg(long, help = "Disable built-in heavy directory ignore list")]
-    pub(crate) no_default_ignores: bool,
-    #[arg(long, help = "Disable incremental parse cache")]
-    pub(crate) no_incremental_cache: bool,
-    #[arg(long, help = "Rebuild incremental parse cache from scratch")]
-    pub(crate) rebuild_cache: bool,
-    #[arg(long, help = "Optional pricing override JSON file")]
-    pub(crate) pricing_file: Option<String>,
-    #[arg(long, help = "Enrich reports with locally inferred coding activity")]
-    pub(crate) with_activity: bool,
-    #[arg(
-        long = "slow",
-        short = 'S',
-        num_args = 0..=1,
-        default_missing_value = "60",
-        help = "Slow output for long content (optional: ms per line, default 30)"
-    )]
-    pub(crate) slow: Option<u64>,
-}
-
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct DailyArgs {
     #[command(flatten)]
@@ -178,6 +183,7 @@ pub(crate) struct DailyArgs {
     pub(crate) project: Option<String>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct TodayArgs {
     #[command(flatten)]
@@ -186,6 +192,7 @@ pub(crate) struct TodayArgs {
     pub(crate) project: Option<String>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct ActivityArgs {
     #[command(flatten)]
@@ -202,12 +209,14 @@ pub(crate) struct ActivityArgs {
     pub(crate) limit: usize,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone)]
 pub(crate) struct HeartbeatArgs {
     #[command(subcommand)]
     pub(crate) command: HeartbeatCommand,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Subcommand, Clone)]
 pub(crate) enum HeartbeatCommand {
     Ping(HeartbeatPingArgs),
@@ -215,6 +224,7 @@ pub(crate) enum HeartbeatCommand {
     Stats(HeartbeatStatsArgs),
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct HeartbeatPingArgs {
     #[arg(help = "Entity path or identifier")]
@@ -239,6 +249,7 @@ pub(crate) struct HeartbeatPingArgs {
     pub(crate) timeout_seconds: u16,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct HeartbeatWatchArgs {
     #[arg(
@@ -258,6 +269,7 @@ pub(crate) struct HeartbeatWatchArgs {
     pub(crate) writes_only: bool,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct HeartbeatStatsArgs {
     #[arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")]
@@ -298,6 +310,7 @@ pub(crate) struct HeartbeatStatsArgs {
     pub(crate) slow: Option<u64>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct AntigravityArgs {
     #[arg(long, short = 'j', help = "Output JSON report")]
@@ -312,12 +325,14 @@ pub(crate) struct AntigravityArgs {
     pub(crate) config: Option<String>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct MonthlyArgs {
     #[command(flatten)]
     pub(crate) common: CommonArgs,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct WeeklyArgs {
     #[command(flatten)]
@@ -326,6 +341,7 @@ pub(crate) struct WeeklyArgs {
     pub(crate) start_of_week: WeekStart,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct SessionArgs {
     #[command(flatten)]
@@ -334,6 +350,7 @@ pub(crate) struct SessionArgs {
     pub(crate) id: Option<String>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct BlocksArgs {
     #[command(flatten)]
@@ -361,6 +378,7 @@ pub(crate) struct BlocksArgs {
     pub(crate) official_limits: bool,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 #[command(
     after_help = "Source shortcuts:\n  tu live codex   (equivalent to: tu live --no-claude)\n  tu live claude  (equivalent to: tu live --no-codex)"
@@ -380,6 +398,7 @@ pub(crate) struct LiveArgs {
     pub(crate) refresh_interval: u64,
 }
 
+#[cfg(feature = "cli")]
 impl From<LiveArgs> for BlocksArgs {
     fn from(value: LiveArgs) -> Self {
         Self {
@@ -395,6 +414,7 @@ impl From<LiveArgs> for BlocksArgs {
     }
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct TopArgs {
     #[command(flatten)]
@@ -416,6 +436,7 @@ pub(crate) struct TopArgs {
     pub(crate) active_hours: u64,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct StatuslineArgs {
     #[command(flatten)]
@@ -458,6 +479,7 @@ pub(crate) struct StatuslineArgs {
     pub(crate) context_medium_threshold: u8,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum GuiPeriod {
@@ -467,6 +489,7 @@ pub(crate) enum GuiPeriod {
     Weekly,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ImgPeriod {
@@ -479,6 +502,7 @@ pub(crate) enum ImgPeriod {
     Both,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct GuiArgs {
     #[command(flatten)]
@@ -497,6 +521,7 @@ pub(crate) struct GuiArgs {
     pub(crate) start_of_week: WeekStart,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct ImgArgs {
     #[command(flatten)]
@@ -532,6 +557,7 @@ pub(crate) struct ImgArgs {
     pub(crate) logo: Option<String>,
 }
 
+#[cfg(feature = "cli")]
 pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     normalize_live_shortcuts(&mut argv);
     normalize_img_shortcuts(&mut argv);
@@ -555,6 +581,7 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     argv
 }
 
+#[cfg(feature = "cli")]
 fn normalize_live_shortcuts(argv: &mut Vec<String>) {
     if argv.get(1).map(String::as_str) != Some("live") {
         return;
@@ -580,8 +607,6 @@ fn normalize_live_shortcuts(argv: &mut Vec<String>) {
             }
         }
         "antigravity" => {
-            // Keep log sources (codex/claude) active for block tracking,
-            // just ensure antigravity probe is not disabled.
             argv.remove(2);
             argv.retain(|arg| arg != "--no-antigravity");
         }
@@ -589,6 +614,7 @@ fn normalize_live_shortcuts(argv: &mut Vec<String>) {
     }
 }
 
+#[cfg(feature = "cli")]
 fn normalize_img_shortcuts(argv: &mut Vec<String>) {
     if argv.get(1).map(String::as_str) != Some("img") {
         return;

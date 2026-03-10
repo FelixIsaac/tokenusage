@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use crate::types::{ActivitySummary, TokenCounts};
 
 use super::*;
-use super::statusline::unix_now_secs;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct CodexAuthFile {

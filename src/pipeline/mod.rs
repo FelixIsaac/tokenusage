@@ -1,30 +1,44 @@
+#[cfg(feature = "cli")]
 mod activity_report;
 mod block_report;
 mod commands;
+#[cfg(feature = "cli")]
 mod display;
+#[cfg(feature = "cli")]
 mod live;
+#[cfg(feature = "cli")]
 mod membership;
 mod official;
 mod parsing;
 mod pricing;
+#[cfg(feature = "cli")]
 mod statusline;
+#[cfg(feature = "cli")]
 mod top;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
 
-// Re-exports for crate-level access
+// Re-exports: public API (library consumers)
+pub use commands::{collect_report, collect_usage_snapshot};
+
+// Re-exports: crate-internal (CLI commands)
+#[cfg(feature = "cli")]
 pub(crate) use commands::{
-    collect_report, collect_usage_snapshot, run_activity, run_antigravity, run_daily, run_monthly,
-    run_session, run_today, run_weekly,
+    run_activity, run_antigravity, run_daily, run_monthly, run_session, run_today, run_weekly,
 };
+#[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
+#[cfg(feature = "cli")]
 pub(crate) use statusline::run_statusline;
+#[cfg(feature = "cli")]
 pub(crate) use top::run_top;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::{IsTerminal, Write};
+#[cfg(feature = "cli")]
+use std::io::IsTerminal;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -40,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{
     CommonArgs, SortOrder, WeekStart,
 };
+#[cfg(feature = "cli")]
 use crate::output::print_report_table_with_options;
 use crate::types::{
     ActivitySummary, CodexRawUsage, DailyReport, DailyRow, DateFilter,
@@ -48,14 +63,14 @@ use crate::types::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) enum TimeZoneMode {
+pub enum TimeZoneMode {
     Local,
     Utc,
     Named(Tz),
 }
 
 impl TimeZoneMode {
-    pub(crate) fn date_of(&self, ts: DateTime<Utc>) -> NaiveDate {
+    pub fn date_of(&self, ts: DateTime<Utc>) -> NaiveDate {
         match self {
             TimeZoneMode::Local => ts.with_timezone(&Local).date_naive(),
             TimeZoneMode::Utc => ts.date_naive(),
@@ -63,7 +78,7 @@ impl TimeZoneMode {
         }
     }
 
-    pub(crate) fn hour_of(&self, ts: DateTime<Utc>) -> u32 {
+    pub fn hour_of(&self, ts: DateTime<Utc>) -> u32 {
         match self {
             TimeZoneMode::Local => ts.with_timezone(&Local).hour(),
             TimeZoneMode::Utc => ts.hour(),
@@ -71,7 +86,7 @@ impl TimeZoneMode {
         }
     }
 
-    pub(crate) fn now_date(&self) -> NaiveDate {
+    pub fn now_date(&self) -> NaiveDate {
         self.date_of(Utc::now())
     }
 }
@@ -142,10 +157,10 @@ struct LiveUsageRuntime {
     last_cache_flush_at: Instant,
 }
 
-pub(crate) struct UsageSnapshot {
-    pub(crate) events: Vec<UsageEvent>,
-    pub(crate) stats: ParseStats,
-    pub(crate) timezone: TimeZoneMode,
+pub struct UsageSnapshot {
+    pub events: Vec<UsageEvent>,
+    pub stats: ParseStats,
+    pub timezone: TimeZoneMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -472,7 +487,7 @@ enum BurnStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReportPeriod {
+pub enum ReportPeriod {
     Daily,
     Monthly,
     Weekly,
@@ -924,6 +939,13 @@ fn worker_count_from_common(common: &CommonArgs) -> usize {
     })
 }
 
+
+pub(super) fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>> {
     let Some(value) = input else {

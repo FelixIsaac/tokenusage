@@ -176,13 +176,6 @@ pub(super) fn write_statusline_cache(cache_path: &Path, line: &str, transcript_p
     }
 }
 
-pub(super) fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 pub(super) fn file_mtime_unix(path: &str) -> Option<u64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     modified
