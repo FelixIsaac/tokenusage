@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type ReactNode } from "react";
+import { useState, useCallback, useRef, useId, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Github, ChevronDown, Copy, Check, Zap, Shield, Layers, Radio, Share2 } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -87,14 +87,63 @@ function OpenAILogo({ size = 18 }: { size?: number }) {
   );
 }
 
-/* Antigravity — upward rocket / arrow */
+/* Google Antigravity blinking cursor mark */
 function AntigravityLogo({ size = 18 }: { size?: number }) {
+  const uid = useId().replace(/:/g, "");
+  const maskId = `${uid}-mask`;
+  const blueFilterId = `${uid}-blue-glow`;
+  const yellowFilterId = `${uid}-yellow-glow`;
+  const redFilterId = `${uid}-red-glow`;
+  const greenFilterId = `${uid}-green-glow`;
+
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
-      <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
-      <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
-      <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+    <svg width={size} height={size} viewBox="0 0 113 113" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path
+        d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"
+        fill="#3186FF"
+      />
+      <mask id={maskId} maskUnits="userSpaceOnUse" x="13" y="18" width="85" height="78">
+        <path
+          d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"
+          fill="white"
+        />
+      </mask>
+      <g mask={`url(#${maskId})`}>
+        <g filter={`url(#${blueFilterId})`}>
+          <ellipse cx="75.8" cy="104.8" rx="29" ry="27.9" transform="rotate(76.9243 75.8 104.8)" fill="#3186FF" />
+        </g>
+        <g filter={`url(#${yellowFilterId})`}>
+          <ellipse cx="33.6" cy="35.4" rx="33.6" ry="35.4" transform="matrix(-0.409539 0.912293 -0.912294 -0.409537 101.25 -15.17)" fill="#FBBC04" />
+        </g>
+        <g filter={`url(#${redFilterId})`}>
+          <ellipse cx="92.6" cy="23.8" rx="44.2" ry="27.5" transform="rotate(34.0763 92.6 23.8)" fill="#FC413D" />
+        </g>
+        <g filter={`url(#${greenFilterId})`}>
+          <ellipse cx="11.2" cy="42.9" rx="30.2" ry="33.3" transform="rotate(45.6065 11.2 42.9)" fill="#00B95C" />
+        </g>
+      </g>
+      <defs>
+        <filter id={blueFilterId} x="17.4" y="45.5" width="116.8" height="118.7" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feFlood floodOpacity="0" result="BackgroundImageFix" />
+          <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+          <feGaussianBlur stdDeviation="15.2" result="effect1_foregroundBlur" />
+        </filter>
+        <filter id={yellowFilterId} x="-7.5" y="-60.5" width="125.3" height="122.9" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feFlood floodOpacity="0" result="BackgroundImageFix" />
+          <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+          <feGaussianBlur stdDeviation="13.8" result="effect1_foregroundBlur" />
+        </filter>
+        <filter id={redFilterId} x="34.3" y="-28.5" width="116.7" height="104.5" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feFlood floodOpacity="0" result="BackgroundImageFix" />
+          <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+          <feGaussianBlur stdDeviation="9.3" result="effect1_foregroundBlur" />
+        </filter>
+        <filter id={greenFilterId} x="-52.6" y="-20.8" width="127.6" height="127.5" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feFlood floodOpacity="0" result="BackgroundImageFix" />
+          <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+          <feGaussianBlur stdDeviation="16" result="effect1_foregroundBlur" />
+        </filter>
+      </defs>
     </svg>
   );
 }
@@ -245,13 +294,24 @@ function PartnerStrip() {
   const { messages } = useI18n();
 
   return (
-    <div
-      className="w-full"
-    >
-      <p className="text-center text-text-dim text-[0.72rem] font-[family-name:var(--font-display)] tracking-[0.18em] uppercase mb-3">
+    <div className="w-full">
+      <p className="mb-2 text-center text-text-dim text-[0.72rem] font-[family-name:var(--font-display)] tracking-[0.18em] uppercase md:mb-3">
         {messages.hero.worksWith}
       </p>
-      <div className="flex items-center justify-center gap-5 flex-wrap">
+      <div className="flex items-center justify-center gap-3 md:hidden">
+        {PARTNERS.map((p) => (
+          <div
+            key={p.name}
+            className="flex h-12 w-12 items-center justify-center rounded-full border shadow-[0_8px_18px_rgba(0,0,0,0.08)]"
+            style={{ background: p.bg, borderColor: p.border, color: p.accent }}
+            aria-label={`${p.name} ${messages.hero.supported}`}
+            title={p.name}
+          >
+            {p.logo}
+          </div>
+        ))}
+      </div>
+      <div className="hidden items-center justify-center gap-5 flex-wrap md:flex">
         {PARTNERS.map((p) => (
           <div
             key={p.name}
@@ -324,8 +384,8 @@ export default function Hero() {
   const activeCmds = INSTALL_METHODS.find((m) => m.key === activeTab)!.cmds;
 
   return (
-    <section id="top" className="mx-auto max-w-[min(1280px,calc(100vw-48px))] min-h-[calc(100svh-3rem)] flex flex-col pb-3">
-      <div className="flex-1 flex items-center">
+    <section id="top" className="mx-auto flex min-h-[calc(100svh-3rem)] max-w-[min(1280px,calc(100vw-48px))] flex-col pb-3">
+      <div className="md:flex md:flex-1 md:items-center">
       <div className="w-full grid items-center gap-9 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {/* Copy side */}
         <div
