@@ -275,6 +275,38 @@ body {
   box-shadow: var(--toolbar-shadow);
 }
 
+.theme-language-menu {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--tooltip-bg) 88%, var(--color-bg)) 0%,
+      color-mix(in srgb, var(--tooltip-bg) 96%, black) 100%
+    );
+  border-color: color-mix(in srgb, var(--color-line-strong) 70%, var(--color-line));
+  box-shadow: var(--tooltip-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  isolation: isolate;
+}
+
+.theme-language-menu-item[data-active="true"] {
+  background: var(--segment-active-bg);
+  color: var(--color-cyan);
+}
+
+.theme-language-menu-item[data-active="false"] {
+  color: var(--color-text-soft);
+}
+
+.theme-language-menu-item[data-active="false"]:hover {
+  background: var(--segment-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.theme-language-menu-meta {
+  color: var(--color-text-dim);
+}
+
 .theme-segment[data-active="true"] {
   background: var(--segment-active-bg);
   box-shadow: var(--segment-active-shadow);

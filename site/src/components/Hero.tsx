@@ -384,7 +384,7 @@ export default function Hero() {
   const activeCmds = INSTALL_METHODS.find((m) => m.key === activeTab)!.cmds;
 
   return (
-    <section id="top" className="mx-auto flex min-h-[calc(100svh-3rem)] max-w-[min(1280px,calc(100vw-48px))] flex-col pb-3">
+    <section id="top" className="mx-auto flex min-h-[calc(100svh-3rem)] max-w-[min(1280px,calc(100vw-48px))] flex-col pb-3 pt-2 md:pt-0">
       <div className="md:flex md:flex-1 md:items-center">
       <div className="w-full grid items-center gap-9 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {/* Copy side */}
@@ -392,7 +392,7 @@ export default function Hero() {
           className="min-w-0 flex flex-col gap-[clamp(24px,4.5svh,52px)]"
         >
           <h1
-            className="font-[family-name:var(--font-display)] text-[clamp(3rem,5.5vw,4.5rem)] leading-[0.9] tracking-[0.06em] text-text-primary font-bold"
+            className="max-w-full font-[family-name:var(--font-display)] text-[clamp(2.15rem,10.8vw,3.8rem)] leading-[0.92] tracking-[0.04em] text-text-primary font-bold sm:text-[clamp(2.7rem,8.4vw,4.15rem)] md:text-[clamp(3rem,5.5vw,4.5rem)] md:tracking-[0.06em]"
             style={{ textShadow: "0 0 40px rgba(95,231,226,0.08)" }}
           >
             {messages.hero.title}

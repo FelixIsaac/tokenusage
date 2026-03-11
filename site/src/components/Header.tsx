@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Github, MoonStar, SunMedium } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { ChevronDown, Github, MoonStar, SunMedium } from "lucide-react";
 import { LANGUAGE_OPTIONS, useI18n, type Locale } from "../i18n";
 import { useTheme } from "../theme";
 
@@ -14,9 +14,15 @@ const THEME_LABELS: Record<Locale, { dark: string; light: string; toggleToDark: 
 
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const { locale, setLocale, messages } = useI18n();
   const { theme, toggleTheme } = useTheme();
   const themeLabels = THEME_LABELS[locale];
+  const languageMenuRef = useRef<HTMLDivElement>(null);
+  const currentLanguage = useMemo(
+    () => LANGUAGE_OPTIONS.find((option) => option.code === locale) ?? LANGUAGE_OPTIONS[0],
+    [locale],
+  );
 
   const scrollTo = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
@@ -28,9 +34,20 @@ export default function Header() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!languageMenuRef.current?.contains(event.target as Node)) {
+        setLanguageMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
   return (
     <header
-      className={`theme-header sticky top-0 z-50 mx-auto flex max-w-[min(1280px,calc(100vw-48px))] items-center justify-between gap-6 rounded-full border px-4 py-1.5 backdrop-blur-xl transition-all duration-300 ${
+      className={`theme-header sticky top-3 z-50 mx-auto mt-3 mb-4 flex w-[calc(100vw-28px)] max-w-[min(1280px,calc(100vw-48px))] items-center justify-between gap-3 rounded-full border px-3 py-1.5 backdrop-blur-xl transition-all duration-300 md:top-0 md:mt-0 md:mb-0 md:w-auto md:gap-6 md:px-4 ${
         scrolled
           ? "theme-header-solid border-line-strong/30 shadow-2xl"
           : "theme-header-resting border-line shadow-lg"
@@ -44,7 +61,7 @@ export default function Header() {
         <img
           src="/assets/branding/tokenusage-logomark.svg"
           alt="tokenusage logo"
-          className="h-8 w-8 drop-shadow-[0_0_18px_rgba(99,231,225,0.14)]"
+          className="h-7 w-7 drop-shadow-[0_0_18px_rgba(99,231,225,0.14)] md:h-8 md:w-8"
         />
       </button>
 
@@ -56,9 +73,55 @@ export default function Header() {
         ))}
       </nav>
 
-      <div className="flex items-center gap-2.5 ml-auto">
+      <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-2.5">
+        <div className="relative md:hidden" ref={languageMenuRef}>
+          <button
+            type="button"
+            onClick={() => setLanguageMenuOpen((open) => !open)}
+            aria-label={messages.header.languageSwitcherAria}
+            aria-haspopup="menu"
+            aria-expanded={languageMenuOpen}
+            className="theme-toolbar-group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 font-[family-name:var(--font-display)] text-[0.72rem] tracking-[0.12em] text-text-soft transition-all sm:px-3"
+          >
+            <span>{currentLanguage.label}</span>
+            <ChevronDown
+              size={14}
+              className={`transition-transform duration-200 ${languageMenuOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+
+          {languageMenuOpen && (
+            <div
+              role="menu"
+              aria-label={messages.header.languageSwitcherAria}
+              className="theme-language-menu absolute right-0 top-[calc(100%+0.55rem)] z-50 grid min-w-[9rem] gap-1 rounded-2xl border p-1.5"
+            >
+              {LANGUAGE_OPTIONS.map((option) => (
+                <button
+                  key={option.code}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={locale === option.code}
+                  onClick={() => {
+                    setLocale(option.code);
+                    setLanguageMenuOpen(false);
+                  }}
+                  lang={option.code}
+                  title={option.nativeName}
+                  data-active={locale === option.code}
+                  className="theme-language-menu-item flex items-center justify-between rounded-xl px-3 py-2 font-[family-name:var(--font-display)] text-[0.72rem] tracking-[0.12em] transition-all"
+                >
+                  <span>{option.label}</span>
+                  <span className="theme-language-menu-meta text-[0.7rem] tracking-normal normal-case">
+                    {option.nativeName}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div
-          className="theme-toolbar-group inline-flex items-center gap-0.5 rounded-full border p-1"
+          className="theme-toolbar-group hidden items-center gap-0.5 rounded-full border p-1 md:inline-flex"
           aria-label={messages.header.languageSwitcherAria}
           role="group"
         >
@@ -82,7 +145,7 @@ export default function Header() {
           onClick={toggleTheme}
           aria-label={theme === "dark" ? themeLabels.toggleToLight : themeLabels.toggleToDark}
           title={theme === "dark" ? themeLabels.toggleToLight : themeLabels.toggleToDark}
-          className="theme-theme-toggle inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-[family-name:var(--font-display)] text-[0.72rem] tracking-[0.1em] transition-all"
+          className="theme-theme-toggle inline-flex items-center gap-2 rounded-full border px-2.5 py-1.5 font-[family-name:var(--font-display)] text-[0.72rem] tracking-[0.1em] transition-all sm:px-3"
         >
           {theme === "dark" ? <SunMedium size={14} /> : <MoonStar size={14} />}
           <span className="hidden md:inline">{theme === "dark" ? themeLabels.light : themeLabels.dark}</span>
@@ -91,7 +154,7 @@ export default function Header() {
           href="https://github.com/hanbu97/tokenusage"
           target="_blank"
           rel="noreferrer"
-          className="theme-button-primary inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider transition-all hover:-translate-y-0.5 hover:border-cyan/30"
+          className="theme-button-primary inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider transition-all hover:-translate-y-0.5 hover:border-cyan/30 sm:px-3.5"
         >
           <Github size={15} />
           <span className="hidden sm:inline">{messages.header.github}</span>
