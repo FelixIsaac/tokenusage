@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Github, ChevronDown, Copy, Check, Zap, Shield, Layers, Radio, Share2 } from "lucide-react";
+import { useI18n } from "../i18n";
 
 function TiltCard({
   children,
@@ -124,67 +125,39 @@ interface FeatureTagData {
   details: string[];
 }
 
+type FeatureTagKey = "faster" | "local" | "sources" | "live" | "share";
+
 const TAG_STYLE = {
   accent: "#5FE7E2",
   border: "rgba(95,231,226,0.22)",
   bg: "rgba(95,231,226,0.05)",
 };
 
-const FEATURE_TAGS: FeatureTagData[] = [
+const FEATURE_TAGS: ({ key: FeatureTagKey } & Omit<FeatureTagData, "label" | "title" | "details">)[] = [
   {
-    label: "214x Faster",
+    key: "faster",
     icon: <Zap size={12} />,
     ...TAG_STYLE,
-    title: "Rust-native speed",
-    details: [
-      "214x faster than ccusage on real-world logs",
-      "Zero-copy JSONL parsing pipeline",
-      "Sub-second results on 100k+ log entries",
-    ],
   },
   {
-    label: "100% Local",
+    key: "local",
     icon: <Shield size={12} />,
     ...TAG_STYLE,
-    title: "No network calls, ever",
-    details: [
-      "All parsing runs on your machine",
-      "Logs never leave your disk",
-      "Works offline — no API keys needed",
-    ],
   },
   {
-    label: "3 Sources",
+    key: "sources",
     icon: <Layers size={12} />,
     ...TAG_STYLE,
-    title: "Unified reporting",
-    details: [
-      "Claude Code + OpenAI Codex + Antigravity",
-      "Single merged token report",
-      "Cross-provider daily/weekly summaries",
-    ],
   },
   {
-    label: "Live Monitor",
+    key: "live",
     icon: <Radio size={12} />,
     ...TAG_STYLE,
-    title: "Real-time tracking",
-    details: [
-      "tu live streams token usage as you code",
-      "Rate limit warnings before you hit walls",
-      "Heartbeat-backed activity time tracking",
-    ],
   },
   {
-    label: "Share Cards",
+    key: "share",
     icon: <Share2 size={12} />,
     ...TAG_STYLE,
-    title: "Show off your usage",
-    details: [
-      "Generate beautiful PNG share cards",
-      "tu img day / tu img week",
-      "Perfect for social media and team updates",
-    ],
   },
 ];
 
@@ -249,13 +222,15 @@ function FeatureTag({ tag }: { tag: FeatureTagData }) {
 }
 
 function ScrollIndicator() {
+  const { messages } = useI18n();
+
   return (
     <button
       onClick={() => document.getElementById("tour")?.scrollIntoView({ behavior: "smooth" })}
       className="flex flex-col items-center gap-1.5 group cursor-pointer bg-transparent border-none"
     >
       <span className="text-text-dim text-[0.68rem] font-[family-name:var(--font-display)] tracking-[0.2em] uppercase transition-colors group-hover:text-cyan/60">
-        Explore
+        {messages.hero.explore}
       </span>
       <div className="relative w-6 h-9 rounded-full border-2 border-text-dim/30 flex justify-center transition-border group-hover:border-cyan/40">
         <div
@@ -269,12 +244,14 @@ function ScrollIndicator() {
 }
 
 function PartnerStrip() {
+  const { messages } = useI18n();
+
   return (
     <div
       className="w-full"
     >
       <p className="text-center text-text-dim text-[0.72rem] font-[family-name:var(--font-display)] tracking-[0.18em] uppercase mb-3">
-        Works with
+        {messages.hero.worksWith}
       </p>
       <div className="flex items-center justify-center gap-5 flex-wrap">
         {PARTNERS.map((p) => (
@@ -294,7 +271,7 @@ function PartnerStrip() {
                 {p.name}
               </span>
               <span className="text-text-dim text-[0.62rem] tracking-wider uppercase leading-tight mt-0.5">
-                Supported
+                {messages.hero.supported}
               </span>
             </div>
           </div>
@@ -306,6 +283,7 @@ function PartnerStrip() {
 
 function CmdRow({ cmd }: { cmd: string }) {
   const [copied, setCopied] = useState(false);
+  const { messages } = useI18n();
 
   const copy = useCallback(async () => {
     try {
@@ -331,6 +309,8 @@ function CmdRow({ cmd }: { cmd: string }) {
       <code className="flex-1 text-[#dffef1] text-[0.88rem] leading-relaxed">{cmd}</code>
       <button
         onClick={copy}
+        aria-label={copied ? messages.common.copied : messages.common.copy}
+        title={copied ? messages.common.copied : messages.common.copy}
         className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim text-[0.68rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -341,6 +321,7 @@ function CmdRow({ cmd }: { cmd: string }) {
 
 export default function Hero() {
   const [activeTab, setActiveTab] = useState("npm");
+  const { messages } = useI18n();
 
   const activeCmds = INSTALL_METHODS.find((m) => m.key === activeTab)!.cmds;
 
@@ -356,17 +337,25 @@ export default function Hero() {
             className="font-[family-name:var(--font-display)] text-[clamp(3rem,5.5vw,4.5rem)] leading-[0.9] tracking-[0.06em] text-text-primary font-bold"
             style={{ textShadow: "0 0 40px rgba(95,231,226,0.08)" }}
           >
-            TOKENUSAGE
+            {messages.hero.title}
           </h1>
 
           <p className="max-w-[20ch] font-[family-name:var(--font-display)] text-[clamp(1.15rem,1.6vw,1.5rem)] leading-snug text-text-soft/90 font-normal tracking-wide">
-            Tokens, limits, and activity in one{" "}
-            <span className="text-cyan font-medium">fast local workflow.</span>
+            {messages.hero.subtitleLead}{" "}
+            <span className="text-cyan font-medium">{messages.hero.subtitleAccent}</span>
           </p>
 
           <div className="flex flex-wrap gap-2">
             {FEATURE_TAGS.map((tag) => (
-              <FeatureTag key={tag.label} tag={tag} />
+              <FeatureTag
+                key={tag.key}
+                tag={{
+                  ...tag,
+                  label: messages.hero.tags[tag.key].label,
+                  title: messages.hero.tags[tag.key].title,
+                  details: messages.hero.tags[tag.key].details,
+                }}
+              />
             ))}
           </div>
 
@@ -375,10 +364,10 @@ export default function Hero() {
               href="https://github.com/hanbu97/tokenusage"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2.5 rounded-full border border-white/12 bg-[linear-gradient(180deg,rgba(30,34,42,0.96),rgba(9,11,15,0.96))] px-5 py-2.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider text-[#f5f8fc] shadow-[0_14px_34px_rgba(0,0,0,0.36)] transition-all hover:-translate-y-0.5 hover:border-cyan/30"
-            >
-              <Github size={15} />
-              Star on GitHub
+            className="inline-flex items-center gap-2.5 rounded-full border border-white/12 bg-[linear-gradient(180deg,rgba(30,34,42,0.96),rgba(9,11,15,0.96))] px-5 py-2.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider text-[#f5f8fc] shadow-[0_14px_34px_rgba(0,0,0,0.36)] transition-all hover:-translate-y-0.5 hover:border-cyan/30"
+          >
+            <Github size={15} />
+              {messages.hero.starOnGithub}
             </a>
           </div>
 
@@ -389,10 +378,10 @@ export default function Hero() {
           }}>
             <div className="mb-2.5">
               <span className="block mb-0.5 text-cyan font-[family-name:var(--font-display)] text-[0.68rem] tracking-[0.14em] uppercase">
-                Install
+                {messages.hero.installBadge}
               </span>
               <span className="font-[family-name:var(--font-display)] text-[0.84rem] tracking-wide text-text-primary">
-                One line, then run <code className="text-cyan">tu</code>
+                {messages.hero.installLead} <code className="text-cyan">tu</code>
               </span>
             </div>
 
@@ -435,7 +424,7 @@ export default function Hero() {
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu gui
             </span>
-            <img src="/assets/media/gui-demo.png" alt="tokenusage GUI dashboard" className="w-full block" />
+            <img src="/assets/media/gui-demo.png" alt={messages.hero.visualAlts.gui} className="w-full block" />
           </TiltCard>
 
           {/* tu — basic CLI, top-right */}
@@ -447,7 +436,7 @@ export default function Hero() {
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu
             </span>
-            <img src="/assets/media/cli-demo-padded.png" alt="tokenusage CLI report" className="w-full block" />
+            <img src="/assets/media/cli-demo-padded.png" alt={messages.hero.visualAlts.cli} className="w-full block" />
           </TiltCard>
 
           {/* tu img week — tall portrait, above tu live, shifted right */}
@@ -459,7 +448,7 @@ export default function Hero() {
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img week
             </span>
-            <img src="/assets/media/share-week-demo.png" alt="tokenusage weekly share card" className="w-full block" />
+            <img src="/assets/media/share-week-demo.png" alt={messages.hero.visualAlts.shareWeek} className="w-full block" />
           </TiltCard>
 
           {/* tu img day — bottom-right, overlapping */}
@@ -471,7 +460,7 @@ export default function Hero() {
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img day
             </span>
-            <img src="/assets/media/share-demo.png" alt="tokenusage share card" className="w-full block" />
+            <img src="/assets/media/share-demo.png" alt={messages.hero.visualAlts.shareDay} className="w-full block" />
           </TiltCard>
 
           {/* tu live — wide bar, bottom spanning */}
@@ -483,7 +472,7 @@ export default function Hero() {
             <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu live
             </span>
-            <img src="/assets/media/live-demo.png" alt="tokenusage live monitor" className="w-full block" />
+            <img src="/assets/media/live-demo.png" alt={messages.hero.visualAlts.live} className="w-full block" />
           </TiltCard>
         </div>
       </div>

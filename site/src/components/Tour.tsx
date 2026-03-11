@@ -2,11 +2,27 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Copy, Check } from "lucide-react";
 import CastPlayer from "./CastPlayer";
+import { useI18n } from "../i18n";
+
+type TourPanelKey =
+  | "daily"
+  | "live"
+  | "top"
+  | "today"
+  | "activity"
+  | "heartbeat"
+  | "img"
+  | "gui"
+  | "periods"
+  | "statusline";
+
+type TourImageAltKey = "dailyShare" | "weeklyShare" | "gui";
 
 function CmdCopy({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const { messages } = useI18n();
 
-  const copy = useCallback(async (e: React.MouseEvent) => {
+  const copy = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(text);
@@ -25,71 +41,83 @@ function CmdCopy({ text }: { text: string }) {
   }, [text]);
 
   return (
-    <span
-      role="button"
+    <button
+      type="button"
       onClick={copy}
+      aria-label={copied ? messages.common.copied : messages.common.copy}
+      title={copied ? messages.common.copied : messages.common.copy}
       className="inline-flex items-center justify-center w-5 h-5 rounded-md border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
     >
       {copied ? <Check size={10} /> : <Copy size={10} />}
-    </span>
+    </button>
   );
 }
 
-/* ---------- left-panel data ---------- */
-const LEFT_PANELS: Record<string, {
-  title: string; link: string; linkLabel: string;
-  img?: string; alt?: string;
+const LEFT_PANELS: Record<TourPanelKey, {
+  link: string;
+  img?: string;
+  altKey?: TourImageAltKey;
   cast?: string;
-  images?: { src: string; alt: string }[];
-  content?: { heading: string; body: string; commands: string[] };
+  images?: { src: string; altKey: TourImageAltKey }[];
+  commands?: string[];
 }> = {
-  daily: { title: "Merged CLI report", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Quick start", cast: "/assets/casts/tu-daily.cast" },
-  live:  { title: "Live monitor", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Live docs", cast: "/assets/casts/tu-live.cast" },
-  top:   { title: "Session top", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Top docs", cast: "/assets/casts/tu-top.cast" },
-  today: { title: "Today view", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Activity docs", cast: "/assets/casts/tu-today.cast" },
-  activity: { title: "Activity view", link: "https://github.com/hanbu97/tokenusage#how-does---with-activity-work", linkLabel: "Activity docs", cast: "/assets/casts/tu-activity.cast" },
-  heartbeat: { title: "Heartbeat system", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Heartbeat docs", cast: "/assets/casts/tu-heartbeat.cast" },
-  img:   { title: "Share cards", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Image docs", images: [{ src: "/assets/media/share-demo.png", alt: "Daily share card" }, { src: "/assets/media/share-week-demo.png", alt: "Weekly share card" }] },
-  gui:   { title: "GUI dashboard", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "GUI docs", img: "/assets/media/gui-demo.png", alt: "GUI dashboard demo" },
-  periods: { title: "Period reports", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Period docs", cast: "/assets/casts/tu-weekly.cast" },
-  statusline: { title: "Statusline", link: "https://github.com/hanbu97/tokenusage#quick-start", linkLabel: "Statusline docs", content: { heading: "Embed in your workflow", body: "Outputs a compact status string for tmux, Neovim, or any tool that reads shell output. Includes session cost, limits, and burn rate.", commands: ["tu statusline", "tu statusline --visual-burn-rate emoji"] } },
+  daily: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-daily.cast" },
+  live: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-live.cast" },
+  top: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-top.cast" },
+  today: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-today.cast" },
+  activity: { link: "https://github.com/hanbu97/tokenusage#how-does---with-activity-work", cast: "/assets/casts/tu-activity.cast" },
+  heartbeat: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-heartbeat.cast" },
+  img: {
+    link: "https://github.com/hanbu97/tokenusage#quick-start",
+    images: [
+      { src: "/assets/media/share-demo.png", altKey: "dailyShare" },
+      { src: "/assets/media/share-week-demo.png", altKey: "weeklyShare" },
+    ],
+  },
+  gui: { link: "https://github.com/hanbu97/tokenusage#quick-start", img: "/assets/media/gui-demo.png", altKey: "gui" },
+  periods: { link: "https://github.com/hanbu97/tokenusage#quick-start", cast: "/assets/casts/tu-weekly.cast" },
+  statusline: {
+    link: "https://github.com/hanbu97/tokenusage#quick-start",
+    commands: ["tu statusline", "tu statusline --visual-burn-rate emoji"],
+  },
 };
 
-/* ---------- right-side steps (all features) ---------- */
 const STEPS = [
-  { key: "daily",      index: "01", cmd: "tu",            title: "Merged token report" },
-  { key: "live",       index: "02", cmd: "tu live",       title: "Real-time TUI monitor" },
-  { key: "top",        index: "03", cmd: "tu top",        title: "htop for tokens" },
-  { key: "today",      index: "04", cmd: "tu today",      title: "Today's coding activity" },
-  { key: "activity",   index: "05", cmd: "tu activity",   title: "Multi-day activity breakdown" },
-  { key: "heartbeat",  index: "06", cmd: "tu heartbeat",  title: "Local heartbeat collector" },
-  { key: "img",        index: "07", cmd: "tu img",        title: "Shareable image cards" },
-  { key: "gui",        index: "08", cmd: "tu gui",        title: "Desktop GUI dashboard" },
-  { key: "periods",    index: "09", cmd: "tu weekly",     title: "Weekly and monthly reports" },
-  { key: "statusline", index: "10", cmd: "tu statusline", title: "Editor and tmux integration" },
-];
+  { key: "daily", index: "01", cmd: "tu" },
+  { key: "live", index: "02", cmd: "tu live" },
+  { key: "top", index: "03", cmd: "tu top" },
+  { key: "today", index: "04", cmd: "tu today" },
+  { key: "activity", index: "05", cmd: "tu activity" },
+  { key: "heartbeat", index: "06", cmd: "tu heartbeat" },
+  { key: "img", index: "07", cmd: "tu img" },
+  { key: "gui", index: "08", cmd: "tu gui" },
+  { key: "periods", index: "09", cmd: "tu weekly" },
+  { key: "statusline", index: "10", cmd: "tu statusline" },
+] as const satisfies { key: TourPanelKey; index: string; cmd: string }[];
 
 export default function Tour() {
-  const [active, setActive] = useState("daily");
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [active, setActive] = useState<TourPanelKey>("daily");
+  const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const stepRefs = useRef<(HTMLDivElement | null)[]>([]);
   const manualRef = useRef(false);
   const manualTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { messages } = useI18n();
 
-  const handleClick = useCallback((key: string) => {
+  const handleClick = useCallback((key: TourPanelKey) => {
     setActive(key);
     manualRef.current = true;
     if (manualTimer.current) clearTimeout(manualTimer.current);
-    manualTimer.current = setTimeout(() => { manualRef.current = false; }, 1500);
-    const idx = STEPS.findIndex((s) => s.key === key);
+    manualTimer.current = setTimeout(() => {
+      manualRef.current = false;
+    }, 1500);
+    const idx = STEPS.findIndex((step) => step.key === key);
     const el = stepRefs.current[idx];
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  // Scroll-driven activation: last panel whose top crossed the 30% viewport line
   useEffect(() => {
-    const keys = STEPS.map((s) => s.key);
+    const keys = STEPS.map((step) => step.key);
     let ticking = false;
 
     const onScroll = () => {
@@ -122,39 +150,44 @@ export default function Tour() {
         transition={{ duration: 0.5 }}
       >
         <span className="inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 bg-[rgba(9,23,40,0.7)] font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
-          Tour
+          {messages.tour.badge}
         </span>
         <h2 className="mt-0 font-[family-name:var(--font-display)] text-[clamp(1.8rem,3.5vw,2.8rem)] leading-tight">
-          Every command, one workflow.
+          {messages.tour.title}
         </h2>
         <p className="mt-4 text-text-soft leading-relaxed">
-          Scroll through each feature to see how tokenusage covers your entire AI coding workflow.
+          {messages.tour.description}
         </p>
       </motion.div>
 
       <div className="grid items-start gap-5.5 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.7fr)]">
-        {/* Left: scrollable stage panels */}
         <div className="grid gap-6">
           {STEPS.map((step, i) => {
             const panel = LEFT_PANELS[step.key];
+            const panelCopy = messages.tour.panels[step.key];
+
             return (
               <div
                 key={step.key}
                 id={`tour-${step.key}`}
-                ref={(el) => { stepRefs.current[i] = el; }}
+                ref={(el) => {
+                  stepRefs.current[i] = el;
+                }}
                 className="glass min-h-[380px] p-4.5 lg:min-h-[440px] transition-opacity duration-300 scroll-mt-24 cursor-pointer"
                 style={{ opacity: active === step.key ? 1 : 0.4 }}
-                onClick={() => { if (active !== step.key) handleClick(step.key); }}
+                onClick={() => {
+                  if (active !== step.key) handleClick(step.key);
+                }}
               >
                 <div className="flex items-center justify-between gap-5 mb-4">
-                  <span className="font-[family-name:var(--font-display)] text-lg">{panel.title}</span>
+                  <span className="font-[family-name:var(--font-display)] text-lg">{panelCopy.panelTitle}</span>
                   <a
                     href={panel.link}
                     target="_blank"
                     rel="noreferrer"
                     className="text-text-dim text-[0.92rem] hover:text-text-soft transition-colors"
                   >
-                    {panel.linkLabel}
+                    {panelCopy.linkLabel}
                   </a>
                 </div>
 
@@ -170,12 +203,17 @@ export default function Tour() {
                 {panel.img && (
                   <button
                     type="button"
-                    onClick={() => setPreviewSrc(panel.img!)}
+                    onClick={() =>
+                      setPreview({
+                        src: panel.img!,
+                        alt: messages.tour.imageAlts[panel.altKey!],
+                      })
+                    }
                     className="w-full h-[calc(100%-58px)] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
                   >
                     <img
                       src={panel.img}
-                      alt={panel.alt}
+                      alt={messages.tour.imageAlts[panel.altKey!]}
                       className="w-full h-full object-contain"
                     />
                   </button>
@@ -187,12 +225,17 @@ export default function Tour() {
                       <button
                         key={img.src}
                         type="button"
-                        onClick={() => setPreviewSrc(img.src)}
+                        onClick={() =>
+                          setPreview({
+                            src: img.src,
+                            alt: messages.tour.imageAlts[img.altKey],
+                          })
+                        }
                         className="w-full h-full rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
                       >
                         <img
                           src={img.src}
-                          alt={img.alt}
+                          alt={messages.tour.imageAlts[img.altKey]}
                           className="w-full h-full object-contain"
                         />
                       </button>
@@ -200,21 +243,21 @@ export default function Tour() {
                   </div>
                 )}
 
-                {panel.content && (
+                {panel.commands && "contentHeading" in panelCopy && "contentBody" in panelCopy && (
                   <div className="grid gap-4.5 h-[calc(100%-58px)] content-center">
                     <div className="p-6 rounded-[18px] bg-[rgba(9,19,34,0.9)] border border-line">
                       <h3 className="m-0 mb-3 font-[family-name:var(--font-display)] text-2xl">
-                        {panel.content.heading}
+                        {panelCopy.contentHeading}
                       </h3>
-                      <p className="text-text-soft leading-relaxed">{panel.content.body}</p>
+                      <p className="text-text-soft leading-relaxed">{panelCopy.contentBody}</p>
                     </div>
                     <div className="flex flex-wrap gap-2.5">
-                      {panel.content.commands.map((c) => (
+                      {panel.commands.map((command) => (
                         <code
-                          key={c}
+                          key={command}
                           className="px-2.5 py-2.5 rounded-xl border border-[rgba(111,145,194,0.18)] bg-[rgba(8,18,31,0.82)] text-text-soft"
                         >
-                          {c}
+                          {command}
                         </code>
                       ))}
                     </div>
@@ -225,13 +268,20 @@ export default function Tour() {
           })}
         </div>
 
-        {/* Right: sticky step nav */}
         <div className="sticky top-20 grid gap-2">
           {STEPS.map((step) => (
-            <button
+            <div
               key={step.key}
-              type="button"
+              role="button"
+              tabIndex={0}
+              aria-pressed={active === step.key}
               onClick={() => handleClick(step.key)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleClick(step.key);
+                }
+              }}
               className={`tour-step grid grid-cols-[36px_minmax(0,1fr)] gap-2.5 px-3 py-2.5 rounded-xl border text-left cursor-pointer transition-all duration-300 ${
                 active === step.key
                   ? "opacity-100 scale-100 border-cyan/34 bg-[linear-gradient(180deg,rgba(17,31,52,0.92),rgba(8,18,31,0.82))]"
@@ -249,29 +299,28 @@ export default function Tour() {
                   <CmdCopy text={step.cmd} />
                 </div>
                 <h3 className="m-0 text-[0.84rem] leading-snug font-medium">
-                  {step.title}
+                  {messages.tour.panels[step.key].stepTitle}
                 </h3>
               </div>
-            </button>
+            </div>
           ))}
         </div>
       </div>
 
-      {/* Image preview dialog */}
       <AnimatePresence>
-        {previewSrc && (
+        {preview && (
           <motion.div
             className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,6,14,0.85)] backdrop-blur-sm cursor-pointer"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            onClick={() => setPreviewSrc(null)}
+            onClick={() => setPreview(null)}
           >
             <div className="relative cursor-default" onClick={(e) => e.stopPropagation()}>
               <motion.img
-                src={previewSrc}
-                alt="Preview"
+                src={preview.src}
+                alt={preview.alt}
                 className="max-w-[90vw] max-h-[85vh] rounded-2xl border border-[rgba(122,146,186,0.25)] shadow-2xl"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
@@ -280,7 +329,7 @@ export default function Tour() {
               />
               <button
                 type="button"
-                onClick={() => setPreviewSrc(null)}
+                onClick={() => setPreview(null)}
                 className="absolute -top-3 -right-3 w-8 h-8 rounded-full border border-[rgba(122,146,186,0.3)] bg-[rgba(8,17,31,0.9)] text-text-soft flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(20,40,70,0.9)] hover:text-white"
               >
                 ✕

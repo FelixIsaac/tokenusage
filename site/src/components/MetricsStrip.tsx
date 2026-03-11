@@ -1,11 +1,5 @@
 import { motion } from "framer-motion";
-
-const METRICS = [
-  { value: "0.08s", label: "Warm run on 1,521-file, 2.2 GB Claude log set" },
-  { value: "214x", label: "0.08s vs 17.15s — Rust + parallel scan + caching" },
-  { value: "3 sources", label: "Codex, Claude, and Antigravity in one merged view" },
-  { value: "100% local", label: "Logs stay on your machine. Only pricing metadata is fetched." },
-];
+import { useI18n } from "../i18n";
 
 const container = {
   hidden: {},
@@ -18,6 +12,8 @@ const item = {
 };
 
 export default function MetricsStrip() {
+  const { messages } = useI18n();
+
   return (
     <motion.section
       className="mx-auto grid max-w-[min(1280px,calc(100vw-48px))] grid-cols-1 gap-5 pt-3 pb-14 sm:grid-cols-2 lg:grid-cols-4"
@@ -26,7 +22,7 @@ export default function MetricsStrip() {
       whileInView="show"
       viewport={{ once: true, margin: "-10%" }}
     >
-      {METRICS.map((m) => (
+      {messages.metrics.map((m) => (
         <motion.article
           key={m.value}
           className="glass flex min-h-[150px] flex-col items-start justify-between gap-2.5 p-5.5"

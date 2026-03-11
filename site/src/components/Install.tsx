@@ -1,6 +1,7 @@
 import { useState, useCallback, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Copy, Check, Package } from "lucide-react";
+import { useI18n } from "../i18n";
 
 function NpmIcon({ size = 14 }: { size?: number }) {
   return (
@@ -10,7 +11,6 @@ function NpmIcon({ size = 14 }: { size?: number }) {
   );
 }
 
-
 function PythonIcon({ size = 14 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
@@ -18,15 +18,6 @@ function PythonIcon({ size = 14 }: { size?: number }) {
     </svg>
   );
 }
-
-const COMMANDS = [
-  { cmd: "tu", tip: "Merged token report" },
-  { cmd: "tu live codex", tip: "Real-time limits and pace" },
-  { cmd: "tu today", tip: "Activity view for today" },
-  { cmd: "tu img week", tip: "Generate weekly share card" },
-  { cmd: "tu gui", tip: "Open GUI dashboard" },
-  { cmd: "tu heartbeat watch .", tip: "Track coding activity" },
-];
 
 const SOURCES: { key: string; label: string; icon: ReactNode; install: string }[] = [
   {
@@ -51,6 +42,7 @@ const SOURCES: { key: string; label: string; icon: ReactNode; install: string }[
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const { messages } = useI18n();
 
   const copy = useCallback(async () => {
     try {
@@ -72,6 +64,8 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={copy}
+      aria-label={copied ? messages.common.copied : messages.common.copy}
+      title={copied ? messages.common.copied : messages.common.copy}
       className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim text-[0.7rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -81,6 +75,7 @@ function CopyButton({ text }: { text: string }) {
 
 export default function Install() {
   const [active, setActive] = useState("npm");
+  const { messages } = useI18n();
 
   const source = SOURCES.find((s) => s.key === active)!;
   const lines = source.install.split("\n");
@@ -95,10 +90,10 @@ export default function Install() {
         transition={{ duration: 0.5 }}
       >
         <span className="inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 bg-[rgba(9,23,40,0.7)] font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
-          Install
+          {messages.install.badge}
         </span>
         <h2 className="mt-0 font-[family-name:var(--font-display)] text-[clamp(1.5rem,3vw,2.4rem)] leading-tight tracking-[0.04em]">
-          One install. CLI, TUI, or GUI.
+          {messages.install.title}
         </h2>
       </motion.div>
 
@@ -109,25 +104,23 @@ export default function Install() {
         viewport={{ once: true, margin: "-5%" }}
         transition={{ duration: 0.5 }}
       >
-        {/* Tab bar */}
         <div className="flex flex-wrap gap-2 mb-5">
-          {SOURCES.map((s) => (
+          {SOURCES.map((sourceOption) => (
             <button
-              key={s.key}
-              onClick={() => setActive(s.key)}
+              key={sourceOption.key}
+              onClick={() => setActive(sourceOption.key)}
               className={`inline-flex items-center gap-2 min-h-[33px] px-3.5 rounded-full border font-[family-name:var(--font-display)] text-[0.76rem] tracking-wider cursor-pointer transition-all ${
-                active === s.key
+                active === sourceOption.key
                   ? "border-cyan/30 bg-[rgba(15,29,48,0.9)] text-cyan"
                   : "border-[rgba(100,131,176,0.18)] bg-[rgba(8,17,31,0.72)] text-text-dim hover:border-cyan/30 hover:text-cyan"
               }`}
             >
-              {s.icon}
-              {s.label}
+              {sourceOption.icon}
+              {sourceOption.label}
             </button>
           ))}
         </div>
 
-        {/* Install commands — each line with its own copy button */}
         <div className="flex flex-col gap-2.5 mb-5">
           {lines.map((line) => (
             <div
@@ -140,20 +133,19 @@ export default function Install() {
           ))}
         </div>
 
-        {/* Example commands */}
         <p className="m-0 mb-3 text-text-dim text-[0.72rem] font-[family-name:var(--font-display)] tracking-[0.12em] uppercase">
-          Then run
+          {messages.install.thenRun}
         </p>
         <div className="flex flex-wrap gap-2.5">
-          {COMMANDS.map((c) => (
+          {messages.install.commands.map((command) => (
             <code
-              key={c.cmd}
+              key={command.cmd}
               className="group relative px-3 py-2 rounded-xl border border-[rgba(111,145,194,0.18)] bg-[rgba(8,18,31,0.82)] text-lime text-sm cursor-default transition-colors hover:border-cyan/25"
-              title={c.tip}
+              title={command.tip}
             >
-              {c.cmd}
+              {command.cmd}
               <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 rounded-lg border border-line-strong/30 bg-[rgba(8,17,31,0.97)] text-text-soft text-[0.75rem] whitespace-nowrap opacity-0 scale-95 transition-all group-hover:opacity-100 group-hover:scale-100">
-                {c.tip}
+                {command.tip}
               </span>
             </code>
           ))}

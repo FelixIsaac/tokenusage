@@ -1,5 +1,6 @@
 import { memo, useRef, useEffect, useState, useCallback } from "react";
 import "asciinema-player/dist/bundle/asciinema-player.css";
+import { useI18n } from "../i18n";
 
 const buttonClass =
   "flex items-center gap-2 px-5 py-3 rounded-full border border-cyan/30 bg-[rgba(10,22,38,0.92)] text-cyan font-[family-name:var(--font-display)] text-sm tracking-wider hover:border-cyan/50 hover:-translate-y-0.5 transition-all";
@@ -20,6 +21,7 @@ function CastPlayerInner({
   const [ended, setEnded] = useState(false);
   const [playing, setPlaying] = useState(false);
   const hasPlayedRef = useRef(false);
+  const { messages } = useI18n();
 
   // Create player on mount with last-frame poster, no autoplay
   useEffect(() => {
@@ -109,7 +111,7 @@ function CastPlayerInner({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
               <polygon points="6,3 20,12 6,21" />
             </svg>
-            Play
+            {messages.common.play}
           </div>
         </div>
       )}
@@ -128,7 +130,7 @@ function CastPlayerInner({
               <polyline points="1 4 1 10 7 10" />
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
             </svg>
-            Replay
+            {messages.common.replay}
           </div>
         </div>
       )}
