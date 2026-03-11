@@ -12,13 +12,11 @@ export default function App() {
       {/* Background layers */}
       <div className="fixed inset-0 bg-grid pointer-events-none" aria-hidden="true" />
       <div
-        className="fixed top-20 -left-32 w-[34rem] h-[34rem] rounded-full opacity-30 blur-3xl pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(93,231,226,0.36), transparent 72%)" }}
+        className="theme-glow-left fixed top-20 -left-32 w-[34rem] h-[34rem] rounded-full opacity-30 blur-3xl pointer-events-none"
         aria-hidden="true"
       />
       <div
-        className="fixed top-80 -right-32 w-[34rem] h-[34rem] rounded-full opacity-25 blur-3xl pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(130,245,180,0.22), transparent 68%)" }}
+        className="theme-glow-right fixed top-80 -right-32 w-[34rem] h-[34rem] rounded-full opacity-25 blur-3xl pointer-events-none"
         aria-hidden="true"
       />
 

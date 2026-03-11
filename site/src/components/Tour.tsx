@@ -46,7 +46,7 @@ function CmdCopy({ text }: { text: string }) {
       onClick={copy}
       aria-label={copied ? messages.common.copied : messages.common.copy}
       title={copied ? messages.common.copied : messages.common.copy}
-      className="inline-flex items-center justify-center w-5 h-5 rounded-md border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
+      className="theme-copy-button inline-flex items-center justify-center w-5 h-5 rounded-md border text-text-dim cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
     >
       {copied ? <Check size={10} /> : <Copy size={10} />}
     </button>
@@ -149,7 +149,7 @@ export default function Tour() {
         viewport={{ once: true, margin: "-10%" }}
         transition={{ duration: 0.5 }}
       >
-        <span className="inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 bg-[rgba(9,23,40,0.7)] font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
+        <span className="theme-badge inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
           {messages.tour.badge}
         </span>
         <h2 className="mt-0 font-[family-name:var(--font-display)] text-[clamp(1.8rem,3.5vw,2.8rem)] leading-tight">
@@ -196,7 +196,7 @@ export default function Tour() {
                     src={panel.cast}
                     active={active === step.key}
                     onRequestActivate={() => handleClick(step.key)}
-                    className="w-full h-[380px] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] [&_.ap-player]:!bg-transparent [&_.ap-terminal]:!bg-transparent"
+                    className="theme-cast-frame w-full h-[380px] rounded-2xl border"
                   />
                 )}
 
@@ -209,7 +209,7 @@ export default function Tour() {
                         alt: messages.tour.imageAlts[panel.altKey!],
                       })
                     }
-                    className="w-full h-[calc(100%-58px)] rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
+                    className="theme-media-frame w-full h-[calc(100%-58px)] rounded-2xl border overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
                   >
                     <img
                       src={panel.img}
@@ -231,7 +231,7 @@ export default function Tour() {
                             alt: messages.tour.imageAlts[img.altKey],
                           })
                         }
-                        className="w-full h-full rounded-2xl border border-[rgba(122,146,186,0.18)] bg-[rgba(5,11,20,0.8)] overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
+                        className="theme-media-frame w-full h-full rounded-2xl border overflow-hidden cursor-pointer transition-all hover:border-cyan/30 hover:scale-[1.01] p-0"
                       >
                         <img
                           src={img.src}
@@ -245,7 +245,7 @@ export default function Tour() {
 
                 {panel.commands && "contentHeading" in panelCopy && "contentBody" in panelCopy && (
                   <div className="grid gap-4.5 h-[calc(100%-58px)] content-center">
-                    <div className="p-6 rounded-[18px] bg-[rgba(9,19,34,0.9)] border border-line">
+                    <div className="theme-soft-panel p-6 rounded-[18px] border border-line">
                       <h3 className="m-0 mb-3 font-[family-name:var(--font-display)] text-2xl">
                         {panelCopy.contentHeading}
                       </h3>
@@ -255,7 +255,7 @@ export default function Tour() {
                       {panel.commands.map((command) => (
                         <code
                           key={command}
-                          className="px-2.5 py-2.5 rounded-xl border border-[rgba(111,145,194,0.18)] bg-[rgba(8,18,31,0.82)] text-text-soft"
+                          className="theme-code-chip px-2.5 py-2.5 rounded-xl border text-text-soft"
                         >
                           {command}
                         </code>
@@ -275,6 +275,7 @@ export default function Tour() {
               role="button"
               tabIndex={0}
               aria-pressed={active === step.key}
+              data-active={active === step.key}
               onClick={() => handleClick(step.key)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -282,18 +283,14 @@ export default function Tour() {
                   handleClick(step.key);
                 }
               }}
-              className={`tour-step grid grid-cols-[36px_minmax(0,1fr)] gap-2.5 px-3 py-2.5 rounded-xl border text-left cursor-pointer transition-all duration-300 ${
-                active === step.key
-                  ? "opacity-100 scale-100 border-cyan/34 bg-[linear-gradient(180deg,rgba(17,31,52,0.92),rgba(8,18,31,0.82))]"
-                  : "opacity-48 scale-[0.985] border-[rgba(101,131,177,0.14)] bg-[linear-gradient(180deg,rgba(14,26,45,0.78),rgba(8,17,31,0.72))] hover:opacity-70 hover:border-cyan/20"
-              }`}
+              className="theme-step tour-step grid grid-cols-[36px_minmax(0,1fr)] gap-2.5 px-3 py-2.5 rounded-xl border text-left cursor-pointer transition-all duration-300"
             >
-              <div className="inline-flex items-center justify-center w-[36px] h-[36px] rounded-[10px] border border-[rgba(115,147,196,0.2)] bg-[rgba(8,17,31,0.78)] text-cyan font-[family-name:var(--font-display)] text-xs">
+              <div className="theme-step-index inline-flex items-center justify-center w-[36px] h-[36px] rounded-[10px] border text-cyan font-[family-name:var(--font-display)] text-xs">
                 {step.index}
               </div>
               <div className="flex flex-col justify-center gap-1">
                 <div className="inline-flex items-center gap-1.5 self-start">
-                  <code className="px-1.5 py-0.5 rounded-md bg-[rgba(8,17,30,0.82)] border border-[rgba(116,150,198,0.2)] text-cyan text-[0.7rem]">
+                  <code className="theme-code-chip px-1.5 py-0.5 rounded-md border text-cyan text-[0.7rem]">
                     {step.cmd}
                   </code>
                   <CmdCopy text={step.cmd} />
@@ -310,7 +307,7 @@ export default function Tour() {
       <AnimatePresence>
         {preview && (
           <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,6,14,0.85)] backdrop-blur-sm cursor-pointer"
+            className="theme-modal-overlay fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm cursor-pointer"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -321,7 +318,7 @@ export default function Tour() {
               <motion.img
                 src={preview.src}
                 alt={preview.alt}
-                className="max-w-[90vw] max-h-[85vh] rounded-2xl border border-[rgba(122,146,186,0.25)] shadow-2xl"
+                className="theme-preview-image max-w-[90vw] max-h-[85vh] rounded-2xl border shadow-2xl"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -330,7 +327,7 @@ export default function Tour() {
               <button
                 type="button"
                 onClick={() => setPreview(null)}
-                className="absolute -top-3 -right-3 w-8 h-8 rounded-full border border-[rgba(122,146,186,0.3)] bg-[rgba(8,17,31,0.9)] text-text-soft flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(20,40,70,0.9)] hover:text-white"
+                className="theme-modal-close absolute -top-3 -right-3 w-8 h-8 rounded-full border text-text-soft flex items-center justify-center cursor-pointer transition-colors"
               >
                 ✕
               </button>

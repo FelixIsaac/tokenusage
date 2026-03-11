@@ -31,7 +31,7 @@ export default function Docs() {
         viewport={{ once: true, margin: "-10%" }}
         transition={{ duration: 0.5 }}
       >
-        <span className="inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 bg-[rgba(9,23,40,0.7)] font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
+        <span className="theme-badge inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
           {messages.docs.badge}
         </span>
         <h2 className="mt-0 font-[family-name:var(--font-display)] text-[clamp(1.5rem,3vw,2.4rem)] leading-tight tracking-[0.04em]">

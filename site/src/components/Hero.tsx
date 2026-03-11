@@ -50,10 +50,8 @@ function TiltCard({
         className="glass relative overflow-hidden rounded-2xl h-full"
         style={{
           transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${hovering ? 1.06 : 1})`,
-          boxShadow: hovering
-            ? "0 24px 60px rgba(0,0,0,0.45), 0 0 20px rgba(95,231,226,0.08)"
-            : "0 8px 24px rgba(0,0,0,0.2)",
-          borderColor: hovering ? "rgba(95,231,226,0.3)" : undefined,
+          boxShadow: hovering ? "var(--tilt-shadow-hover)" : "var(--tilt-shadow-idle)",
+          borderColor: hovering ? "var(--tilt-border-hover)" : undefined,
           transition: hovering
             ? "transform 0.2s cubic-bezier(0.22,1,0.36,1), box-shadow 0.3s ease-out, border-color 0.2s ease-out"
             : "transform 0.45s cubic-bezier(0.22,1,0.36,1), box-shadow 0.4s ease-out, border-color 0.3s ease-out",
@@ -128,9 +126,9 @@ interface FeatureTagData {
 type FeatureTagKey = "faster" | "local" | "sources" | "live" | "share";
 
 const TAG_STYLE = {
-  accent: "#5FE7E2",
-  border: "rgba(95,231,226,0.22)",
-  bg: "rgba(95,231,226,0.05)",
+  accent: "var(--feature-tag-accent)",
+  border: "var(--feature-tag-border)",
+  bg: "var(--feature-tag-bg)",
 };
 
 const FEATURE_TAGS: ({ key: FeatureTagKey } & Omit<FeatureTagData, "label" | "title" | "details">)[] = [
@@ -175,10 +173,10 @@ function FeatureTag({ tag }: { tag: FeatureTagData }) {
       <span
         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[0.75rem] font-medium cursor-pointer transition-all duration-200"
         style={{
-          color: hovered ? tag.accent : "rgba(95,231,226,0.7)",
+          color: hovered ? tag.accent : "var(--feature-tag-text)",
           borderColor: hovered ? tag.accent : tag.border,
           background: tag.bg,
-          boxShadow: hovered ? `0 0 16px ${tag.bg}` : "none",
+          boxShadow: hovered ? "var(--feature-tag-shadow)" : "none",
         }}
       >
         {tag.icon}
@@ -188,7 +186,7 @@ function FeatureTag({ tag }: { tag: FeatureTagData }) {
       <AnimatePresence>
         {hovered && (
           <motion.div
-            className="absolute left-0 top-full mt-2 z-50 w-[260px] rounded-xl border border-line-strong/30 bg-[rgba(8,17,31,0.97)] backdrop-blur-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)]"
+            className="theme-tooltip absolute left-0 top-full mt-2 z-50 w-[260px] rounded-xl border border-line-strong/30 backdrop-blur-xl p-4"
             initial={{ opacity: 0, y: -4, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.97 }}
@@ -304,14 +302,14 @@ function CmdRow({ cmd }: { cmd: string }) {
 
   return (
     <div
-      className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl border border-[rgba(100,131,176,0.18)] bg-[rgba(6,15,28,0.92)] transition-colors hover:border-cyan/20"
+      className="theme-command-row flex items-center gap-3 px-3.5 py-2.5 rounded-2xl border transition-colors hover:border-cyan/20"
     >
-      <code className="flex-1 text-[#dffef1] text-[0.88rem] leading-relaxed">{cmd}</code>
+      <code className="theme-command-text flex-1 text-[0.88rem] leading-relaxed">{cmd}</code>
       <button
         onClick={copy}
         aria-label={copied ? messages.common.copied : messages.common.copy}
         title={copied ? messages.common.copied : messages.common.copy}
-        className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim text-[0.68rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
+        className="theme-copy-button shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg border text-text-dim text-[0.68rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}
       </button>
@@ -364,20 +362,18 @@ export default function Hero() {
               href="https://github.com/hanbu97/tokenusage"
               target="_blank"
               rel="noreferrer"
-            className="inline-flex items-center gap-2.5 rounded-full border border-white/12 bg-[linear-gradient(180deg,rgba(30,34,42,0.96),rgba(9,11,15,0.96))] px-5 py-2.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider text-[#f5f8fc] shadow-[0_14px_34px_rgba(0,0,0,0.36)] transition-all hover:-translate-y-0.5 hover:border-cyan/30"
-          >
-            <Github size={15} />
+              className="theme-button-primary inline-flex items-center gap-2.5 rounded-full border px-5 py-2.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider transition-all hover:-translate-y-0.5 hover:border-cyan/30"
+            >
+              <Github size={15} />
               {messages.hero.starOnGithub}
             </a>
           </div>
 
           {/* Install card — fixed height container to prevent layout shift */}
           <div style={{ height: "220px" }}>
-          <div className="glass max-w-[40rem] p-3.5 pb-4" style={{
-            background: "linear-gradient(180deg, rgba(12,24,42,0.96), rgba(7,16,30,0.94)), linear-gradient(135deg, rgba(95,231,226,0.08), transparent 50%)"
-          }}>
+          <div className="theme-install-card glass max-w-[40rem] p-3.5 pb-4">
             <div className="mb-2.5">
-              <span className="block mb-0.5 text-cyan font-[family-name:var(--font-display)] text-[0.68rem] tracking-[0.14em] uppercase">
+              <span className="theme-badge block mb-0.5 rounded-full px-2.5 py-1 text-cyan font-[family-name:var(--font-display)] text-[0.68rem] tracking-[0.14em] uppercase w-fit">
                 {messages.hero.installBadge}
               </span>
               <span className="font-[family-name:var(--font-display)] text-[0.84rem] tracking-wide text-text-primary">
@@ -390,11 +386,8 @@ export default function Hero() {
                 <button
                   key={m.key}
                   onClick={() => setActiveTab(m.key)}
-                  className={`min-h-[31px] px-2.5 rounded-full border font-[family-name:var(--font-display)] text-[0.72rem] tracking-wider cursor-pointer transition-all ${
-                    activeTab === m.key
-                      ? "border-cyan/30 bg-[rgba(15,29,48,0.9)] text-cyan"
-                      : "border-[rgba(100,131,176,0.18)] bg-[rgba(8,17,31,0.72)] text-text-dim hover:border-cyan/30 hover:text-cyan"
-                  }`}
+                  data-active={activeTab === m.key}
+                  className="theme-pill-tab min-h-[31px] px-2.5 rounded-full border font-[family-name:var(--font-display)] text-[0.72rem] tracking-wider cursor-pointer transition-all"
                 >
                   {m.label}
                 </button>
@@ -421,7 +414,7 @@ export default function Hero() {
             style={{ rotate: "-2deg" }}
             onClick={() => document.getElementById("tour-gui")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
+            <span className="theme-label-chip absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu gui
             </span>
             <img src="/assets/media/gui-demo.png" alt={messages.hero.visualAlts.gui} className="w-full block" />
@@ -433,7 +426,7 @@ export default function Hero() {
             style={{ rotate: "2.5deg" }}
             onClick={() => document.getElementById("tour-daily")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
+            <span className="theme-label-chip absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu
             </span>
             <img src="/assets/media/cli-demo-padded.png" alt={messages.hero.visualAlts.cli} className="w-full block" />
@@ -445,7 +438,7 @@ export default function Hero() {
             style={{ rotate: "-3deg" }}
             onClick={() => document.getElementById("tour-img")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
+            <span className="theme-label-chip absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img week
             </span>
             <img src="/assets/media/share-week-demo.png" alt={messages.hero.visualAlts.shareWeek} className="w-full block" />
@@ -457,7 +450,7 @@ export default function Hero() {
             style={{ rotate: "-1.5deg" }}
             onClick={() => document.getElementById("tour-img")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
+            <span className="theme-label-chip absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu img day
             </span>
             <img src="/assets/media/share-demo.png" alt={messages.hero.visualAlts.shareDay} className="w-full block" />
@@ -469,7 +462,7 @@ export default function Hero() {
             style={{ rotate: "1deg" }}
             onClick={() => document.getElementById("tour-live")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            <span className="absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full bg-[rgba(7,17,31,0.85)] border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
+            <span className="theme-label-chip absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full border border-line text-cyan font-[family-name:var(--font-mono)] text-[0.7rem]">
               tu live
             </span>
             <img src="/assets/media/live-demo.png" alt={messages.hero.visualAlts.live} className="w-full block" />

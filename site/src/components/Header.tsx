@@ -1,10 +1,22 @@
 import { useState, useEffect, useCallback } from "react";
-import { Github } from "lucide-react";
-import { LANGUAGE_OPTIONS, useI18n } from "../i18n";
+import { Github, MoonStar, SunMedium } from "lucide-react";
+import { LANGUAGE_OPTIONS, useI18n, type Locale } from "../i18n";
+import { useTheme } from "../theme";
+
+const THEME_LABELS: Record<Locale, { dark: string; light: string; toggleToDark: string; toggleToLight: string }> = {
+  en: { dark: "Dark", light: "Light", toggleToDark: "Switch to dark theme", toggleToLight: "Switch to light theme" },
+  fr: { dark: "Sombre", light: "Clair", toggleToDark: "Passer au theme sombre", toggleToLight: "Passer au theme clair" },
+  es: { dark: "Oscuro", light: "Claro", toggleToDark: "Cambiar al tema oscuro", toggleToLight: "Cambiar al tema claro" },
+  de: { dark: "Dunkel", light: "Hell", toggleToDark: "Zum dunklen Theme wechseln", toggleToLight: "Zum hellen Theme wechseln" },
+  zh: { dark: "暗色", light: "亮色", toggleToDark: "切换到暗色主题", toggleToLight: "切换到亮色主题" },
+  ja: { dark: "ダーク", light: "ライト", toggleToDark: "ダークテーマに切り替え", toggleToLight: "ライトテーマに切り替え" },
+};
 
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);
   const { locale, setLocale, messages } = useI18n();
+  const { theme, toggleTheme } = useTheme();
+  const themeLabels = THEME_LABELS[locale];
 
   const scrollTo = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
@@ -18,15 +30,15 @@ export default function Header() {
 
   return (
     <header
-      className={`sticky top-0 z-50 mx-auto flex max-w-[min(1280px,calc(100vw-48px))] items-center justify-between gap-6 rounded-full border px-4 py-1.5 backdrop-blur-xl transition-all duration-300 ${
+      className={`theme-header sticky top-0 z-50 mx-auto flex max-w-[min(1280px,calc(100vw-48px))] items-center justify-between gap-6 rounded-full border px-4 py-1.5 backdrop-blur-xl transition-all duration-300 ${
         scrolled
-          ? "border-line-strong/30 bg-bg/80 shadow-2xl"
-          : "border-line bg-[rgba(8,17,31,0.74)] shadow-lg"
+          ? "theme-header-solid border-line-strong/30 shadow-2xl"
+          : "theme-header-resting border-line shadow-lg"
       }`}
     >
       <button
         onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-        className="flex items-center rounded-full border border-white/10 bg-[rgba(8,18,33,0.46)] p-1 cursor-pointer"
+        className="theme-home-button flex items-center rounded-full border p-1 cursor-pointer"
         aria-label={messages.header.homeAria}
       >
         <img
@@ -46,7 +58,7 @@ export default function Header() {
 
       <div className="flex items-center gap-2.5 ml-auto">
         <div
-          className="inline-flex items-center gap-0.5 rounded-full border border-[rgba(112,145,188,0.2)] bg-[rgba(9,20,35,0.76)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.24)]"
+          className="theme-toolbar-group inline-flex items-center gap-0.5 rounded-full border p-1"
           aria-label={messages.header.languageSwitcherAria}
           role="group"
         >
@@ -58,28 +70,35 @@ export default function Header() {
               lang={option.code}
               title={option.nativeName}
               aria-pressed={locale === option.code}
-              className={`min-w-[2.1rem] rounded-full px-2.5 py-1 font-[family-name:var(--font-display)] text-[0.68rem] tracking-[0.12em] transition-all ${
-                locale === option.code
-                  ? "bg-[rgba(23,58,60,0.95)] text-cyan shadow-[0_0_0_1px_rgba(95,231,226,0.18),0_10px_24px_rgba(95,231,226,0.14)]"
-                  : "text-text-dim hover:bg-[rgba(16,30,49,0.88)] hover:text-text-soft"
-              }`}
+              data-active={locale === option.code}
+              className="theme-segment min-w-[2.1rem] rounded-full px-2.5 py-1 font-[family-name:var(--font-display)] text-[0.68rem] tracking-[0.12em] transition-all"
             >
               {option.label}
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? themeLabels.toggleToLight : themeLabels.toggleToDark}
+          title={theme === "dark" ? themeLabels.toggleToLight : themeLabels.toggleToDark}
+          className="theme-theme-toggle inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-[family-name:var(--font-display)] text-[0.72rem] tracking-[0.1em] transition-all"
+        >
+          {theme === "dark" ? <SunMedium size={14} /> : <MoonStar size={14} />}
+          <span className="hidden md:inline">{theme === "dark" ? themeLabels.light : themeLabels.dark}</span>
+        </button>
         <a
           href="https://github.com/hanbu97/tokenusage"
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-[linear-gradient(180deg,rgba(30,34,42,0.96),rgba(9,11,15,0.96))] px-3.5 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider text-[#f5f8fc] shadow-[0_14px_34px_rgba(0,0,0,0.36)] transition-all hover:-translate-y-0.5 hover:border-cyan/30"
+          className="theme-button-primary inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider transition-all hover:-translate-y-0.5 hover:border-cyan/30"
         >
           <Github size={15} />
           <span className="hidden sm:inline">{messages.header.github}</span>
         </a>
         <button
           onClick={() => scrollTo("install")}
-          className="hidden rounded-full border border-[rgba(112,145,188,0.28)] bg-[rgba(10,22,38,0.62)] px-3.5 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider text-text-soft cursor-pointer transition-all hover:-translate-y-0.5 hover:border-cyan/30 sm:inline-flex"
+          className="theme-button-secondary hidden rounded-full border px-3.5 py-1.5 font-[family-name:var(--font-display)] text-[0.78rem] tracking-wider cursor-pointer transition-all hover:-translate-y-0.5 hover:border-cyan/30 sm:inline-flex"
         >
           {messages.header.install}
         </button>

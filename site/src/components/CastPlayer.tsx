@@ -3,7 +3,7 @@ import "asciinema-player/dist/bundle/asciinema-player.css";
 import { useI18n } from "../i18n";
 
 const buttonClass =
-  "flex items-center gap-2 px-5 py-3 rounded-full border border-cyan/30 bg-[rgba(10,22,38,0.92)] text-cyan font-[family-name:var(--font-display)] text-sm tracking-wider hover:border-cyan/50 hover:-translate-y-0.5 transition-all";
+  "theme-cast-action flex items-center gap-2 px-5 py-3 rounded-full border font-[family-name:var(--font-display)] text-sm tracking-wider hover:border-cyan/50 hover:-translate-y-0.5 transition-all";
 
 function CastPlayerInner({
   src,
@@ -118,7 +118,7 @@ function CastPlayerInner({
 
       {showReplay && (
         <div
-          className="absolute inset-0 flex items-center justify-center bg-[rgba(5,11,20,0.6)] backdrop-blur-[2px] cursor-pointer rounded-2xl transition-opacity"
+          className="theme-cast-overlay absolute inset-0 flex items-center justify-center backdrop-blur-[2px] cursor-pointer rounded-2xl transition-opacity"
           onClick={(e) => {
             e.stopPropagation();
             if (!active) onRequestActivate?.();

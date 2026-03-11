@@ -66,7 +66,7 @@ function CopyButton({ text }: { text: string }) {
       onClick={copy}
       aria-label={copied ? messages.common.copied : messages.common.copy}
       title={copied ? messages.common.copied : messages.common.copy}
-      className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[rgba(112,145,188,0.2)] bg-[rgba(10,22,38,0.5)] text-text-dim text-[0.7rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
+      className="theme-copy-button shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-text-dim text-[0.7rem] cursor-pointer transition-all hover:border-cyan/30 hover:text-text-soft"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
     </button>
@@ -89,7 +89,7 @@ export default function Install() {
         viewport={{ once: true, margin: "-10%" }}
         transition={{ duration: 0.5 }}
       >
-        <span className="inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 bg-[rgba(9,23,40,0.7)] font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
+        <span className="theme-badge inline-block mb-3.5 px-3 py-2 rounded-full border border-cyan/28 font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.12em] uppercase text-cyan">
           {messages.install.badge}
         </span>
         <h2 className="mt-0 font-[family-name:var(--font-display)] text-[clamp(1.5rem,3vw,2.4rem)] leading-tight tracking-[0.04em]">
@@ -98,7 +98,7 @@ export default function Install() {
       </motion.div>
 
       <motion.div
-        className="glass w-full p-5.5"
+        className="theme-install-card glass w-full p-5.5"
         initial={{ opacity: 0, y: 24 }}
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true, margin: "-5%" }}
@@ -109,11 +109,8 @@ export default function Install() {
             <button
               key={sourceOption.key}
               onClick={() => setActive(sourceOption.key)}
-              className={`inline-flex items-center gap-2 min-h-[33px] px-3.5 rounded-full border font-[family-name:var(--font-display)] text-[0.76rem] tracking-wider cursor-pointer transition-all ${
-                active === sourceOption.key
-                  ? "border-cyan/30 bg-[rgba(15,29,48,0.9)] text-cyan"
-                  : "border-[rgba(100,131,176,0.18)] bg-[rgba(8,17,31,0.72)] text-text-dim hover:border-cyan/30 hover:text-cyan"
-              }`}
+              data-active={active === sourceOption.key}
+              className="theme-pill-tab inline-flex items-center gap-2 min-h-[33px] px-3.5 rounded-full border font-[family-name:var(--font-display)] text-[0.76rem] tracking-wider cursor-pointer transition-all"
             >
               {sourceOption.icon}
               {sourceOption.label}
@@ -125,9 +122,9 @@ export default function Install() {
           {lines.map((line) => (
             <div
               key={line}
-              className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-[rgba(100,131,176,0.18)] bg-[rgba(6,15,28,0.92)] transition-colors hover:border-cyan/20"
+              className="theme-command-row flex items-center gap-3 px-4 py-3 rounded-2xl border transition-colors hover:border-cyan/20"
             >
-              <code className="flex-1 text-[#dffef1] text-[0.9rem] leading-relaxed">{line}</code>
+              <code className="theme-command-text flex-1 text-[0.9rem] leading-relaxed">{line}</code>
               <CopyButton text={line} />
             </div>
           ))}
@@ -140,11 +137,11 @@ export default function Install() {
           {messages.install.commands.map((command) => (
             <code
               key={command.cmd}
-              className="group relative px-3 py-2 rounded-xl border border-[rgba(111,145,194,0.18)] bg-[rgba(8,18,31,0.82)] text-lime text-sm cursor-default transition-colors hover:border-cyan/25"
+              className="theme-code-chip group relative px-3 py-2 rounded-xl border text-lime text-sm cursor-default transition-colors hover:border-cyan/25"
               title={command.tip}
             >
               {command.cmd}
-              <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 rounded-lg border border-line-strong/30 bg-[rgba(8,17,31,0.97)] text-text-soft text-[0.75rem] whitespace-nowrap opacity-0 scale-95 transition-all group-hover:opacity-100 group-hover:scale-100">
+              <span className="theme-tooltip pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 rounded-lg border border-line-strong/30 text-text-soft text-[0.75rem] whitespace-nowrap opacity-0 scale-95 transition-all group-hover:opacity-100 group-hover:scale-100">
                 {command.tip}
               </span>
             </code>
