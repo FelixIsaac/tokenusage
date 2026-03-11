@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Maximize2, X } from "lucide-react";
 import CastPlayer from "./CastPlayer";
 import { useI18n } from "../i18n";
 
@@ -97,12 +97,17 @@ const STEPS = [
 
 export default function Tour() {
   const [active, setActive] = useState<TourPanelKey>("daily");
-  const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null);
+  const [preview, setPreview] = useState<
+    | { kind: "image"; src: string; alt: string }
+    | { kind: "cast"; src: string; title: string }
+    | null
+  >(null);
   const sectionRef = useRef<HTMLElement>(null);
   const stepRefs = useRef<(HTMLDivElement | null)[]>([]);
   const manualRef = useRef(false);
   const manualTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { messages } = useI18n();
+  const castPreviewOpen = preview?.kind === "cast";
 
   const handleClick = useCallback((key: TourPanelKey) => {
     setActive(key);
@@ -139,6 +144,17 @@ export default function Tour() {
     onScroll();
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  useEffect(() => {
+    if (!preview) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreview(null);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [preview]);
 
   return (
     <section id="tour" ref={sectionRef} className="mx-auto max-w-[min(1280px,calc(100vw-48px))] py-14">
@@ -192,12 +208,27 @@ export default function Tour() {
                 </div>
 
                 {panel.cast && (
-                  <CastPlayer
-                    src={panel.cast}
-                    active={active === step.key}
-                    onRequestActivate={() => handleClick(step.key)}
-                    className="theme-cast-frame w-full h-[380px] rounded-2xl border"
-                  />
+                  <div className="relative">
+                    <CastPlayer
+                      src={panel.cast}
+                      active={active === step.key && !castPreviewOpen}
+                      onRequestActivate={() => handleClick(step.key)}
+                      className="theme-cast-frame w-full h-[380px] rounded-2xl border"
+                    />
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (active !== step.key) handleClick(step.key);
+                        setPreview({ kind: "cast", src: panel.cast!, title: panelCopy.panelTitle });
+                      }}
+                      aria-label={messages.common.fullscreen}
+                      title={messages.common.fullscreen}
+                      className="theme-preview-trigger absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-full border cursor-pointer transition-all hover:-translate-y-0.5"
+                    >
+                      <Maximize2 size={15} />
+                    </button>
+                  </div>
                 )}
 
                 {panel.img && (
@@ -205,6 +236,7 @@ export default function Tour() {
                     type="button"
                     onClick={() =>
                       setPreview({
+                        kind: "image",
                         src: panel.img!,
                         alt: messages.tour.imageAlts[panel.altKey!],
                       })
@@ -227,6 +259,7 @@ export default function Tour() {
                         type="button"
                         onClick={() =>
                           setPreview({
+                            kind: "image",
                             src: img.src,
                             alt: messages.tour.imageAlts[img.altKey],
                           })
@@ -315,21 +348,44 @@ export default function Tour() {
             onClick={() => setPreview(null)}
           >
             <div className="relative cursor-default" onClick={(e) => e.stopPropagation()}>
-              <motion.img
-                src={preview.src}
-                alt={preview.alt}
-                className="theme-preview-image max-w-[90vw] max-h-[85vh] rounded-2xl border shadow-2xl"
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              />
+              {preview.kind === "image" ? (
+                <motion.img
+                  src={preview.src}
+                  alt={preview.alt}
+                  className="theme-preview-image max-w-[90vw] max-h-[85vh] rounded-2xl border shadow-2xl"
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.9, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                />
+              ) : (
+                <motion.div
+                  className="w-[min(92vw,1280px)]"
+                  initial={{ scale: 0.96, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.96, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div className="mb-3 flex items-center justify-between gap-4 px-1">
+                    <span className="font-[family-name:var(--font-display)] text-sm tracking-[0.12em] text-text-soft uppercase">
+                      {preview.title}
+                    </span>
+                  </div>
+                  <CastPlayer
+                    src={preview.src}
+                    active
+                    className="theme-cast-frame h-[min(78vh,860px)] w-full rounded-2xl border shadow-2xl"
+                  />
+                </motion.div>
+              )}
               <button
                 type="button"
                 onClick={() => setPreview(null)}
                 className="theme-modal-close absolute -top-3 -right-3 w-8 h-8 rounded-full border text-text-soft flex items-center justify-center cursor-pointer transition-colors"
+                aria-label={messages.common.close}
+                title={messages.common.close}
               >
-                ✕
+                <X size={15} />
               </button>
             </div>
           </motion.div>

@@ -25,6 +25,8 @@ const EN_MESSAGES = {
     copied: "Copied",
     play: "Play",
     replay: "Replay",
+    fullscreen: "Fullscreen",
+    close: "Close",
   },
   header: {
     homeAria: "tokenusage home",
@@ -240,6 +242,8 @@ const TRANSLATIONS: Record<Locale, Messages> = {
       copied: "Copie",
       play: "Lire",
       replay: "Relancer",
+      fullscreen: "Plein ecran",
+      close: "Fermer",
     },
     header: {
       homeAria: "accueil tokenusage",
@@ -414,6 +418,8 @@ const TRANSLATIONS: Record<Locale, Messages> = {
       copied: "Copiado",
       play: "Reproducir",
       replay: "Repetir",
+      fullscreen: "Pantalla completa",
+      close: "Cerrar",
     },
     header: {
       homeAria: "inicio de tokenusage",
@@ -588,6 +594,8 @@ const TRANSLATIONS: Record<Locale, Messages> = {
       copied: "Kopiert",
       play: "Abspielen",
       replay: "Neu starten",
+      fullscreen: "Vollbild",
+      close: "Schliessen",
     },
     header: {
       homeAria: "tokenusage Startseite",
@@ -762,6 +770,8 @@ const TRANSLATIONS: Record<Locale, Messages> = {
       copied: "已复制",
       play: "播放",
       replay: "重播",
+      fullscreen: "全屏",
+      close: "关闭",
     },
     header: {
       homeAria: "tokenusage 首页",
@@ -936,6 +946,8 @@ const TRANSLATIONS: Record<Locale, Messages> = {
       copied: "コピー済み",
       play: "再生",
       replay: "もう一度",
+      fullscreen: "全画面",
+      close: "閉じる",
     },
     header: {
       homeAria: "tokenusage ホーム",

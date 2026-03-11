@@ -451,11 +451,13 @@ body {
   border-color: var(--preview-image-border);
 }
 
+.theme-preview-trigger,
 .theme-modal-close {
   background: var(--preview-close-bg);
   border-color: var(--preview-close-border);
 }
 
+.theme-preview-trigger:hover,
 .theme-modal-close:hover {
   background: var(--preview-close-hover-bg);
   color: var(--preview-close-hover-color);

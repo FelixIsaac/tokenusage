@@ -52,6 +52,14 @@ function CastPlayerInner({
         setEnded(true);
         setPlaying(false);
       });
+
+      if (active) {
+        player.seek(0);
+        player.play();
+        setEnded(false);
+        setPlaying(true);
+        hasPlayedRef.current = true;
+      }
     });
 
     return () => {
