@@ -3,8 +3,10 @@ use chrono::{DateTime, Utc};
 
 use crate::types::{SourceKind, UsageEvent};
 
+use super::statusline::{
+    format_reset_timestamp, format_time_until_reset_short, official_window_details,
+};
 use super::*;
-use super::statusline::{format_reset_timestamp, format_time_until_reset_short, official_window_details};
 
 pub(super) fn parse_token_limit_mode(raw: Option<&str>) -> Result<Option<TokenLimitMode>> {
     let Some(value) = raw.map(str::trim).filter(|s| !s.is_empty()) else {

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 use crate::types::PricingRate;
 
 use super::*;

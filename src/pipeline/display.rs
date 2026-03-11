@@ -1,14 +1,13 @@
 use std::io::IsTerminal;
 
 use comfy_table::{
-    Attribute, Cell as TableCell, Color as TableColor, ContentArrangement,
-    Table as TextTable, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
+    Attribute, Cell as TableCell, Color as TableColor, ContentArrangement, Table as TextTable,
+    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
 };
 use terminal_size::{Width, terminal_size};
 
-
-use super::*;
 use super::activity_report::ActivityOverview;
+use super::*;
 
 pub(super) fn use_styled_output() -> bool {
     std::io::stdout().is_terminal() || std::env::var("CLICOLOR_FORCE").is_ok()
@@ -245,4 +244,3 @@ pub(super) fn shorten_model_name(model: &str) -> String {
         .replace("-20250131", "");
     if s.len() > 16 { s[..16].to_string() } else { s }
 }
-

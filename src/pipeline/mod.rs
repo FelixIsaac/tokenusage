@@ -51,15 +51,12 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{
-    CommonArgs, SortOrder, WeekStart,
-};
+use crate::cli::{CommonArgs, SortOrder, WeekStart};
 #[cfg(feature = "cli")]
 use crate::output::print_report_table_with_options;
 use crate::types::{
-    ActivitySummary, CodexRawUsage, DailyReport, DailyRow, DateFilter,
-    DiscoveredFile, ParseStats, PricingRate, PricingTable, SourceConfig, SourceKind, TokenCounts, UsageAccumulator,
-    UsageEvent,
+    ActivitySummary, CodexRawUsage, DailyReport, DailyRow, DateFilter, DiscoveredFile, ParseStats,
+    PricingRate, PricingTable, SourceConfig, SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
 };
 
 /// Timezone strategy for date grouping.
@@ -535,8 +532,6 @@ pub enum ReportPeriod {
     Weekly,
 }
 
-
-
 const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
     ".hg",
@@ -771,7 +766,6 @@ impl ClaudeDedupeState {
     }
 }
 
-
 fn should_emit_json(common: &CommonArgs) -> bool {
     common.json || common.jq.is_some()
 }
@@ -980,7 +974,6 @@ fn worker_count_from_common(common: &CommonArgs) -> usize {
             .unwrap_or(4)
     })
 }
-
 
 pub(super) fn unix_now_secs() -> u64 {
     std::time::SystemTime::now()

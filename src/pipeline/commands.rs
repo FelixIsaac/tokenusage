@@ -4,22 +4,16 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Serialize;
 
-use crate::activity::{
-    ActivityDataset, activity_enabled, fetch_activity_dataset,
+use crate::activity::{ActivityDataset, activity_enabled, fetch_activity_dataset};
+#[cfg(feature = "cli")]
+use crate::cli::{
+    ActivityArgs, AntigravityArgs, DailyArgs, MonthlyArgs, SessionArgs, TodayArgs, WeeklyArgs,
 };
 use crate::cli::{CommonArgs, SortOrder};
 #[cfg(feature = "cli")]
-use crate::cli::{
-    ActivityArgs, AntigravityArgs, DailyArgs, MonthlyArgs, SessionArgs,
-    TodayArgs, WeeklyArgs,
-};
-#[cfg(feature = "cli")]
 use crate::output::{print_report_table_with_options, run_report_tui};
-use crate::types::{
-    ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent,
-};
+use crate::types::{ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent};
 
-use super::*;
 #[cfg(feature = "cli")]
 use super::activity_report::*;
 #[cfg(feature = "cli")]
@@ -27,6 +21,7 @@ use super::official::{fetch_antigravity_official_limits, select_antigravity_mode
 use super::parsing::load_usage;
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
+use super::*;
 
 pub(super) async fn enrich_rows_with_activity(
     common: &CommonArgs,
@@ -55,7 +50,10 @@ pub(super) async fn enrich_rows_with_activity(
     Ok((rows, totals))
 }
 
-pub(super) fn report_date_bounds(events: &[UsageEvent], tz: &TimeZoneMode) -> Option<(NaiveDate, NaiveDate)> {
+pub(super) fn report_date_bounds(
+    events: &[UsageEvent],
+    tz: &TimeZoneMode,
+) -> Option<(NaiveDate, NaiveDate)> {
     let mut min_day: Option<NaiveDate> = None;
     let mut max_day: Option<NaiveDate> = None;
 
@@ -291,7 +289,6 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     }
 }
 
-
 #[cfg(feature = "cli")]
 pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
@@ -434,7 +431,6 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
         Ok(())
     }
 }
-
 
 #[cfg(feature = "cli")]
 pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
@@ -617,7 +613,6 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 // tu top — real-time per-session token process viewer (htop for tokens)
 // ---------------------------------------------------------------------------
-
 
 pub async fn collect_report(
     common: CommonArgs,

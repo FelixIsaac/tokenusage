@@ -7,9 +7,9 @@ use chrono::{DateTime, Utc};
 use crate::cli::{CostSource, StatuslineArgs, VisualBurnRate};
 use crate::types::{SourceKind, TokenCounts, UsageEvent};
 
-use super::*;
 use super::live::fetch_selected_official_limits;
 use super::parsing::load_usage;
+use super::*;
 
 pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
     if args.context_low_threshold >= args.context_medium_threshold {
@@ -184,7 +184,10 @@ pub(super) fn file_mtime_unix(path: &str) -> Option<u64> {
         .map(|d| d.as_secs())
 }
 
-pub(super) fn aggregate_session_totals(events: &[UsageEvent], session_id: &str) -> Option<TokenCounts> {
+pub(super) fn aggregate_session_totals(
+    events: &[UsageEvent],
+    session_id: &str,
+) -> Option<TokenCounts> {
     let totals = events
         .iter()
         .filter(|event| session_id_matches(&event.session, session_id))

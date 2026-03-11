@@ -10,16 +10,16 @@ use chrono::{DateTime, Local, NaiveDate, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "cli")]
-use std::io::IsTerminal;
-#[cfg(feature = "cli")]
-use std::process::{Command, Stdio};
-#[cfg(feature = "cli")]
 use comfy_table::{
     Attribute, Cell as TableCell, Color as TableColor, ContentArrangement, Row as TableRow,
     Table as TextTable, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
 };
 #[cfg(feature = "cli")]
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(feature = "cli")]
+use std::io::IsTerminal;
+#[cfg(feature = "cli")]
+use std::process::{Command, Stdio};
 
 #[cfg(feature = "cli")]
 use crate::activity::{dataset_from_heartbeats, format_activity_duration};

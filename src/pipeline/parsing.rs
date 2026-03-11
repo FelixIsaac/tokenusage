@@ -18,23 +18,35 @@ use tokio::fs;
 use crate::cli::CommonArgs;
 use crate::types::{
     CodexParseState, CodexRawUsage, DateFilter, DiscoveredFile, LEGACY_CODEX_FALLBACK_MODEL,
-    ParseLineResult, ParseStatsAtomic, ParsedLine, PricingRate, PricingTable,
-    SourceConfig, SourceKind, UsageAccumulator, UsageEvent,
+    ParseLineResult, ParseStatsAtomic, ParsedLine, PricingRate, PricingTable, SourceConfig,
+    SourceKind, UsageAccumulator, UsageEvent,
 };
 
-use super::*;
 use super::pricing::*;
+use super::*;
+
+pub(super) struct ParseFilesConfig<'a> {
+    pub filter: DateFilter,
+    pub timezone: &'a TimeZoneMode,
+    pub pricing: Arc<PricingTable>,
+    pub worker_count: usize,
+    pub cache_enabled: bool,
+    pub sort_events: bool,
+}
 
 pub(super) fn parse_files_with_cache(
     files: &[DiscoveredFile],
-    filter: DateFilter,
-    timezone: &TimeZoneMode,
-    pricing: Arc<PricingTable>,
-    worker_count: usize,
-    cache_enabled: bool,
     cache_store: &mut IncrementalCacheStore,
-    sort_events: bool,
+    config: ParseFilesConfig<'_>,
 ) -> ParsedUsageOutput {
+    let ParseFilesConfig {
+        filter,
+        timezone,
+        pricing,
+        worker_count,
+        cache_enabled,
+        sort_events,
+    } = config;
     let stats = Arc::new(ParseStatsAtomic::default());
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
@@ -128,7 +140,11 @@ pub(super) fn parse_files_with_cache(
 }
 
 impl LiveUsageRuntime {
-    pub(super) async fn new(common: &CommonArgs, refresh_every: u64, defer_claude: bool) -> Result<Self> {
+    pub(super) async fn new(
+        common: &CommonArgs,
+        refresh_every: u64,
+        defer_claude: bool,
+    ) -> Result<Self> {
         let filter = parse_common_filter(common)?;
         let sources = build_sources(common).await?;
         if sources.is_empty() {
@@ -266,13 +282,15 @@ impl LiveUsageRuntime {
         self.maybe_refresh_discovery();
         let parsed = parse_files_with_cache(
             &self.files_cache,
-            self.filter,
-            timezone,
-            self.pricing.clone(),
-            self.worker_count,
-            self.cache_enabled,
             &mut self.cache_store,
-            false,
+            ParseFilesConfig {
+                filter: self.filter,
+                timezone,
+                pricing: self.pricing.clone(),
+                worker_count: self.worker_count,
+                cache_enabled: self.cache_enabled,
+                sort_events: false,
+            },
         );
         self.cache_dirty |= parsed.cache_dirty;
         self.flush_cache(false);
@@ -294,7 +312,10 @@ impl LiveUsageRuntime {
     }
 }
 
-pub(super) async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> Result<LoadedUsage> {
+pub(super) async fn load_usage(
+    common: &CommonArgs,
+    timezone: &TimeZoneMode,
+) -> Result<LoadedUsage> {
     let filter = parse_common_filter(common)?;
     let sources = build_sources(common).await?;
     if sources.is_empty() {
@@ -325,13 +346,15 @@ pub(super) async fn load_usage(common: &CommonArgs, timezone: &TimeZoneMode) -> 
 
     let parsed = parse_files_with_cache(
         &files,
-        filter,
-        timezone,
-        pricing,
-        worker_count,
-        cache_enabled,
         &mut cache_store,
-        true,
+        ParseFilesConfig {
+            filter,
+            timezone,
+            pricing,
+            worker_count,
+            cache_enabled,
+            sort_events: true,
+        },
     );
     if cache_enabled
         && (parsed.cache_dirty || common.rebuild_cache)
@@ -1564,4 +1587,3 @@ pub(super) fn normalized_discovered_path(path: &Path) -> PathBuf {
         normalize_path(path)
     }
 }
-

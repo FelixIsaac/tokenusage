@@ -15,16 +15,16 @@ use ratatui::style::{Color as TuiColor, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Gauge, Paragraph, Wrap};
 
-use crate::activity::{activity_enabled, fetch_activity_dataset, ActivityDataset};
+use crate::activity::{ActivityDataset, activity_enabled, fetch_activity_dataset};
 use crate::cli::{BlocksArgs, CommonArgs};
 use crate::types::{ActivitySummary, SourceKind, TokenCounts, UsageEvent};
 
-use super::*;
 use super::block_report::build_block_json_report;
 use super::membership::*;
 use super::official::*;
 use super::parsing::load_usage;
 use super::statusline::*;
+use super::*;
 
 pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     if args.session_length == 0 {
@@ -1882,7 +1882,10 @@ pub(super) fn live_key_value_line(
     ])
 }
 
-pub(super) fn activity_hourly_values(summary: &ActivitySummary, totals: &TokenCounts) -> Option<(u64, f64)> {
+pub(super) fn activity_hourly_values(
+    summary: &ActivitySummary,
+    totals: &TokenCounts,
+) -> Option<(u64, f64)> {
     if summary.total_seconds == 0 {
         return None;
     }

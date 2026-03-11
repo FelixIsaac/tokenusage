@@ -70,33 +70,68 @@ pub enum CostSource {
 #[cfg_attr(feature = "cli", derive(Args))]
 #[derive(Debug, Clone, Default)]
 pub struct CommonArgs {
-    #[cfg_attr(feature = "cli", arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")
+    )]
     pub since: Option<String>,
-    #[cfg_attr(feature = "cli", arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")
+    )]
     pub until: Option<String>,
     #[cfg_attr(feature = "cli", arg(long, short = 'j', help = "Output JSON report"))]
     pub json: bool,
-    #[cfg_attr(feature = "cli", arg(long, short = 'q', help = "Process JSON output with jq expression (implies --json)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long,
+            short = 'q',
+            help = "Process JSON output with jq expression (implies --json)"
+        )
+    )]
     pub jq: Option<String>,
     #[cfg_attr(feature = "cli", arg(long, short = 'd', help = "Show debug summary"))]
     pub debug: bool,
-    #[cfg_attr(feature = "cli", arg(long, default_value_t = 5, help = "Debug sample count"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, default_value_t = 5, help = "Debug sample count")
+    )]
     pub debug_samples: usize,
     #[cfg_attr(feature = "cli", arg(long, short = 'o', value_enum, default_value_t = SortOrder::Asc))]
     pub order: SortOrder,
-    #[cfg_attr(feature = "cli", arg(long, short = 'b', help = "Show per-model breakdown"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, short = 'b', help = "Show per-model breakdown")
+    )]
     pub breakdown: bool,
-    #[cfg_attr(feature = "cli", arg(long, short = 'O', help = "Use offline pricing behavior"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, short = 'O', help = "Use offline pricing behavior")
+    )]
     pub offline: bool,
-    #[cfg_attr(feature = "cli", arg(long, short = 'z', help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long,
+            short = 'z',
+            help = "Timezone for date grouping (e.g. UTC, Asia/Tokyo)"
+        )
+    )]
     pub timezone: Option<String>,
-    #[cfg_attr(feature = "cli", arg(long, short = 'l', help = "Locale for date/time formatting"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, short = 'l', help = "Locale for date/time formatting")
+    )]
     pub locale: Option<String>,
     #[cfg_attr(feature = "cli", arg(long, help = "Path to config JSON"))]
     pub config: Option<String>,
     #[cfg_attr(feature = "cli", arg(long, help = "Force compact table mode"))]
     pub compact: bool,
-    #[cfg_attr(feature = "cli", arg(long, help = "Worker thread count (default: CPU cores)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Worker thread count (default: CPU cores)")
+    )]
     pub workers: Option<usize>,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Claude source"))]
     pub no_claude: bool,
@@ -104,21 +139,45 @@ pub struct CommonArgs {
     pub no_codex: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Antigravity quota probe"))]
     pub no_antigravity: bool,
-    #[cfg_attr(feature = "cli", arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable")
+    )]
     pub claude_projects_dir: Vec<String>,
-    #[cfg_attr(feature = "cli", arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable")
+    )]
     pub codex_sessions_dir: Vec<String>,
-    #[cfg_attr(feature = "cli", arg(long = "ignore-path", help = "Ignore paths containing this substring (repeatable)"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "ignore-path",
+            help = "Ignore paths containing this substring (repeatable)"
+        )
+    )]
     pub ignore_path: Vec<String>,
-    #[cfg_attr(feature = "cli", arg(long, help = "Disable built-in heavy directory ignore list"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Disable built-in heavy directory ignore list")
+    )]
     pub no_default_ignores: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable incremental parse cache"))]
     pub no_incremental_cache: bool,
-    #[cfg_attr(feature = "cli", arg(long, help = "Rebuild incremental parse cache from scratch"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Rebuild incremental parse cache from scratch")
+    )]
     pub rebuild_cache: bool,
-    #[cfg_attr(feature = "cli", arg(long, help = "Optional pricing override JSON file"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Optional pricing override JSON file")
+    )]
     pub pricing_file: Option<String>,
-    #[cfg_attr(feature = "cli", arg(long, help = "Enrich reports with locally inferred coding activity"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Enrich reports with locally inferred coding activity")
+    )]
     pub with_activity: bool,
     #[cfg_attr(feature = "cli", arg(long = "slow", short = 'S', num_args = 0..=1, default_missing_value = "60", help = "Slow output for long content (optional: ms per line, default 30)"))]
     pub slow: Option<u64>,

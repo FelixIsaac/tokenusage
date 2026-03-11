@@ -128,11 +128,13 @@ mod types;
 // ---------------------------------------------------------------------------
 
 pub use api::{Config, SortOrder, WeekStart};
-pub use api::{daily_report, daily_report_with_week_start, load_events, parse_stats, usage_snapshot};
+pub use api::{
+    daily_report, daily_report_with_week_start, load_events, parse_stats, usage_snapshot,
+};
 pub use pipeline::{ReportPeriod, TimeZoneMode, UsageSnapshot};
 pub use types::{
-    ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats,
-    PricingRate, PricingTable, SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
+    ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats, PricingRate, PricingTable,
+    SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
 };
 
 // ---------------------------------------------------------------------------
@@ -140,11 +142,11 @@ pub use types::{
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "cli")]
+use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
+#[cfg(feature = "cli")]
 use anyhow::Result;
 #[cfg(feature = "cli")]
 use clap::Parser;
-#[cfg(feature = "cli")]
-use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
 
 /// Run the CLI application.
 ///

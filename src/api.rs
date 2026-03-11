@@ -43,7 +43,7 @@ use anyhow::Result;
 
 use crate::cli;
 use crate::pipeline;
-use crate::types::{DailyReport, UsageEvent, ParseStats};
+use crate::types::{DailyReport, ParseStats, UsageEvent};
 
 /// Configuration for token usage analysis.
 ///

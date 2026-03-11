@@ -1153,7 +1153,11 @@ pub(super) fn normalize_for_label_search(text: &str) -> String {
 /// Extract percent "remaining" from lines near a label.
 /// Returns the "used" percent (if text says "XX% used", returns XX;
 /// if text says "XX% remaining/left", returns 100-XX).
-pub(super) fn extract_pct_by_label(label: &str, lines: &[&str], normalized: &[String]) -> Option<f64> {
+pub(super) fn extract_pct_by_label(
+    label: &str,
+    lines: &[&str],
+    normalized: &[String],
+) -> Option<f64> {
     let norm_label = normalize_for_label_search(label);
     for (idx, norm_line) in normalized.iter().enumerate() {
         if !norm_line.contains(&norm_label) {
@@ -1247,7 +1251,11 @@ pub(super) fn all_percents_from_lines(lines: &[&str]) -> Vec<f64> {
 }
 
 /// Extract "Resets ..." text near a label using line-based normalized search.
-pub(super) fn extract_reset_by_label(label: &str, lines: &[&str], normalized: &[String]) -> Option<String> {
+pub(super) fn extract_reset_by_label(
+    label: &str,
+    lines: &[&str],
+    normalized: &[String],
+) -> Option<String> {
     let norm_label = normalize_for_label_search(label);
     for (idx, norm_line) in normalized.iter().enumerate() {
         if !norm_line.contains(&norm_label) {
@@ -1851,7 +1859,9 @@ pub(super) async fn antigravity_fetch_command_model_configs(
     parse_antigravity_command_model_configs(&resp)
 }
 
-pub(super) fn parse_antigravity_user_status(resp: &serde_json::Value) -> Result<OfficialAntigravitySnapshot> {
+pub(super) fn parse_antigravity_user_status(
+    resp: &serde_json::Value,
+) -> Result<OfficialAntigravitySnapshot> {
     // Check for error code
     if let Some(code) = resp.get("code") {
         let is_ok = match code {

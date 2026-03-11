@@ -17,8 +17,8 @@ use crate::activity::{
 use crate::cli::CommonArgs;
 use crate::types::{ActivitySummary, SourceKind, TokenCounts, UsageEvent};
 
-use super::*;
 use super::display::*;
+use super::*;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ActivityOverview {
@@ -92,7 +92,6 @@ pub(super) struct ActivityOut {
     pub(super) breakdowns: ActivityRangeBreakdowns,
     pub(super) stats: ParseStats,
 }
-
 
 pub(super) fn apply_default_activity_range(
     common: &mut CommonArgs,
@@ -303,7 +302,10 @@ pub(super) fn build_activity_overview(
     }
 }
 
-pub(super) fn activity_rate(activity: Option<&ActivitySummary>, totals: &TokenCounts) -> Option<(u64, f64)> {
+pub(super) fn activity_rate(
+    activity: Option<&ActivitySummary>,
+    totals: &TokenCounts,
+) -> Option<(u64, f64)> {
     let summary = activity?;
     if summary.total_seconds == 0 {
         return None;
@@ -318,7 +320,10 @@ pub(super) fn activity_rate(activity: Option<&ActivitySummary>, totals: &TokenCo
     ))
 }
 
-pub(super) fn token_breakdowns_by_model(events: &[UsageEvent], limit: usize) -> Vec<TokenBreakdownStat> {
+pub(super) fn token_breakdowns_by_model(
+    events: &[UsageEvent],
+    limit: usize,
+) -> Vec<TokenBreakdownStat> {
     let mut totals = HashMap::<String, TokenCounts>::new();
     let mut grand_total = 0u64;
 
@@ -354,15 +359,21 @@ pub(super) fn token_breakdowns_by_model(events: &[UsageEvent], limit: usize) -> 
         .collect()
 }
 
-pub(super) fn aggregate_usage_totals_by_project(events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+pub(super) fn aggregate_usage_totals_by_project(
+    events: &[UsageEvent],
+) -> HashMap<String, TokenCounts> {
     aggregate_usage_totals_by(events, |event| Some(project_label_for_activity(event)))
 }
 
-pub(super) fn aggregate_usage_totals_by_language(_events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+pub(super) fn aggregate_usage_totals_by_language(
+    _events: &[UsageEvent],
+) -> HashMap<String, TokenCounts> {
     HashMap::new()
 }
 
-pub(super) fn aggregate_usage_totals_by_source(events: &[UsageEvent]) -> HashMap<String, TokenCounts> {
+pub(super) fn aggregate_usage_totals_by_source(
+    events: &[UsageEvent],
+) -> HashMap<String, TokenCounts> {
     aggregate_usage_totals_by(events, |event| {
         Some(activity_source_label(event.source).to_string())
     })
@@ -904,4 +915,3 @@ pub(super) fn print_source_model_breakdown_section(
     print_activity_breakdown_section("Sources", sources);
     print_token_breakdown_section("Models", models);
 }
-

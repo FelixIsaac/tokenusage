@@ -12,11 +12,11 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use crate::cli::TopArgs;
 use crate::types::{SourceKind, TokenCounts};
 
-use super::*;
-use super::parsing::save_incremental_cache;
 use super::display::*;
 use super::live::BlocksLiveSession;
-use super::parsing::{extract_session_title, parse_files_with_cache};
+use super::parsing::save_incremental_cache;
+use super::parsing::{ParseFilesConfig, extract_session_title, parse_files_with_cache};
+use super::*;
 
 #[derive(Clone)]
 pub(super) struct TopSession {
@@ -103,13 +103,15 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
 
             let parsed = parse_files_with_cache(
                 &rt.files_cache,
-                rt.filter,
-                &tz,
-                rt.pricing.clone(),
-                rt.worker_count,
-                rt.cache_enabled,
                 &mut rt.cache_store,
-                false,
+                ParseFilesConfig {
+                    filter: rt.filter,
+                    timezone: &tz,
+                    pricing: rt.pricing.clone(),
+                    worker_count: rt.worker_count,
+                    cache_enabled: rt.cache_enabled,
+                    sort_events: false,
+                },
             );
             if parsed.cache_dirty {
                 rt.cache_dirty = true;
@@ -338,7 +340,10 @@ pub(super) struct TopFrameState<'a> {
     merge_projects: bool,
 }
 
-pub(super) fn render_top_frame(session: &mut BlocksLiveSession, state: &TopFrameState<'_>) -> Result<()> {
+pub(super) fn render_top_frame(
+    session: &mut BlocksLiveSession,
+    state: &TopFrameState<'_>,
+) -> Result<()> {
     let TopFrameState {
         sessions,
         rates,
