@@ -8,12 +8,13 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use crossbeam_channel::{Receiver, bounded};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde_json::Value;
 use tokio::fs;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::cli::CommonArgs;
 use crate::types::{
@@ -425,6 +426,46 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
         }
     }
 
+    if !common.no_gemini {
+        let roots = if common.gemini_data_dir.is_empty() {
+            vec![home.join(".gemini").join("tmp")]
+        } else {
+            common
+                .gemini_data_dir
+                .iter()
+                .map(|p| expand_user_path(p))
+                .collect()
+        };
+
+        let existing = filter_existing_dirs(roots).await;
+        if !existing.is_empty() {
+            sources.push(SourceConfig {
+                kind: SourceKind::Gemini,
+                roots: existing,
+            });
+        }
+    }
+
+    if !common.no_opencode {
+        let roots = if common.opencode_data_dir.is_empty() {
+            vec![home.join(".local").join("share").join("opencode")]
+        } else {
+            common
+                .opencode_data_dir
+                .iter()
+                .map(|p| expand_user_path(p))
+                .collect()
+        };
+
+        let existing = filter_existing_dirs(roots).await;
+        if !existing.is_empty() {
+            sources.push(SourceConfig {
+                kind: SourceKind::OpenCode,
+                roots: existing,
+            });
+        }
+    }
+
     Ok(sources)
 }
 
@@ -479,6 +520,20 @@ pub(super) fn discover_files_in_root(
     // staying under its original directory (session start date), so partition
     // pruning can miss valid events and undercount filtered ranges.
     let mut out = Vec::new();
+
+    if kind == SourceKind::OpenCode {
+        // Prefer the SQLite database which is authoritative and includes recent usage.
+        let db_path = root.join("opencode.db");
+        if db_path.is_file() {
+            out.push(DiscoveredFile {
+                source: kind,
+                root: root.to_path_buf(),
+                path: normalized_discovered_path(&db_path),
+            });
+            return out;
+        }
+        // Fall back to legacy JSON message storage if the DB doesn't exist.
+    }
     let rules = ignore_rules.clone();
     let mut builder = WalkBuilder::new(root);
     builder
@@ -500,8 +555,20 @@ pub(super) fn discover_files_in_root(
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if !ext.eq_ignore_ascii_case("jsonl") {
+        let should_keep = match kind {
+            SourceKind::Claude | SourceKind::Codex | SourceKind::Gemini => ext.eq_ignore_ascii_case("jsonl"),
+            SourceKind::OpenCode => ext.eq_ignore_ascii_case("json"),
+        };
+        if !should_keep {
             continue;
+        }
+
+        if kind == SourceKind::OpenCode {
+            // Restrict OpenCode discovery to message JSONs; skip db/log/snapshots.
+            let normalized = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+            if !normalized.contains("/storage/message/") {
+                continue;
+            }
         }
 
         out.push(DiscoveredFile {
@@ -609,7 +676,7 @@ pub(super) fn parse_single_file(
     let mut base_stats = CachedFileStats::default();
     let mut parsed_offset = 0u64;
 
-    if let ParseStrategy::Incremental { base_cache } = job.strategy {
+    if let ParseStrategy::Incremental { ref base_cache } = job.strategy {
         let fallback_offset = base_cache.fingerprint.size;
         let seek_offset = base_cache
             .parsed_offset
@@ -632,12 +699,27 @@ pub(super) fn parse_single_file(
                     codex_state.previous_totals = base_cache.codex_last_totals;
                 }
                 SourceKind::Claude => {
-                    claude_state = ClaudeDedupeState::with_seed(base_cache.claude_recent_keys);
+                    claude_state =
+                        ClaudeDedupeState::with_seed(base_cache.claude_recent_keys.clone());
                 }
+                SourceKind::Gemini | SourceKind::OpenCode => {}
             }
         } else {
             let _ = reader.seek(SeekFrom::Start(0));
         }
+    }
+
+    if job.file.source == SourceKind::OpenCode {
+        let ext = job
+            .file
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if ext.eq_ignore_ascii_case("db") {
+            return parse_opencode_db_file(job, filter, timezone, pricing, stats);
+        }
+        return parse_opencode_message_file(job, filter, timezone, pricing, stats);
     }
 
     loop {
@@ -666,6 +748,8 @@ pub(super) fn parse_single_file(
         let parsed = match job.file.source {
             SourceKind::Claude => parse_claude_usage_line(&line, pricing, &mut claude_state),
             SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
+            SourceKind::Gemini => parse_gemini_usage_line(&line, pricing),
+            SourceKind::OpenCode => unreachable!("OpenCode is parsed as whole-file JSON"),
         };
 
         let mut parsed = match parsed {
@@ -753,6 +837,13 @@ pub(super) fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -
         SourceKind::Claude => {
             !(line.contains("\"type\":\"assistant\"") || line.contains("\"type\": \"assistant\""))
         }
+        SourceKind::Gemini => {
+            !(line.contains("\"type\":\"gemini\"")
+                || line.contains("\"type\": \"gemini\"")
+                || line.contains("\"tokens\":")
+                || line.contains("\"tokens\": "))
+        }
+        SourceKind::OpenCode => false,
     }
 }
 
@@ -763,10 +854,22 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
         .unwrap_or(file.path.as_path())
         .to_path_buf();
 
-    let session = relative
-        .with_extension("")
-        .to_string_lossy()
-        .replace('\\', "/");
+    let session = match file.source {
+        SourceKind::OpenCode => {
+            // `.../storage/message/<sessionID>/<msg>.json`
+            let normalized = relative.to_string_lossy().replace('\\', "/");
+            normalized
+                .split("/storage/message/")
+                .nth(1)
+                .and_then(|tail| tail.split('/').next())
+                .unwrap_or_default()
+                .to_string()
+        }
+        _ => relative
+            .with_extension("")
+            .to_string_lossy()
+            .replace('\\', "/"),
+    };
 
     let raw_project = relative
         .components()
@@ -776,10 +879,9 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
 
     let project = match file.source {
         SourceKind::Claude => raw_project.map(|p| decode_claude_project_dir(&p)),
-        SourceKind::Codex => {
-            // Try to extract project from session_meta cwd in the first line
-            extract_codex_project_from_file(&file.path).or(raw_project)
-        }
+        SourceKind::Codex => extract_codex_project_from_file(&file.path).or(raw_project),
+        SourceKind::Gemini => None,
+        SourceKind::OpenCode => None,
     };
 
     (session, project)
@@ -889,6 +991,23 @@ pub(super) fn extract_session_title(source: SourceKind, path: &Path) -> String {
                     }
                 }
             }
+            SourceKind::Gemini => {
+                let entry_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+                if entry_type == "user" {
+                    let content = value.get("content");
+                    if let Some(arr) = content.and_then(Value::as_array) {
+                        for item in arr {
+                            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                                let t = text.trim();
+                                if !t.is_empty() {
+                                    return t.chars().take(80).collect();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            SourceKind::OpenCode => {}
         }
     }
     String::new()
@@ -1074,6 +1193,396 @@ pub(super) fn parse_claude_usage_line(
     })
 }
 
+pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return ParseLineResult::InvalidJson,
+    };
+
+    // Gemini CLI chat logs contain many record types; we only care about
+    // assistant completions with token accounting.
+    if get_value(&value, "type")
+        .and_then(Value::as_str)
+        .is_some_and(|entry_type| entry_type != "gemini")
+    {
+        return ParseLineResult::MissingUsage;
+    }
+
+    let Some(timestamp) = extract_timestamp(&value) else {
+        return ParseLineResult::MissingUsage;
+    };
+
+    let Some(model) = extract_string(&value, &["model"]) else {
+        return ParseLineResult::MissingUsage;
+    };
+
+    let usage = UsageAccumulator {
+        input_tokens: extract_u64(&value, &["tokens.input"]).unwrap_or(0),
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: extract_u64(&value, &["tokens.cached"]).unwrap_or(0),
+        output_tokens: extract_u64(&value, &["tokens.output"]).unwrap_or(0),
+        reasoning_output_tokens: extract_u64(&value, &["tokens.thoughts"]).unwrap_or(0),
+        cost_usd: 0.0,
+    };
+
+    let total_tokens = usage.total_tokens();
+    if total_tokens == 0 {
+        return ParseLineResult::MissingUsage;
+    }
+
+    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
+        Some(v) => (v, false),
+        None => (0.0, true),
+    };
+
+    ParseLineResult::Parsed(ParsedLine {
+        event: UsageEvent {
+            timestamp,
+            source: SourceKind::Gemini,
+            model,
+            session: String::new(),
+            project: None,
+            file_path: String::new(),
+            usage: UsageAccumulator { cost_usd, ..usage },
+        },
+        used_unknown_pricing,
+    })
+}
+
+fn parse_opencode_timestamp_ms(value: &Value) -> Option<i64> {
+    let created = get_value(value, "time.created").and_then(Value::as_i64);
+    let completed = get_value(value, "time.completed").and_then(Value::as_i64);
+    completed.or(created)
+}
+
+fn opencode_project_from_root(value: &Value) -> Option<String> {
+    let root = get_value(value, "path.root")
+        .and_then(Value::as_str)
+        .or_else(|| get_value(value, "path.cwd").and_then(Value::as_str))?;
+    Path::new(root)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+}
+
+fn parse_opencode_model(value: &Value) -> Option<String> {
+    extract_string(value, &["model.modelID", "modelID", "model"])
+}
+
+fn parse_opencode_usage(value: &Value) -> Option<UsageAccumulator> {
+    let input_tokens = extract_u64(value, &["tokens.input"])?;
+    let output_tokens = extract_u64(value, &["tokens.output"]).unwrap_or(0);
+    let reasoning_output_tokens = extract_u64(value, &["tokens.reasoning"]).unwrap_or(0);
+    let cache_read = extract_u64(value, &["tokens.cache.read"]).unwrap_or(0);
+    let cache_write = extract_u64(value, &["tokens.cache.write"]).unwrap_or(0);
+    Some(UsageAccumulator {
+        input_tokens,
+        cache_creation_input_tokens: cache_write,
+        cache_read_input_tokens: cache_read,
+        output_tokens,
+        reasoning_output_tokens,
+        cost_usd: 0.0,
+    })
+}
+
+fn parse_opencode_message_file(
+    job: FileParseJob,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Option<ParsedFileOutput> {
+    let bytes = std::fs::read(&job.file.path).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+
+    stats.lines_total.fetch_add(1, Ordering::Relaxed);
+
+    let Some(ts_ms) = parse_opencode_timestamp_ms(&value) else {
+        stats.lines_missing_usage.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    let Some(timestamp) = DateTime::from_timestamp_millis(ts_ms) else {
+        stats.lines_missing_usage.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+
+    let day = local_date(timestamp, timezone);
+    if !filter.allows(day) {
+        stats.lines_filtered.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    let Some(model) = parse_opencode_model(&value) else {
+        stats.lines_missing_usage.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+
+    let Some(usage) = parse_opencode_usage(&value) else {
+        stats.lines_missing_usage.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    if usage.total_tokens() == 0 {
+        stats.lines_missing_usage.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
+        Some(v) => (v, false),
+        None => (0.0, true),
+    };
+    if used_unknown_pricing {
+        stats.lines_unknown_pricing.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let session = extract_string(&value, &["sessionID"]).unwrap_or_default();
+    let project = opencode_project_from_root(&value);
+
+    stats.lines_parsed.fetch_add(1, Ordering::Relaxed);
+
+    let event = UsageEvent {
+            timestamp,
+            source: SourceKind::OpenCode,
+            model,
+            session,
+            project,
+            file_path: job.file.path.display().to_string(),
+            usage: UsageAccumulator { cost_usd, ..usage },
+        };
+
+    Some(ParsedFileOutput {
+        events: vec![event.clone()],
+        cache_entry: CachedFileEntry {
+            fingerprint: job.fingerprint,
+            stats: CachedFileStats {
+                lines_total: 1,
+                lines_invalid_json: 0,
+                lines_missing_usage: 0,
+                lines_unknown_pricing: if used_unknown_pricing { 1 } else { 0 },
+            },
+            events: vec![CachedUsageEvent {
+                timestamp: event.timestamp,
+                model: event.model.clone(),
+                usage: event.usage,
+            }],
+            parsed_offset: job.fingerprint.size,
+            codex_last_model: None,
+            codex_last_totals: None,
+            claude_recent_keys: vec![],
+        },
+    })
+}
+
+fn filter_bounds_utc_millis(filter: DateFilter, tz: &TimeZoneMode) -> Option<(i64, i64)> {
+    let since = filter.since?;
+    let until = filter.until?;
+
+    let start_local = since.and_hms_opt(0, 0, 0)?;
+    let end_local = until
+        .checked_add_days(chrono::Days::new(1))?
+        .and_hms_opt(0, 0, 0)?;
+
+    let start_utc = match tz {
+        TimeZoneMode::Utc => DateTime::<Utc>::from_naive_utc_and_offset(start_local, Utc),
+        TimeZoneMode::Local => Local
+            .from_local_datetime(&start_local)
+            .earliest()?
+            .with_timezone(&Utc),
+        TimeZoneMode::Named(tz) => tz
+            .from_local_datetime(&start_local)
+            .earliest()?
+            .with_timezone(&Utc),
+    };
+    let end_utc = match tz {
+        TimeZoneMode::Utc => DateTime::<Utc>::from_naive_utc_and_offset(end_local, Utc),
+        TimeZoneMode::Local => Local
+            .from_local_datetime(&end_local)
+            .earliest()?
+            .with_timezone(&Utc),
+        TimeZoneMode::Named(tz) => tz
+            .from_local_datetime(&end_local)
+            .earliest()?
+            .with_timezone(&Utc),
+    };
+
+    Some((
+        start_utc.timestamp_millis(),
+        end_utc.timestamp_millis(),
+    ))
+}
+
+fn parse_opencode_db_file(
+    job: FileParseJob,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Option<ParsedFileOutput> {
+    let path = &job.file.path;
+
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+
+    let mut events = Vec::new();
+    let mut cached_events = Vec::new();
+
+    let bounds = filter_bounds_utc_millis(filter, timezone);
+    let (sql, params): (&str, Vec<i64>) = if let Some((start_ms, end_ms)) = bounds {
+        (
+            "SELECT m.session_id, m.time_created, m.data, s.directory, p.worktree \
+             FROM message m \
+             JOIN session s ON m.session_id = s.id \
+             JOIN project p ON s.project_id = p.id \
+             WHERE m.time_created >= ?1 AND m.time_created < ?2 \
+             ORDER BY m.time_created ASC",
+            vec![start_ms, end_ms],
+        )
+    } else {
+        (
+            "SELECT m.session_id, m.time_created, m.data, s.directory, p.worktree \
+             FROM message m \
+             JOIN session s ON m.session_id = s.id \
+             JOIN project p ON s.project_id = p.id \
+             ORDER BY m.time_created ASC",
+            vec![],
+        )
+    };
+
+    let mut lines_total = 0usize;
+    let mut lines_parsed = 0usize;
+    let mut lines_invalid_json = 0usize;
+    let mut lines_missing_usage = 0usize;
+    let mut lines_unknown_pricing = 0usize;
+    let mut lines_filtered = 0usize;
+
+    let mut stmt = conn.prepare(sql).ok()?;
+    let mut rows = if params.len() == 2 {
+        stmt.query([params[0], params[1]]).ok()?
+    } else {
+        stmt.query([]).ok()?
+    };
+
+    while let Ok(Some(row)) = rows.next() {
+        lines_total += 1;
+        let session_id: String = row.get(0).ok()?;
+        let time_created: i64 = row.get(1).ok()?;
+        let data: String = row.get(2).ok()?;
+        let session_dir: String = row.get(3).ok()?;
+        let project_worktree: String = row.get(4).ok()?;
+
+        let Some(timestamp) = DateTime::from_timestamp_millis(time_created) else {
+            lines_missing_usage += 1;
+            continue;
+        };
+
+        let value: Value = match serde_json::from_str(&data) {
+            Ok(v) => v,
+            Err(_) => {
+                lines_invalid_json += 1;
+                continue;
+            }
+        };
+
+        // Only assistant messages have token accounting.
+        if get_value(&value, "role")
+            .and_then(Value::as_str)
+            .is_some_and(|r| r != "assistant")
+        {
+            lines_missing_usage += 1;
+            continue;
+        }
+
+        let Some(model) = parse_opencode_model(&value) else {
+            lines_missing_usage += 1;
+            continue;
+        };
+        let Some(usage) = parse_opencode_usage(&value) else {
+            lines_missing_usage += 1;
+            continue;
+        };
+        if usage.total_tokens() == 0 {
+            lines_missing_usage += 1;
+            continue;
+        }
+
+        let day = local_date(timestamp, timezone);
+        if !filter.allows(day) {
+            lines_filtered += 1;
+            continue;
+        }
+
+        let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
+            Some(v) => (v, false),
+            None => (0.0, true),
+        };
+        if used_unknown_pricing {
+            lines_unknown_pricing += 1;
+        }
+
+        let project = Path::new(&session_dir)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .or_else(|| {
+                Path::new(&project_worktree)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            });
+
+        let event = UsageEvent {
+            timestamp,
+            source: SourceKind::OpenCode,
+            model: model.clone(),
+            session: session_id,
+            project,
+            file_path: path.display().to_string(),
+            usage: UsageAccumulator { cost_usd, ..usage },
+        };
+        cached_events.push(CachedUsageEvent {
+            timestamp: event.timestamp,
+            model: event.model.clone(),
+            usage: event.usage,
+        });
+        events.push(event);
+        lines_parsed += 1;
+    }
+
+    stats.lines_total.fetch_add(lines_total, Ordering::Relaxed);
+    stats.lines_parsed.fetch_add(lines_parsed, Ordering::Relaxed);
+    stats
+        .lines_invalid_json
+        .fetch_add(lines_invalid_json, Ordering::Relaxed);
+    stats
+        .lines_missing_usage
+        .fetch_add(lines_missing_usage, Ordering::Relaxed);
+    stats
+        .lines_unknown_pricing
+        .fetch_add(lines_unknown_pricing, Ordering::Relaxed);
+    stats
+        .lines_filtered
+        .fetch_add(lines_filtered, Ordering::Relaxed);
+
+    Some(ParsedFileOutput {
+        events,
+        cache_entry: CachedFileEntry {
+            fingerprint: job.fingerprint,
+            stats: CachedFileStats {
+                lines_total,
+                lines_invalid_json,
+                lines_missing_usage,
+                lines_unknown_pricing,
+            },
+            events: cached_events,
+            parsed_offset: job.fingerprint.size,
+            codex_last_model: None,
+            codex_last_totals: None,
+            claude_recent_keys: vec![],
+        },
+    })
+}
+
 pub(super) fn parse_codex_usage_line(
     line: &str,
     state: &mut CodexParseState,
@@ -1191,6 +1700,8 @@ pub(super) fn extract_model(value: &Value, source: SourceKind) -> Option<String>
             "payload.model",
             "model",
         ][..],
+        SourceKind::Gemini => &["model"][..],
+        SourceKind::OpenCode => &["model.modelID", "modelID", "model"][..],
     };
 
     extract_string(value, candidate_paths)
