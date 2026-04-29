@@ -118,7 +118,12 @@ pub(super) fn estimate_membership_from_logs(
     )?;
 
     let mut source_breakdown = Vec::new();
-    for source in [SourceKind::Claude, SourceKind::Codex] {
+    for source in [
+        SourceKind::Claude,
+        SourceKind::Codex,
+        SourceKind::Gemini,
+        SourceKind::OpenCode,
+    ] {
         let samples = per_source_block_totals
             .iter()
             .filter_map(|((kind, _), tokens)| (*kind == source).then_some(*tokens))
@@ -255,6 +260,7 @@ pub(super) fn classify_estimated_plan(
                 "codex_pro_with_credits"
             }
         }
+        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) => "unknown",
         None => {
             if estimated_window_tokens < 240_000_000 {
                 "mixed_standard"

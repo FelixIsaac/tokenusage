@@ -52,12 +52,20 @@ struct CommonConfig {
     no_claude: Option<bool>,
     #[serde(alias = "noCodex")]
     no_codex: Option<bool>,
+    #[serde(alias = "noGemini")]
+    no_gemini: Option<bool>,
+    #[serde(alias = "noOpencode")]
+    no_opencode: Option<bool>,
     #[serde(alias = "noAntigravity")]
     no_antigravity: Option<bool>,
     #[serde(alias = "claudeProjectsDir")]
     claude_projects_dir: Option<Vec<String>>,
     #[serde(alias = "codexSessionsDir")]
     codex_sessions_dir: Option<Vec<String>>,
+    #[serde(alias = "geminiDataDir")]
+    gemini_data_dir: Option<Vec<String>>,
+    #[serde(alias = "opencodeDataDir")]
+    opencode_data_dir: Option<Vec<String>>,
     #[serde(alias = "ignorePath")]
     ignore_path: Option<Vec<String>>,
     #[serde(alias = "noDefaultIgnores")]
@@ -395,6 +403,8 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_none(&mut common.workers, &cfg.workers);
     merge_if_false(&mut common.no_claude, cfg.no_claude);
     merge_if_false(&mut common.no_codex, cfg.no_codex);
+    merge_if_false(&mut common.no_gemini, cfg.no_gemini);
+    merge_if_false(&mut common.no_opencode, cfg.no_opencode);
     merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
     if common.claude_projects_dir.is_empty()
         && let Some(values) = cfg.claude_projects_dir.as_ref()
@@ -405,6 +415,16 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
         && let Some(values) = cfg.codex_sessions_dir.as_ref()
     {
         common.codex_sessions_dir = values.clone();
+    }
+    if common.gemini_data_dir.is_empty()
+        && let Some(values) = cfg.gemini_data_dir.as_ref()
+    {
+        common.gemini_data_dir = values.clone();
+    }
+    if common.opencode_data_dir.is_empty()
+        && let Some(values) = cfg.opencode_data_dir.as_ref()
+    {
+        common.opencode_data_dir = values.clone();
     }
     if common.ignore_path.is_empty()
         && let Some(values) = cfg.ignore_path.as_ref()

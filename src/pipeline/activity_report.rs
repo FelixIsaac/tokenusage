@@ -435,6 +435,8 @@ pub(super) fn activity_source_label(source: SourceKind) -> &'static str {
     match source {
         SourceKind::Claude => "Claude",
         SourceKind::Codex => "Codex",
+        SourceKind::Gemini => "Gemini",
+        SourceKind::OpenCode => "OpenCode",
     }
 }
 

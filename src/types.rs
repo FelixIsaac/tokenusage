@@ -19,6 +19,10 @@ pub enum SourceKind {
     Claude,
     /// OpenAI Codex CLI (`~/.codex/sessions/`).
     Codex,
+    /// Google Gemini CLI (`~/.gemini/tmp/**/chats/*.jsonl`).
+    Gemini,
+    /// OpenCode (`~/.local/share/opencode/storage/message/**/*.json`).
+    OpenCode,
 }
 
 impl SourceKind {
@@ -27,6 +31,8 @@ impl SourceKind {
         match self {
             SourceKind::Claude => "claude",
             SourceKind::Codex => "codex",
+            SourceKind::Gemini => "gemini",
+            SourceKind::OpenCode => "opencode",
         }
     }
 }

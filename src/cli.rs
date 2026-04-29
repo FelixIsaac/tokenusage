@@ -137,6 +137,10 @@ pub struct CommonArgs {
     pub no_claude: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Codex source"))]
     pub no_codex: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Gemini CLI source"))]
+    pub no_gemini: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable OpenCode source"))]
+    pub no_opencode: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Antigravity quota probe"))]
     pub no_antigravity: bool,
     #[cfg_attr(
@@ -149,6 +153,22 @@ pub struct CommonArgs {
         arg(long = "codex-sessions-dir", help = "Codex sessions dir, repeatable")
     )]
     pub codex_sessions_dir: Vec<String>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "gemini-data-dir",
+            help = "Gemini CLI data dir (defaults to ~/.gemini/tmp), repeatable"
+        )
+    )]
+    pub gemini_data_dir: Vec<String>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "opencode-data-dir",
+            help = "OpenCode data dir (defaults to ~/.local/share/opencode), repeatable"
+        )
+    )]
+    pub opencode_data_dir: Vec<String>,
     #[cfg_attr(
         feature = "cli",
         arg(

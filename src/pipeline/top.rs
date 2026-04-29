@@ -412,6 +412,8 @@ pub(super) fn render_top_frame(
                 let source_color = match s.source {
                     SourceKind::Claude => TuiColor::Cyan,
                     SourceKind::Codex => TuiColor::Blue,
+                    SourceKind::Gemini => TuiColor::Green,
+                    SourceKind::OpenCode => TuiColor::Magenta,
                 };
                 let project = s.project.as_deref().unwrap_or("-");
                 let project_short = if project.len() > 20 {
