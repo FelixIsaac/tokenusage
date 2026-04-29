@@ -397,12 +397,17 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
 
     if !common.no_codex {
         let roots = if common.codex_sessions_dir.is_empty() {
-            vec![
-                home.join(".codex").join("sessions"),
-                home.join(".codex").join("archived_sessions"),
-                home.join(".config").join("codex").join("sessions"),
-                home.join(".config").join("codex").join("archived_sessions"),
-            ]
+            {
+                let codex_home = std::env::var_os("CODEX_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".codex"));
+                vec![
+                    codex_home.join("sessions"),
+                    codex_home.join("archived_sessions"),
+                    home.join(".config").join("codex").join("sessions"),
+                    home.join(".config").join("codex").join("archived_sessions"),
+                ]
+            }
         } else {
             let mut out = Vec::new();
             for raw in &common.codex_sessions_dir {
@@ -448,7 +453,47 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
 
     if !common.no_opencode {
         let roots = if common.opencode_data_dir.is_empty() {
-            vec![home.join(".local").join("share").join("opencode")]
+            {
+                let mut candidates = Vec::<PathBuf>::new();
+
+                if let Some(value) = std::env::var_os("OPENCODE_DATA_DIR") {
+                    candidates.push(PathBuf::from(value));
+                }
+
+                if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
+                    candidates.push(PathBuf::from(value).join("opencode"));
+                }
+
+                candidates.push(home.join(".local").join("share").join("opencode"));
+
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+                        candidates.push(PathBuf::from(value.clone()).join("opencode"));
+                        candidates.push(PathBuf::from(value).join("OpenCode"));
+                    }
+                    if let Some(value) = std::env::var_os("APPDATA") {
+                        candidates.push(PathBuf::from(value.clone()).join("opencode"));
+                        candidates.push(PathBuf::from(value).join("OpenCode"));
+                    }
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    candidates.push(
+                        home.join("Library")
+                            .join("Application Support")
+                            .join("opencode"),
+                    );
+                    candidates.push(
+                        home.join("Library")
+                            .join("Application Support")
+                            .join("OpenCode"),
+                    );
+                }
+
+                candidates
+            }
         } else {
             common
                 .opencode_data_dir
