@@ -235,6 +235,10 @@ pub(crate) enum Commands {
     Heartbeat(HeartbeatArgs),
     Codex(DailyArgs),
     Claude(DailyArgs),
+    #[command(about = "Daily usage report for Gemini CLI only")]
+    Gemini(DailyArgs),
+    #[command(about = "Daily usage report for OpenCode only")]
+    Opencode(DailyArgs),
     Antigravity(AntigravityArgs),
     Monthly(MonthlyArgs),
     #[command(alias = "week")]

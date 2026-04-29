@@ -22,6 +22,8 @@ struct CommandConfigs {
     activity: Option<ActivityConfig>,
     codex: Option<DailyConfig>,
     claude: Option<DailyConfig>,
+    gemini: Option<DailyConfig>,
+    opencode: Option<DailyConfig>,
     monthly: Option<MonthlyConfig>,
     weekly: Option<WeeklyConfig>,
     img: Option<ImgConfig>,
@@ -258,6 +260,31 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Claude(args)
         }
+        Commands::Gemini(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
+                apply_common_config(&mut args.common, Some(&daily_cfg.common));
+                apply_daily_config(&mut args, daily_cfg);
+            }
+            if let Some(gemini_cfg) = config.commands.as_ref().and_then(|c| c.gemini.as_ref()) {
+                apply_common_config(&mut args.common, Some(&gemini_cfg.common));
+                apply_daily_config(&mut args, gemini_cfg);
+            }
+            Commands::Gemini(args)
+        }
+        Commands::Opencode(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
+                apply_common_config(&mut args.common, Some(&daily_cfg.common));
+                apply_daily_config(&mut args, daily_cfg);
+            }
+            if let Some(opencode_cfg) = config.commands.as_ref().and_then(|c| c.opencode.as_ref())
+            {
+                apply_common_config(&mut args.common, Some(&opencode_cfg.common));
+                apply_daily_config(&mut args, opencode_cfg);
+            }
+            Commands::Opencode(args)
+        }
         Commands::Antigravity(args) => Commands::Antigravity(args),
         Commands::Monthly(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
@@ -346,6 +373,8 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Heartbeat(_) => None,
         Commands::Codex(args) => args.common.config.as_deref(),
         Commands::Claude(args) => args.common.config.as_deref(),
+        Commands::Gemini(args) => args.common.config.as_deref(),
+        Commands::Opencode(args) => args.common.config.as_deref(),
         Commands::Antigravity(args) => args.config.as_deref(),
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),

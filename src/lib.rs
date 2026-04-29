@@ -173,7 +173,11 @@ pub async fn run() -> Result<()> {
 #[cfg(feature = "cli")]
 fn extract_throttle(cmd: &Commands) -> u64 {
     match cmd {
-        Commands::Daily(a) | Commands::Codex(a) | Commands::Claude(a) => a.common.slow,
+        Commands::Daily(a)
+        | Commands::Codex(a)
+        | Commands::Claude(a)
+        | Commands::Gemini(a)
+        | Commands::Opencode(a) => a.common.slow,
         Commands::Today(a) => a.common.slow,
         Commands::Activity(a) => a.common.slow,
         Commands::Monthly(a) => a.common.slow,
@@ -260,11 +264,29 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Codex(mut args) => {
             args.common.no_claude = true;
             args.common.no_codex = false;
+            args.common.no_gemini = true;
+            args.common.no_opencode = true;
             pipeline::run_daily(args).await
         }
         Commands::Claude(mut args) => {
             args.common.no_codex = true;
             args.common.no_claude = false;
+            args.common.no_gemini = true;
+            args.common.no_opencode = true;
+            pipeline::run_daily(args).await
+        }
+        Commands::Gemini(mut args) => {
+            args.common.no_codex = true;
+            args.common.no_claude = true;
+            args.common.no_gemini = false;
+            args.common.no_opencode = true;
+            pipeline::run_daily(args).await
+        }
+        Commands::Opencode(mut args) => {
+            args.common.no_codex = true;
+            args.common.no_claude = true;
+            args.common.no_gemini = true;
+            args.common.no_opencode = false;
             pipeline::run_daily(args).await
         }
         Commands::Antigravity(args) => pipeline::run_antigravity(args).await,
