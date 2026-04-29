@@ -89,15 +89,16 @@ impl UsageAccumulator {
         self.cost_usd += other.cost_usd;
     }
 
-    /// Sum of input + cache-creation + cache-read + output tokens.
+    /// Sum of input + cache-creation + cache-read + output + reasoning tokens.
     ///
     /// This counts every token that passed through the model, regardless of
-    /// billing tier.  Reasoning tokens are already included in `output_tokens`.
+    /// billing tier.
     pub fn total_tokens(self) -> u64 {
         self.input_tokens
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
             + self.output_tokens
+            + self.reasoning_output_tokens
     }
 
     /// Freeze this accumulator into a serialisable [`TokenCounts`] snapshot.
@@ -129,11 +130,11 @@ pub struct TokenCounts {
     pub cache_creation_input_tokens: u64,
     /// Tokens served from the prompt cache.
     pub cache_read_input_tokens: u64,
-    /// Model output tokens (includes reasoning tokens unless billed separately).
+    /// Model output tokens (excluding reasoning tokens when tracked separately).
     pub output_tokens: u64,
-    /// Reasoning/chain-of-thought tokens (subset of output).
+    /// Reasoning/chain-of-thought tokens (may be billed separately depending on model).
     pub reasoning_output_tokens: u64,
-    /// Pre-computed `input + cache_creation + cache_read + output`.
+    /// Pre-computed `input + cache_creation + cache_read + output + reasoning`.
     pub total_tokens: u64,
     /// Estimated cost in US dollars.
     pub cost_usd: f64,
@@ -476,15 +477,10 @@ impl PricingTable {
         let rate = self.find_rate(model)?;
         let threshold = tier_threshold(rate);
         let separate_reasoning_pricing = has_separate_reasoning_pricing(rate);
-        let reasoning_tokens = if separate_reasoning_pricing {
-            usage.reasoning_output_tokens.min(usage.output_tokens)
+        let (output_tokens, reasoning_tokens) = if separate_reasoning_pricing {
+            (usage.output_tokens, usage.reasoning_output_tokens)
         } else {
-            0
-        };
-        let output_tokens = if separate_reasoning_pricing {
-            usage.output_tokens.saturating_sub(reasoning_tokens)
-        } else {
-            usage.output_tokens
+            (usage.output_tokens + usage.reasoning_output_tokens, 0)
         };
 
         Some(
