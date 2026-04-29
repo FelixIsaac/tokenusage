@@ -94,7 +94,7 @@ tu                          # daily cost report in 0.08s
 |---|---|
 | Hit rate limits mid-refactor, no warning | `tu live` shows usage in real-time |
 | No idea what AI coding costs per day | `tu` gives daily cost breakdown in 0.08s |
-| Codex + Claude logs in separate places | One merged dashboard across all sources |
+| Codex / Claude / Gemini / OpenCode logs in separate places | One merged dashboard across all sources |
 | Existing tools are slow on large logs | 214x faster than ccusage (Rust + parallel scan + cache) |
 | Don't want to upload logs to a cloud | 100% local parsing, no data leaves your machine |
 | Want coding-time context, not just raw tokens | `tu` keeps the classic token table by default; `--with-activity` opt-in adds coding time and tokens/hour |
@@ -136,6 +136,8 @@ tu --tui                    # same report in terminal UI
 # Source-specific
 tu codex
 tu claude
+tu gemini
+tu opencode
 tu antigravity
 
 # Date filter
