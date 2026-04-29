@@ -213,10 +213,19 @@ pub struct CommonArgs {
     name = "tokenusage",
     version,
     about = "Multi-source token usage analyzer (Rust)",
-    after_help = "GitHub:  https://github.com/hanbu97/tokenusage\n\
-                  Issues:  https://github.com/hanbu97/tokenusage/issues\n\
+    after_help = "Examples:\n\
+                  tu\n\
+                  tu --since 2026-04-01 --until 2026-04-30\n\
+                  tu codex | tu claude | tu gemini | tu opencode\n\
                   \n\
-                  If you find this tool useful, please consider giving it a star!"
+                  Default data locations (override with flags):\n\
+                  - Claude:   ~/.claude/projects        (--claude-projects-dir)\n\
+                  - Codex:    $CODEX_HOME/sessions      (--codex-sessions-dir)\n\
+                  - Gemini:   ~/.gemini/tmp             (--gemini-data-dir)\n\
+                  - OpenCode: $OPENCODE_DATA_DIR        (--opencode-data-dir)\n\
+                  \n\
+                  GitHub:  https://github.com/hanbu97/tokenusage\n\
+                  Issues:  https://github.com/hanbu97/tokenusage/issues"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
