@@ -183,6 +183,13 @@ tu img day
 tu img week
 ```
 
+### Data locations (defaults)
+
+- Claude Code: `~/.claude/projects` (override with `--claude-projects-dir`)
+- Codex CLI: `$CODEX_HOME/sessions` (fallback `~/.codex/sessions`, override with `--codex-sessions-dir`)
+- Gemini CLI: `~/.gemini/tmp` (override with `--gemini-data-dir`)
+- OpenCode: `$OPENCODE_DATA_DIR` or `$XDG_DATA_HOME/opencode` (fallback `~/.local/share/opencode`, override with `--opencode-data-dir`)
+
 ## Benchmark Details
 
 **Setup:**
