@@ -2,13 +2,13 @@
 name = "tokenusage"
 version = "1.5.2"
 edition = "2024"
-description = "Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, and Antigravity usage."
+description = "Fast Rust CLI/TUI/GUI token usage tracker for Codex, Claude Code, Gemini CLI, OpenCode, and Antigravity usage."
 license = "MIT"
 readme = "README.md"
 documentation = "https://docs.rs/tokenusage"
 repository = "https://github.com/hanbu97/tokenusage"
 homepage = "https://tokenusage.org"
-keywords = ["codex-usage", "claude-code-usage", "token-usage-tracker", "antigravity", "ai-coding-cost"]
+keywords = ["codex-usage", "claude-code-usage", "gemini-cli-usage", "opencode-usage", "ai-coding-cost"]
 categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.87"
 

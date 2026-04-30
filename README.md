@@ -265,7 +265,7 @@ Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless
 ## Command Overview
 
 ```text
-tu [daily|today|activity|heartbeat|codex|claude|antigravity|monthly|weekly|img|session|blocks|live|top|statusline|gui]
+tu [daily|today|activity|heartbeat|doctor|codex|claude|gemini|opencode|antigravity|monthly|weekly|img|session|blocks|live|top|statusline|gui]
 ```
 
 Useful commands:

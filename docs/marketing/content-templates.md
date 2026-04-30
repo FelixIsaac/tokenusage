@@ -43,7 +43,7 @@ github.com/hanbu97/tokenusage
 ```
 I built htop for AI tokens.
 
-`tu top` shows every active Codex and Claude session in real-time:
+`tu top` shows active sessions across providers in real-time:
 - token counts per session
 - cost per session
 - model breakdown
@@ -86,7 +86,7 @@ Built `tokenusage` (`tu`) in Rust. Scans local JSONL logs, gives you:
 - Live TUI monitor (`tu live`)
 - htop-style session viewer (`tu top`)
 - Shareable image cards (`tu img`)
-- Also supports Codex and Antigravity in one unified view
+- Also supports Codex, Gemini, OpenCode, and Antigravity in one unified view
 
 Performance: 1,521 files (2.2 GB), warm cache = 0.08s (vs ccusage 17.15s)
 
@@ -99,7 +99,7 @@ Happy to answer questions or take feature requests.
 ### B2 — r/rust
 
 ```
-Title: tokenusage — fast local Codex + Claude Code token tracker (CLI/TUI/GUI)
+Title: tokenusage — fast local AI coding token tracker (CLI/TUI/GUI)
 
 Sharing a Rust project I've been working on. `tokenusage` (`tu`) scans local
 AI coding session logs and gives usage/cost reports.
@@ -126,7 +126,7 @@ Built a local CLI that scans Codex session logs and shows daily token usage + co
 
 One command: `tu codex`
 
-Also supports Claude Code and Antigravity in the same dashboard.
+Also supports Claude Code, Gemini CLI, OpenCode, and Antigravity in the same dashboard.
 
 Features: CLI report, live TUI, htop-style session viewer, GUI, image cards.
 
@@ -149,7 +149,7 @@ Also has:
 - `tu live` — real-time TUI monitor
 - `tu img` — shareable usage card
 
-Works with Claude Code too, merged into one dashboard.
+Works with Claude Code, Gemini CLI, and OpenCode too, merged into one dashboard.
 
 npm i -g tokenusage
 github.com/hanbu97/tokenusage
@@ -162,9 +162,9 @@ github.com/hanbu97/tokenusage
 ### C1 — Launch post
 
 ```
-Title: 用 Rust 写了个 Codex+Claude 的 token 追踪 CLI，0.08 秒出结果
+Title: 用 Rust 写了个多数据源 AI token 追踪 CLI，0.08 秒出结果
 
-日常同时用 Codex 和 Claude Code，想知道每天花了多少 token 和钱。
+日常同时用 Codex、Claude Code、Gemini CLI 和 OpenCode，想知道每天花了多少 token 和钱。
 写了 tokenusage（命令 tu），Rust 并行扫描 + 增量缓存。
 
 主要功能: tu / tu live / tu top / tu img / tu gui
@@ -181,7 +181,7 @@ Title: tu top: 像 htop 一样监控 AI token 使用
 
 上次分享了 tokenusage，最近加了 `tu top` 功能。
 
-实时显示每个 Codex / Claude Code 会话的:
+实时显示各 provider 会话的:
 - token 数量
 - 费用
 - 模型分布
@@ -200,13 +200,13 @@ GitHub: github.com/hanbu97/tokenusage
 ```
 I built a CLI that tracks AI coding costs 214x faster than existing tools.
 
-I use both Codex and Claude Code daily. Two tools, two log directories, no unified view.
+I use Codex, Claude Code, Gemini CLI, and OpenCode daily. Multiple tools and log directories, no unified view.
 
 Existing solutions were either slow (17+ seconds), cloud-only, or single-source.
 
 So I built tokenusage in Rust:
 - 0.08s warm-cache on 2.2 GB of logs
-- One dashboard: Codex + Claude + Antigravity
+- One dashboard: Codex + Claude + Gemini + OpenCode + Antigravity
 - Privacy-first: all local
 
 Latest: `tu top` — htop for AI tokens.
@@ -223,11 +223,11 @@ What tools do you use to track your AI coding costs?
 ### Show HN
 
 ```
-Title: Show HN: tokenusage – Track Codex + Claude Code costs locally, 214x faster (Rust)
+Title: Show HN: tokenusage – Track AI coding costs locally, 214x faster (Rust)
 
 Body:
 I built tokenusage because I wanted one local view of token and cost usage
-across Codex and Claude Code without uploading logs anywhere.
+across Codex, Claude Code, Gemini CLI, and OpenCode without uploading logs anywhere.
 
 The tool scans local JSONL session logs and provides:
 - daily/weekly/monthly CLI report

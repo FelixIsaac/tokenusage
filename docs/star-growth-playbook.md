@@ -102,13 +102,13 @@ Repo: https://github.com/hanbu97/tokenusage
 Title:
 
 ```text
-Show HN: tokenusage – a fast local Codex + Claude usage tracker in Rust
+Show HN: tokenusage – a fast local AI coding usage tracker in Rust
 ```
 
 Body:
 
 ```text
-I built tokenusage because I wanted one local view of token and cost usage across Codex and Claude Code.
+I built tokenusage because I wanted one local view of token and cost usage across Codex, Claude Code, Gemini CLI, and OpenCode.
 
 The tool scans local logs, merges the results, and exposes:
 - a daily/weekly/monthly CLI report
@@ -126,7 +126,7 @@ Repo: https://github.com/hanbu97/tokenusage
 Title:
 
 ```text
-tokenusage: fast local Codex + Claude usage tracker in Rust
+tokenusage: fast local AI coding usage tracker in Rust
 ```
 
 Body:
@@ -135,7 +135,7 @@ Body:
 I released tokenusage, a Rust tool for tracking AI coding usage from local session logs.
 
 Core points:
-- merged Codex + Claude usage
+- merged Codex + Claude + Gemini + OpenCode usage
 - CLI, live TUI, GUI
 - local parsing, no log upload
 - shareable image cards via `tu img`
@@ -150,7 +150,7 @@ I would especially value feedback on data sources, pricing accuracy, and CLI/TUI
 ### Reddit-style technical post
 
 ```text
-I needed one local usage tracker for Codex + Claude, and I wanted it to stay fast on big log directories, so I built tokenusage in Rust.
+I needed one local usage tracker for Codex + Claude + Gemini + OpenCode, and I wanted it to stay fast on big log directories, so I built tokenusage in Rust.
 
 The part I cared about most was keeping the common path fast:
 - parallel file discovery
@@ -178,12 +178,12 @@ When opening a PR:
 
 1. Keep the description factual.
 2. Use one sentence only.
-3. Mention merged Codex + Claude tracking and Rust speed.
+3. Mention merged multi-provider tracking and Rust speed.
 
 Suggested list sentence:
 
 ```text
-tokenusage — fast local token/cost tracker for Codex and Claude Code with CLI, live TUI, GUI, and shareable usage cards.
+tokenusage — fast local token/cost tracker for Codex, Claude Code, Gemini CLI, and OpenCode with CLI, live TUI, GUI, and shareable usage cards.
 ```
 
 ## Weekly Execution Loop
