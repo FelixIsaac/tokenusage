@@ -582,6 +582,12 @@ pub(super) fn select_live_source(
     if common.no_claude && !common.no_codex {
         return Some(SourceKind::Codex);
     }
+    if common.no_claude && common.no_codex && !common.no_gemini && common.no_opencode {
+        return Some(SourceKind::Gemini);
+    }
+    if common.no_claude && common.no_codex && common.no_gemini && !common.no_opencode {
+        return Some(SourceKind::OpenCode);
+    }
     if let Some(source) = active.and_then(|v| v.dominant_source) {
         return Some(source);
     }
@@ -788,6 +794,7 @@ pub(super) fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &Liv
                 4
             }
         }
+        LiveTab::Gemini | LiveTab::OpenCode => 4,
         LiveTab::Antigravity => 0,
     };
     let tab_bar_height = 1u16;
@@ -862,6 +869,19 @@ pub(super) fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &Liv
         LiveTab::Claude => {
             render_live_progress_bars_for(frame, progress_area, context, Some(SourceKind::Claude));
             render_live_source_detail(frame, body_area, context, SourceKind::Claude);
+        }
+        LiveTab::Gemini => {
+            render_live_progress_bars_for(frame, progress_area, context, Some(SourceKind::Gemini));
+            render_live_source_detail(frame, body_area, context, SourceKind::Gemini);
+        }
+        LiveTab::OpenCode => {
+            render_live_progress_bars_for(
+                frame,
+                progress_area,
+                context,
+                Some(SourceKind::OpenCode),
+            );
+            render_live_source_detail(frame, body_area, context, SourceKind::OpenCode);
         }
         LiveTab::Antigravity => {
             render_live_antigravity_tab(frame, body_area, context);

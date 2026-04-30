@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use crate::cli::{
     ActivityArgs, BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod,
-    ImgArgs, ImgPeriod, LiveArgs, MonthlyArgs, SessionArgs, SortOrder, StatuslineArgs, TodayArgs,
-    VisualBurnRate, WeekStart, WeeklyArgs,
+    ImgArgs, ImgPeriod, LiveArgs, MonthlyArgs, ProviderArg, SessionArgs, SortOrder,
+    StatuslineArgs, TodayArgs, VisualBurnRate, WeekStart, WeeklyArgs,
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -60,6 +60,8 @@ struct CommonConfig {
     no_opencode: Option<bool>,
     #[serde(alias = "noAntigravity")]
     no_antigravity: Option<bool>,
+    only: Option<Vec<ProviderArg>>,
+    sources: Option<Vec<ProviderArg>>,
     #[serde(alias = "claudeProjectsDir")]
     claude_projects_dir: Option<Vec<String>>,
     #[serde(alias = "codexSessionsDir")]
@@ -236,6 +238,14 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             Commands::Activity(args)
         }
         Commands::Heartbeat(args) => Commands::Heartbeat(args),
+        Commands::Doctor(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
+                apply_common_config(&mut args.common, Some(&daily_cfg.common));
+                apply_daily_config(&mut args, daily_cfg);
+            }
+            Commands::Doctor(args)
+        }
         Commands::Codex(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
@@ -371,6 +381,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Today(args) => args.common.config.as_deref(),
         Commands::Activity(args) => args.common.config.as_deref(),
         Commands::Heartbeat(_) => None,
+        Commands::Doctor(args) => args.common.config.as_deref(),
         Commands::Codex(args) => args.common.config.as_deref(),
         Commands::Claude(args) => args.common.config.as_deref(),
         Commands::Gemini(args) => args.common.config.as_deref(),
@@ -435,6 +446,12 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_false(&mut common.no_gemini, cfg.no_gemini);
     merge_if_false(&mut common.no_opencode, cfg.no_opencode);
     merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
+    if common.only.is_empty() && let Some(values) = cfg.only.as_ref() {
+        common.only = values.clone();
+    }
+    if common.sources.is_empty() && let Some(values) = cfg.sources.as_ref() {
+        common.sources = values.clone();
+    }
     if common.claude_projects_dir.is_empty()
         && let Some(values) = cfg.claude_projects_dir.as_ref()
     {

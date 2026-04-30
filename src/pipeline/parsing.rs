@@ -371,8 +371,10 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
     let home = dirs::home_dir().context("Failed to resolve home directory")?;
 
     let mut sources = Vec::new();
+    let selected = common.selected_sources();
+    let provider_selected = |kind: SourceKind| selected.is_empty() || selected.contains(&kind);
 
-    if !common.no_claude {
+    if !common.no_claude && provider_selected(SourceKind::Claude) {
         let roots = if common.claude_projects_dir.is_empty() {
             vec![
                 home.join(".config").join("claude").join("projects"),
@@ -395,7 +397,7 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
         }
     }
 
-    if !common.no_codex {
+    if !common.no_codex && provider_selected(SourceKind::Codex) {
         let roots = if common.codex_sessions_dir.is_empty() {
             {
                 let codex_home = std::env::var_os("CODEX_HOME")
@@ -431,7 +433,7 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
         }
     }
 
-    if !common.no_gemini {
+    if !common.no_gemini && provider_selected(SourceKind::Gemini) {
         let roots = if common.gemini_data_dir.is_empty() {
             vec![home.join(".gemini").join("tmp")]
         } else {
@@ -451,7 +453,7 @@ pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfi
         }
     }
 
-    if !common.no_opencode {
+    if !common.no_opencode && provider_selected(SourceKind::OpenCode) {
         let roots = if common.opencode_data_dir.is_empty() {
             {
                 let mut candidates = Vec::<PathBuf>::new();

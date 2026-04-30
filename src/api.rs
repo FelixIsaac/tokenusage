@@ -386,6 +386,8 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         no_gemini: true,
         no_opencode: true,
         no_antigravity: true,
+        only: Vec::new(),
+        sources: Vec::new(),
         claude_projects_dir: config.claude_projects_dir.clone(),
         codex_sessions_dir: config.codex_sessions_dir.clone(),
         gemini_data_dir: Vec::new(),

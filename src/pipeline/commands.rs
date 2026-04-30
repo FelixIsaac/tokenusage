@@ -18,10 +18,105 @@ use crate::types::{ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCoun
 use super::activity_report::*;
 #[cfg(feature = "cli")]
 use super::official::{fetch_antigravity_official_limits, select_antigravity_models};
-use super::parsing::load_usage;
+use super::parsing::{build_sources, discover_files, load_usage};
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
 use super::*;
+
+#[derive(Debug, Serialize)]
+struct DoctorSourceReport {
+    source: String,
+    roots: Vec<String>,
+    discovered_files: usize,
+    mode: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    timezone: String,
+    selected_sources: Vec<String>,
+    sources: Vec<DoctorSourceReport>,
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let filter = DateFilter {
+        since: None,
+        until: None,
+    };
+    let ignore_rules = PathIgnoreRules::from_common(&args.common);
+    let source_configs = build_sources(&args.common).await?;
+    let discovered = discover_files(&source_configs, &ignore_rules, filter);
+
+    let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
+    for file in &discovered {
+        *by_source.entry(file.source).or_insert(0) += 1;
+    }
+
+    let mut sources = Vec::new();
+    for source in &source_configs {
+        let mode = if source.kind == SourceKind::OpenCode {
+            let has_db = source.roots.iter().any(|root| root.join("opencode.db").is_file());
+            let has_legacy = source
+                .roots
+                .iter()
+                .any(|root| root.join("storage").join("message").is_dir());
+            match (has_db, has_legacy) {
+                (true, true) => "db+legacy".to_string(),
+                (true, false) => "db".to_string(),
+                (false, true) => "legacy".to_string(),
+                (false, false) => "none".to_string(),
+            }
+        } else {
+            "jsonl".to_string()
+        };
+
+        sources.push(DoctorSourceReport {
+            source: source.kind.as_str().to_string(),
+            roots: source
+                .roots
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            discovered_files: *by_source.get(&source.kind).unwrap_or(&0),
+            mode,
+        });
+    }
+
+    let report = DoctorReport {
+        timezone: format!("{tz:?}"),
+        selected_sources: args
+            .common
+            .selected_sources()
+            .into_iter()
+            .map(|source| source.as_str().to_string())
+            .collect(),
+        sources,
+    };
+
+    if should_emit_json(&args.common) {
+        emit_json(&report, args.common.jq.as_deref())
+    } else {
+        println!("timezone: {}", report.timezone);
+        if report.selected_sources.is_empty() {
+            println!("selected-sources: all");
+        } else {
+            println!("selected-sources: {}", report.selected_sources.join(", "));
+        }
+        println!();
+        for source in &report.sources {
+            println!("source: {}", source.source);
+            println!("  mode: {}", source.mode);
+            println!("  discovered-files: {}", source.discovered_files);
+            for root in &source.roots {
+                println!("  root: {}", root);
+            }
+            println!();
+        }
+        Ok(())
+    }
+}
 
 pub(super) async fn enrich_rows_with_activity(
     common: &CommonArgs,

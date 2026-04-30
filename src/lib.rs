@@ -174,6 +174,7 @@ pub async fn run() -> Result<()> {
 fn extract_throttle(cmd: &Commands) -> u64 {
     match cmd {
         Commands::Daily(a)
+        | Commands::Doctor(a)
         | Commands::Codex(a)
         | Commands::Claude(a)
         | Commands::Gemini(a)
@@ -261,6 +262,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Today(args) => pipeline::run_today(args).await,
         Commands::Activity(args) => pipeline::run_activity(args).await,
         Commands::Heartbeat(args) => heartbeat::run(args).await,
+        Commands::Doctor(args) => pipeline::run_doctor(args).await,
         Commands::Codex(mut args) => {
             args.common.no_claude = true;
             args.common.no_codex = false;

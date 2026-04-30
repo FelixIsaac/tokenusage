@@ -26,7 +26,8 @@ pub use commands::{collect_report, collect_usage_snapshot};
 // Re-exports: crate-internal (CLI commands)
 #[cfg(feature = "cli")]
 pub(crate) use commands::{
-    run_activity, run_antigravity, run_daily, run_monthly, run_session, run_today, run_weekly,
+    run_activity, run_antigravity, run_daily, run_doctor, run_monthly, run_session, run_today,
+    run_weekly,
 };
 #[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
@@ -394,6 +395,8 @@ enum LiveTab {
     Overview,
     Codex,
     Claude,
+    Gemini,
+    OpenCode,
     Antigravity,
 }
 
@@ -401,6 +404,8 @@ const ALL_LIVE_TABS: &[LiveTab] = &[
     LiveTab::Overview,
     LiveTab::Codex,
     LiveTab::Claude,
+    LiveTab::Gemini,
+    LiveTab::OpenCode,
     LiveTab::Antigravity,
 ];
 
@@ -410,6 +415,8 @@ impl LiveTab {
             LiveTab::Overview => "Overview",
             LiveTab::Codex => "Codex",
             LiveTab::Claude => "Claude",
+            LiveTab::Gemini => "Gemini",
+            LiveTab::OpenCode => "OpenCode",
             LiveTab::Antigravity => "Antigravity",
         }
     }

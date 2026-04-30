@@ -26,6 +26,15 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    pub const fn all() -> [SourceKind; 4] {
+        [
+            SourceKind::Claude,
+            SourceKind::Codex,
+            SourceKind::Gemini,
+            SourceKind::OpenCode,
+        ]
+    }
+
     /// Lowercase string label — `"claude"` or `"codex"`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -33,6 +42,15 @@ impl SourceKind {
             SourceKind::Codex => "codex",
             SourceKind::Gemini => "gemini",
             SourceKind::OpenCode => "opencode",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            SourceKind::Claude => "Claude",
+            SourceKind::Codex => "Codex",
+            SourceKind::Gemini => "Gemini",
+            SourceKind::OpenCode => "OpenCode",
         }
     }
 }

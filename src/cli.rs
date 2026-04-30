@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::heartbeat::{
     DEFAULT_HEARTBEAT_PULSE_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, HeartbeatEntityKind,
 };
+use crate::types::SourceKind;
 
 // ---------------------------------------------------------------------------
 // Shared enums — available with or without `cli` feature
@@ -61,6 +62,27 @@ pub enum CostSource {
     #[cfg_attr(feature = "cli", value(name = "both"))]
     #[serde(rename = "both")]
     Both,
+}
+
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderArg {
+    Claude,
+    Codex,
+    Gemini,
+    Opencode,
+}
+
+impl ProviderArg {
+    pub fn to_source_kind(self) -> SourceKind {
+        match self {
+            ProviderArg::Claude => SourceKind::Claude,
+            ProviderArg::Codex => SourceKind::Codex,
+            ProviderArg::Gemini => SourceKind::Gemini,
+            ProviderArg::Opencode => SourceKind::OpenCode,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +167,28 @@ pub struct CommonArgs {
     pub no_antigravity: bool,
     #[cfg_attr(
         feature = "cli",
+        arg(
+            long = "only",
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            help = "Only include these providers (repeatable or comma-separated)"
+        )
+    )]
+    pub only: Vec<ProviderArg>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "sources",
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            help = "Alias of --only for provider selection"
+        )
+    )]
+    pub sources: Vec<ProviderArg>,
+    #[cfg_attr(
+        feature = "cli",
         arg(long = "claude-projects-dir", help = "Claude projects dir, repeatable")
     )]
     pub claude_projects_dir: Vec<String>,
@@ -203,6 +247,19 @@ pub struct CommonArgs {
     pub slow: Option<u64>,
 }
 
+impl CommonArgs {
+    pub fn selected_sources(&self) -> Vec<SourceKind> {
+        let mut selected = Vec::new();
+        for provider in self.only.iter().chain(self.sources.iter()) {
+            let kind = provider.to_source_kind();
+            if !selected.contains(&kind) {
+                selected.push(kind);
+            }
+        }
+        selected
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CLI-only types — only available when `cli` feature is enabled
 // ---------------------------------------------------------------------------
@@ -242,6 +299,8 @@ pub(crate) enum Commands {
     Activity(ActivityArgs),
     #[command(about = "Native local heartbeat collector and stats")]
     Heartbeat(HeartbeatArgs),
+    #[command(about = "Inspect provider roots, files, and parser mode")]
+    Doctor(DailyArgs),
     Codex(DailyArgs),
     Claude(DailyArgs),
     #[command(about = "Daily usage report for Gemini CLI only")]
@@ -473,7 +532,7 @@ pub(crate) struct BlocksArgs {
 #[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 #[command(
-    after_help = "Source shortcuts:\n  tu live codex   (equivalent to: tu live --no-claude)\n  tu live claude  (equivalent to: tu live --no-codex)"
+    after_help = "Source shortcuts:\n  tu live codex     (equivalent to: tu live --no-claude --no-gemini --no-opencode)\n  tu live claude    (equivalent to: tu live --no-codex --no-gemini --no-opencode)\n  tu live gemini    (equivalent to: tu live --no-codex --no-claude --no-opencode)\n  tu live opencode  (equivalent to: tu live --no-codex --no-claude --no-gemini)"
 )]
 pub(crate) struct LiveArgs {
     #[command(flatten)]
@@ -659,8 +718,9 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         None => true,
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
-            | "heartbeat" | "monthly" | "weekly" | "week" | "img" | "session" | "blocks" | "live"
-            | "top" | "statusline" | "gui" | "codex" | "claude" | "antigravity",
+            | "heartbeat" | "doctor" | "monthly" | "weekly" | "week" | "img" | "session"
+            | "blocks" | "live" | "top" | "statusline" | "gui" | "codex" | "claude"
+            | "gemini" | "opencode" | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
@@ -690,12 +750,50 @@ fn normalize_live_shortcuts(argv: &mut Vec<String>) {
             if !argv.iter().any(|arg| arg == "--no-claude") {
                 argv.insert(2, "--no-claude".to_string());
             }
+            if !argv.iter().any(|arg| arg == "--no-gemini") {
+                argv.insert(2, "--no-gemini".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-opencode") {
+                argv.insert(2, "--no-opencode".to_string());
+            }
         }
         "claude" => {
             argv.remove(2);
             argv.retain(|arg| arg != "--no-claude");
             if !argv.iter().any(|arg| arg == "--no-codex") {
                 argv.insert(2, "--no-codex".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-gemini") {
+                argv.insert(2, "--no-gemini".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-opencode") {
+                argv.insert(2, "--no-opencode".to_string());
+            }
+        }
+        "gemini" => {
+            argv.remove(2);
+            argv.retain(|arg| arg != "--no-gemini");
+            if !argv.iter().any(|arg| arg == "--no-codex") {
+                argv.insert(2, "--no-codex".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-claude") {
+                argv.insert(2, "--no-claude".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-opencode") {
+                argv.insert(2, "--no-opencode".to_string());
+            }
+        }
+        "opencode" => {
+            argv.remove(2);
+            argv.retain(|arg| arg != "--no-opencode");
+            if !argv.iter().any(|arg| arg == "--no-codex") {
+                argv.insert(2, "--no-codex".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-claude") {
+                argv.insert(2, "--no-claude".to_string());
+            }
+            if !argv.iter().any(|arg| arg == "--no-gemini") {
+                argv.insert(2, "--no-gemini".to_string());
             }
         }
         "antigravity" => {

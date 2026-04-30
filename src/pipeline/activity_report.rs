@@ -432,12 +432,7 @@ pub(super) fn project_label_for_activity(event: &UsageEvent) -> String {
 }
 
 pub(super) fn activity_source_label(source: SourceKind) -> &'static str {
-    match source {
-        SourceKind::Claude => "Claude",
-        SourceKind::Codex => "Codex",
-        SourceKind::Gemini => "Gemini",
-        SourceKind::OpenCode => "OpenCode",
-    }
+    source.display_name()
 }
 
 pub(super) fn print_activity_overview(title: &str, overview: &ActivityOverview) {
