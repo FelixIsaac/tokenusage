@@ -140,6 +140,14 @@ tu gemini
 tu opencode
 tu antigravity
 
+# Provider selection (merged commands)
+tu --only codex,gemini
+tu weekly --sources claude,opencode
+
+# Data source diagnostics
+tu doctor
+tu doctor --only opencode --json
+
 # Date filter
 tu --since 2026-02-01 --until 2026-02-28
 
@@ -163,10 +171,12 @@ tu heartbeat watch .
 tu heartbeat stats
 tu heartbeat ping src/main.rs --write
 
-# Live monitor (tabs: Codex / Claude / Antigravity)
+# Live monitor (tabs: Codex / Claude / Gemini / OpenCode / Antigravity)
 tu live
 tu live codex
 tu live claude
+tu live gemini
+tu live opencode
 tu live antigravity
 
 # Real-time per-session viewer (htop for tokens)
@@ -189,6 +199,8 @@ tu img week
 - Codex CLI: `$CODEX_HOME/sessions` (fallback `~/.codex/sessions`, override with `--codex-sessions-dir`)
 - Gemini CLI: `~/.gemini/tmp` (override with `--gemini-data-dir`)
 - OpenCode: `$OPENCODE_DATA_DIR` or `$XDG_DATA_HOME/opencode` (fallback `~/.local/share/opencode`, override with `--opencode-data-dir`)
+
+`--only` / `--sources` currently target log-based providers (`claude`, `codex`, `gemini`, `opencode`). Antigravity remains a separate quota probe.
 
 ## Benchmark Details
 

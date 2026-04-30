@@ -172,7 +172,7 @@ pub struct CommonArgs {
             value_enum,
             value_delimiter = ',',
             num_args = 1..,
-            help = "Only include these providers (repeatable or comma-separated)"
+            help = "Only include log providers (repeatable or comma-separated)"
         )
     )]
     pub only: Vec<ProviderArg>,
@@ -183,7 +183,7 @@ pub struct CommonArgs {
             value_enum,
             value_delimiter = ',',
             num_args = 1..,
-            help = "Alias of --only for provider selection"
+            help = "Alias of --only for log-provider selection"
         )
     )]
     pub sources: Vec<ProviderArg>,
@@ -274,12 +274,14 @@ impl CommonArgs {
                   tu\n\
                   tu --since 2026-04-01 --until 2026-04-30\n\
                   tu codex | tu claude | tu gemini | tu opencode\n\
+                  tu --only codex,gemini\n\
+                  tu doctor --only opencode --json\n\
                   \n\
                   Default data locations (override with flags):\n\
                   - Claude:   ~/.claude/projects        (--claude-projects-dir)\n\
                   - Codex:    $CODEX_HOME/sessions      (--codex-sessions-dir)\n\
                   - Gemini:   ~/.gemini/tmp             (--gemini-data-dir)\n\
-                  - OpenCode: $OPENCODE_DATA_DIR        (--opencode-data-dir)\n\
+                  - OpenCode: $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
                   \n\
                   GitHub:  https://github.com/hanbu97/tokenusage\n\
                   Issues:  https://github.com/hanbu97/tokenusage/issues"
@@ -301,7 +303,9 @@ pub(crate) enum Commands {
     Heartbeat(HeartbeatArgs),
     #[command(about = "Inspect provider roots, files, and parser mode")]
     Doctor(DailyArgs),
+    #[command(about = "Daily usage report for Codex CLI only")]
     Codex(DailyArgs),
+    #[command(about = "Daily usage report for Claude Code only")]
     Claude(DailyArgs),
     #[command(about = "Daily usage report for Gemini CLI only")]
     Gemini(DailyArgs),
@@ -532,7 +536,7 @@ pub(crate) struct BlocksArgs {
 #[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 #[command(
-    after_help = "Source shortcuts:\n  tu live codex     (equivalent to: tu live --no-claude --no-gemini --no-opencode)\n  tu live claude    (equivalent to: tu live --no-codex --no-gemini --no-opencode)\n  tu live gemini    (equivalent to: tu live --no-codex --no-claude --no-opencode)\n  tu live opencode  (equivalent to: tu live --no-codex --no-claude --no-gemini)"
+    after_help = "Source shortcuts:\n  tu live codex       (equivalent to: tu live --no-claude --no-gemini --no-opencode)\n  tu live claude      (equivalent to: tu live --no-codex --no-gemini --no-opencode)\n  tu live gemini      (equivalent to: tu live --no-codex --no-claude --no-opencode)\n  tu live opencode    (equivalent to: tu live --no-codex --no-claude --no-gemini)\n  tu live antigravity (alias supported; keeps all sources enabled)"
 )]
 pub(crate) struct LiveArgs {
     #[command(flatten)]

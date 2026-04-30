@@ -131,7 +131,17 @@ tu --tui                    # 同一份报表的终端 UI
 # 指定数据源
 tu codex
 tu claude
+tu gemini
+tu opencode
 tu antigravity
+
+# 在合并报表中按 provider 过滤
+tu --only codex,gemini
+tu weekly --sources claude,opencode
+
+# 数据源诊断
+tu doctor
+tu doctor --only opencode --json
 
 # 日期过滤
 tu --since 2026-02-01 --until 2026-02-28
@@ -156,8 +166,13 @@ tu heartbeat watch .
 tu heartbeat stats
 tu heartbeat ping src/main.rs --write
 
-# 实时监控（标签页: Codex / Claude / Antigravity）
+# 实时监控（标签页: Codex / Claude / Gemini / OpenCode / Antigravity）
 tu live
+tu live codex
+tu live claude
+tu live gemini
+tu live opencode
+tu live antigravity
 
 # htop 风格的会话查看器
 tu top
@@ -205,9 +220,13 @@ tu img week
 从本地日志目录和 IDE 探测：
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+- Gemini: `~/.gemini/tmp`
+- OpenCode: `$OPENCODE_DATA_DIR` 或 `$XDG_DATA_HOME/opencode`（回退 `~/.local/share/opencode`）
 - Antigravity: 从运行中的 IDE 语言服务器探测（无需日志文件）
 
-可通过 `--claude-projects-dir` 和 `--codex-sessions-dir` 覆盖。
+可通过 `--claude-projects-dir`、`--codex-sessions-dir`、`--gemini-data-dir`、`--opencode-data-dir` 覆盖。
+
+`--only` / `--sources` 当前只作用于日志型 provider（`claude`、`codex`、`gemini`、`opencode`）。Antigravity 仍是独立的配额探测通道。
 
 ### 如何估算费用?
 

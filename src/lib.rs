@@ -142,7 +142,7 @@ pub use types::{
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "cli")]
-use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
+use crate::cli::{Cli, Commands, DailyArgs, ProviderArg, normalize_cli_args};
 #[cfg(feature = "cli")]
 use anyhow::Result;
 #[cfg(feature = "cli")]
@@ -268,6 +268,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             args.common.no_codex = false;
             args.common.no_gemini = true;
             args.common.no_opencode = true;
+            args.common.only = vec![ProviderArg::Codex];
+            args.common.sources.clear();
             pipeline::run_daily(args).await
         }
         Commands::Claude(mut args) => {
@@ -275,6 +277,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             args.common.no_claude = false;
             args.common.no_gemini = true;
             args.common.no_opencode = true;
+            args.common.only = vec![ProviderArg::Claude];
+            args.common.sources.clear();
             pipeline::run_daily(args).await
         }
         Commands::Gemini(mut args) => {
@@ -282,6 +286,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             args.common.no_claude = true;
             args.common.no_gemini = false;
             args.common.no_opencode = true;
+            args.common.only = vec![ProviderArg::Gemini];
+            args.common.sources.clear();
             pipeline::run_daily(args).await
         }
         Commands::Opencode(mut args) => {
@@ -289,6 +295,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             args.common.no_claude = true;
             args.common.no_gemini = true;
             args.common.no_opencode = false;
+            args.common.only = vec![ProviderArg::Opencode];
+            args.common.sources.clear();
             pipeline::run_daily(args).await
         }
         Commands::Antigravity(args) => pipeline::run_antigravity(args).await,
