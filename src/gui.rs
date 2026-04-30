@@ -5,6 +5,7 @@ use iced::widget::{
     vertical_space,
 };
 use iced::{Color, Element, Font, Length, Subscription, Task, Theme, window};
+use std::collections::HashMap;
 
 use crate::cli::{CommonArgs, GuiArgs, SortOrder};
 use crate::pipeline::{ReportPeriod, collect_report};
@@ -47,6 +48,7 @@ struct GuiState {
     project: String,
     loading: bool,
     report: Option<DailyReport>,
+    report_cache: HashMap<String, DailyReport>,
     tokens_chart: TrendChart,
     cost_chart: TrendChart,
     hovered_tokens_bar: Option<usize>,
@@ -104,6 +106,7 @@ impl GuiState {
             project: args.project.unwrap_or_default(),
             loading: true,
             report: None,
+            report_cache: HashMap::new(),
             tokens_chart: TrendChart::empty_tokens(),
             cost_chart: TrendChart::empty_cost(),
             hovered_tokens_bar: None,
@@ -126,6 +129,29 @@ impl GuiState {
             start_of_week: self.start_of_week,
         }
     }
+
+    fn request_cache_key(&self) -> String {
+        request_cache_key(&self.request())
+    }
+}
+
+fn request_cache_key(req: &ReportRequest) -> String {
+    format!(
+        "period={:?}|instances={}|project={}|since={}|until={}|tz={}|order={:?}|claude={}|codex={}|gemini={}|opencode={}|only={:?}|sources={:?}",
+        req.period,
+        req.instances,
+        req.project.as_deref().unwrap_or(""),
+        req.common.since.as_deref().unwrap_or(""),
+        req.common.until.as_deref().unwrap_or(""),
+        req.common.timezone.as_deref().unwrap_or(""),
+        req.common.order,
+        !req.common.no_claude,
+        !req.common.no_codex,
+        !req.common.no_gemini,
+        !req.common.no_opencode,
+        req.common.only,
+        req.common.sources
+    )
 }
 
 pub(crate) fn run_gui(args: GuiArgs) -> Result<()> {
@@ -182,11 +208,22 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Daily;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            state.loading = true;
-            state.error = None;
-            Task::perform(load_report(state.request()), |result| {
-                Message::ReportLoaded(Box::new(result))
-            })
+            let key = state.request_cache_key();
+            if let Some(cached) = state.report_cache.get(&key).cloned() {
+                let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
+                state.report = Some(cached);
+                state.tokens_chart = tokens_chart;
+                state.cost_chart = cost_chart;
+                state.loading = false;
+                state.error = None;
+                Task::none()
+            } else {
+                state.loading = true;
+                state.error = None;
+                Task::perform(load_report(state.request()), |result| {
+                    Message::ReportLoaded(Box::new(result))
+                })
+            }
         }
         Message::UseMonthly => {
             if state.period == ReportPeriod::Monthly {
@@ -195,11 +232,22 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Monthly;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            state.loading = true;
-            state.error = None;
-            Task::perform(load_report(state.request()), |result| {
-                Message::ReportLoaded(Box::new(result))
-            })
+            let key = state.request_cache_key();
+            if let Some(cached) = state.report_cache.get(&key).cloned() {
+                let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
+                state.report = Some(cached);
+                state.tokens_chart = tokens_chart;
+                state.cost_chart = cost_chart;
+                state.loading = false;
+                state.error = None;
+                Task::none()
+            } else {
+                state.loading = true;
+                state.error = None;
+                Task::perform(load_report(state.request()), |result| {
+                    Message::ReportLoaded(Box::new(result))
+                })
+            }
         }
         Message::UseWeekly => {
             if state.period == ReportPeriod::Weekly {
@@ -208,11 +256,22 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Weekly;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            state.loading = true;
-            state.error = None;
-            Task::perform(load_report(state.request()), |result| {
-                Message::ReportLoaded(Box::new(result))
-            })
+            let key = state.request_cache_key();
+            if let Some(cached) = state.report_cache.get(&key).cloned() {
+                let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
+                state.report = Some(cached);
+                state.tokens_chart = tokens_chart;
+                state.cost_chart = cost_chart;
+                state.loading = false;
+                state.error = None;
+                Task::none()
+            } else {
+                state.loading = true;
+                state.error = None;
+                Task::perform(load_report(state.request()), |result| {
+                    Message::ReportLoaded(Box::new(result))
+                })
+            }
         }
         Message::Refresh => {
             state.loading = true;
@@ -243,6 +302,9 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.loading = false;
             match result {
                 Ok(report) => {
+                    state
+                        .report_cache
+                        .insert(state.request_cache_key(), report.clone());
                     let (tokens_chart, cost_chart) =
                         build_trend_charts(&report, state.common.order);
                     state.report = Some(report);
