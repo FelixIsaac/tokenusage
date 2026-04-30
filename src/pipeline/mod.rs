@@ -554,7 +554,7 @@ const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".venv",
     "venv",
 ];
-const INCREMENTAL_CACHE_VERSION: u32 = 2;
+const INCREMENTAL_CACHE_VERSION: u32 = 3;
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_PRICING_CACHE_VERSION: u32 = 1;
 const OPENROUTER_PRICING_CACHE_TTL_SECS: u64 = 6 * 60 * 60;

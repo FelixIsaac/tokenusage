@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -637,6 +637,7 @@ pub(super) fn parse_files_concurrently(
     stats: Arc<ParseStatsAtomic>,
 ) -> WorkerParseOutput {
     let (tx, rx) = bounded::<FileParseJob>(4096);
+    let global_claude_dedupe = Arc::new(ClaudeGlobalDedupe::default());
 
     let producer = {
         let tx = tx.clone();
@@ -656,8 +657,18 @@ pub(super) fn parse_files_concurrently(
         let pricing = pricing.clone();
         let stats = stats.clone();
         let timezone = timezone.clone();
+        let global_claude_dedupe = global_claude_dedupe.clone();
 
-        let handle = thread::spawn(move || worker_loop(rx, filter, &timezone, &pricing, &stats));
+        let handle = thread::spawn(move || {
+            worker_loop(
+                rx,
+                filter,
+                &timezone,
+                &pricing,
+                &stats,
+                &global_claude_dedupe,
+            )
+        });
         handles.push(handle);
     }
 
@@ -678,16 +689,36 @@ pub(super) fn worker_loop(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
+    global_claude_dedupe: &ClaudeGlobalDedupe,
 ) -> WorkerParseOutput {
     let mut output = WorkerParseOutput::default();
     while let Ok(job) = rx.recv() {
         let cache_key = job.cache_key.clone();
-        if let Some(parsed) = parse_single_file(job, filter, timezone, pricing, stats) {
+        if let Some(parsed) = parse_single_file(
+            job,
+            filter,
+            timezone,
+            pricing,
+            stats,
+            global_claude_dedupe,
+        ) {
             output.events.extend(parsed.events);
             output.cache_updates.push((cache_key, parsed.cache_entry));
         }
     }
     output
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ClaudeGlobalDedupe {
+    seen_keys: Mutex<HashSet<String>>,
+}
+
+impl ClaudeGlobalDedupe {
+    fn insert(&self, key: &str) -> bool {
+        let mut seen = self.seen_keys.lock().expect("claude dedupe mutex poisoned");
+        seen.insert(key.to_string())
+    }
 }
 
 pub(super) fn parse_single_file(
@@ -696,6 +727,7 @@ pub(super) fn parse_single_file(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
+    global_claude_dedupe: &ClaudeGlobalDedupe,
 ) -> Option<ParsedFileOutput> {
     let input = match File::open(&job.file.path) {
         Ok(f) => f,
@@ -793,7 +825,12 @@ pub(super) fn parse_single_file(
         }
 
         let parsed = match job.file.source {
-            SourceKind::Claude => parse_claude_usage_line(&line, pricing, &mut claude_state),
+            SourceKind::Claude => parse_claude_usage_line(
+                &line,
+                pricing,
+                &mut claude_state,
+                global_claude_dedupe,
+            ),
             SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
             SourceKind::Gemini => parse_gemini_usage_line(&line, pricing),
             SourceKind::OpenCode => unreachable!("OpenCode is parsed as whole-file JSON"),
@@ -1122,6 +1159,7 @@ pub(super) fn parse_claude_usage_line(
     line: &str,
     pricing: &PricingTable,
     dedupe_state: &mut ClaudeDedupeState,
+    global_dedupe: &ClaudeGlobalDedupe,
 ) -> ParseLineResult {
     let value: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -1150,7 +1188,10 @@ pub(super) fn parse_claude_usage_line(
         .or_else(|| get_value(&value, "request_id").and_then(Value::as_str));
     if let (Some(message_id), Some(request_id)) = (message_id, request_id) {
         let key = format!("{message_id}:{request_id}");
-        if !dedupe_state.insert(key) {
+        if !dedupe_state.insert(key.clone()) {
+            return ParseLineResult::MissingUsage;
+        }
+        if !global_dedupe.insert(&key) {
             return ParseLineResult::MissingUsage;
         }
     }
