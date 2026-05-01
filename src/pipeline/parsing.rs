@@ -581,7 +581,7 @@ pub(super) fn discover_files_in_root(
     if kind == SourceKind::OpenCode {
         // Always merge both SQLite and legacy message logs when present.
         let db_path = root.join("opencode.db");
-        if db_path.is_file() {
+        if db_path.is_file() && !ignore_rules.should_skip_path(&db_path) {
             out.push(DiscoveredFile {
                 source: kind,
                 root: root.to_path_buf(),

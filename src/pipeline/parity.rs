@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::{ReportPeriod, collect_report, emit_json};
-use crate::cli::{ParityArgs, ParityPeriod, ProviderArg};
+use crate::cli::{ParityArgs, ParityOpencodeScope, ParityPeriod, ProviderArg};
 use crate::types::TokenCounts;
 
 #[derive(Debug, Serialize)]
@@ -31,6 +31,7 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
     let mut common = args.common.clone();
     common.only = vec![args.provider];
     common.sources.clear();
+    apply_opencode_scope_compat(&mut common, args.provider, args.opencode_scope);
     apply_provider_parity_compat(&mut common, args.provider, args.period);
 
     let period = match args.period {
@@ -147,6 +148,16 @@ fn apply_provider_parity_compat(
     {
         // ccusage-opencode daily/monthly grouping currently keys by UTC date strings.
         common.timezone = Some("UTC".to_string());
+    }
+}
+
+fn apply_opencode_scope_compat(
+    common: &mut crate::cli::CommonArgs,
+    provider: ProviderArg,
+    scope: ParityOpencodeScope,
+) {
+    if provider == ProviderArg::Opencode && scope == ParityOpencodeScope::LegacyOnly {
+        common.ignore_path.push("opencode.db".to_string());
     }
 }
 

@@ -753,6 +753,13 @@ pub(crate) struct ParityArgs {
     pub(crate) period: ParityPeriod,
     #[arg(
         long,
+        value_enum,
+        default_value_t = ParityOpencodeScope::Merged,
+        help = "OpenCode parity compare scope (merged matches tu default; legacy-only matches @ccusage/opencode ingestion scope)"
+    )]
+    pub(crate) opencode_scope: ParityOpencodeScope,
+    #[arg(
+        long,
         default_value_t = 0,
         help = "Maximum allowed absolute token delta for totals"
     )]
@@ -779,6 +786,15 @@ pub(crate) enum ParityPeriod {
     Daily,
     Weekly,
     Monthly,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ParityOpencodeScope {
+    #[default]
+    Merged,
+    LegacyOnly,
 }
 
 #[cfg(feature = "cli")]
