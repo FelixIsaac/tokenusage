@@ -164,6 +164,11 @@ fn fetch_ccusage_totals(
     provider: ProviderArg,
     period: ParityPeriod,
 ) -> Result<TokenCounts> {
+    if provider == ProviderArg::Codex && period == ParityPeriod::Weekly {
+        bail!(
+            "codex parity does not support weekly in @ccusage/codex; use --period daily or --period monthly"
+        );
+    }
     let package = match provider {
         ProviderArg::Claude => "ccusage@latest",
         ProviderArg::Codex => "@ccusage/codex@latest",
