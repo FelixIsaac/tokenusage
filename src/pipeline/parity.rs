@@ -30,6 +30,7 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
     let mut common = args.common.clone();
     common.only = vec![args.provider];
     common.sources.clear();
+    apply_provider_parity_compat(&mut common, args.provider, args.period);
 
     let period = match args.period {
         ParityPeriod::Daily => ReportPeriod::Daily,
@@ -37,14 +38,8 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
         ParityPeriod::Monthly => ReportPeriod::Monthly,
     };
 
-    let tu_report = collect_report(
-        common.clone(),
-        period,
-        false,
-        None,
-        crate::cli::WeekStart::Sunday,
-    )
-    .await?;
+    let week_start = parity_week_start(args.provider, args.period);
+    let tu_report = collect_report(common.clone(), period, false, None, week_start).await?;
     let tu_totals = tu_report.totals;
     let cc_totals = fetch_ccusage_totals(&common, args.provider, args.period)?;
     let delta = TokenCountsDelta {
@@ -91,6 +86,30 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
     }
 
     emit_json(&out, args.common.jq.as_deref())
+}
+
+fn parity_week_start(provider: ProviderArg, period: ParityPeriod) -> crate::cli::WeekStart {
+    if provider == ProviderArg::Opencode && period == ParityPeriod::Weekly {
+        // ccusage-opencode weekly buckets use ISO week semantics (Monday-start).
+        crate::cli::WeekStart::Monday
+    } else {
+        crate::cli::WeekStart::Sunday
+    }
+}
+
+fn apply_provider_parity_compat(
+    common: &mut crate::cli::CommonArgs,
+    provider: ProviderArg,
+    period: ParityPeriod,
+) {
+    // Keep normal reports untouched; only parity mode emulates upstream quirks.
+    if provider == ProviderArg::Opencode
+        && matches!(period, ParityPeriod::Daily | ParityPeriod::Monthly)
+        && common.timezone.is_none()
+    {
+        // ccusage-opencode daily/monthly grouping currently keys by UTC date strings.
+        common.timezone = Some("UTC".to_string());
+    }
 }
 
 fn provider_name(provider: ProviderArg) -> &'static str {
