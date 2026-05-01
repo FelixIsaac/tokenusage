@@ -142,7 +142,7 @@ pub use types::{
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "cli")]
-use crate::cli::{Cli, Commands, DailyArgs, ProviderArg, normalize_cli_args};
+use crate::cli::{Cli, Commands, DailyArgs, normalize_cli_args};
 #[cfg(feature = "cli")]
 use anyhow::Result;
 #[cfg(feature = "cli")]
@@ -173,12 +173,8 @@ pub async fn run() -> Result<()> {
 #[cfg(feature = "cli")]
 fn extract_throttle(cmd: &Commands) -> u64 {
     match cmd {
-        Commands::Daily(a)
-        | Commands::Doctor(a)
-        | Commands::Codex(a)
-        | Commands::Claude(a)
-        | Commands::Gemini(a)
-        | Commands::Opencode(a) => a.common.slow,
+        Commands::Daily(a) | Commands::Doctor(a) => a.common.slow,
+        Commands::Parity(a) => a.common.slow,
         Commands::Today(a) => a.common.slow,
         Commands::Activity(a) => a.common.slow,
         Commands::Monthly(a) => a.common.slow,
@@ -263,42 +259,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Activity(args) => pipeline::run_activity(args).await,
         Commands::Heartbeat(args) => heartbeat::run(args).await,
         Commands::Doctor(args) => pipeline::run_doctor(args).await,
-        Commands::Codex(mut args) => {
-            args.common.no_claude = true;
-            args.common.no_codex = false;
-            args.common.no_gemini = true;
-            args.common.no_opencode = true;
-            args.common.only = vec![ProviderArg::Codex];
-            args.common.sources.clear();
-            pipeline::run_daily(args).await
-        }
-        Commands::Claude(mut args) => {
-            args.common.no_codex = true;
-            args.common.no_claude = false;
-            args.common.no_gemini = true;
-            args.common.no_opencode = true;
-            args.common.only = vec![ProviderArg::Claude];
-            args.common.sources.clear();
-            pipeline::run_daily(args).await
-        }
-        Commands::Gemini(mut args) => {
-            args.common.no_codex = true;
-            args.common.no_claude = true;
-            args.common.no_gemini = false;
-            args.common.no_opencode = true;
-            args.common.only = vec![ProviderArg::Gemini];
-            args.common.sources.clear();
-            pipeline::run_daily(args).await
-        }
-        Commands::Opencode(mut args) => {
-            args.common.no_codex = true;
-            args.common.no_claude = true;
-            args.common.no_gemini = true;
-            args.common.no_opencode = false;
-            args.common.only = vec![ProviderArg::Opencode];
-            args.common.sources.clear();
-            pipeline::run_daily(args).await
-        }
+        Commands::Parity(args) => pipeline::run_parity(args).await,
         Commands::Antigravity(args) => pipeline::run_antigravity(args).await,
         Commands::Monthly(args) => pipeline::run_monthly(args).await,
         Commands::Weekly(args) => pipeline::run_weekly(args).await,

@@ -28,7 +28,12 @@ struct DoctorSourceReport {
     source: String,
     roots: Vec<String>,
     discovered_files: usize,
+    retained_events: usize,
     mode: String,
+    opencode_db_files: Option<usize>,
+    opencode_legacy_files: Option<usize>,
+    opencode_db_events: Option<usize>,
+    opencode_legacy_events: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,16 +53,64 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
     let ignore_rules = PathIgnoreRules::from_common(&args.common);
     let source_configs = build_sources(&args.common).await?;
     let discovered = discover_files(&source_configs, &ignore_rules, filter);
+    let loaded = load_usage(&args.common, &tz).await?;
 
     let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
     for file in &discovered {
         *by_source.entry(file.source).or_insert(0) += 1;
     }
+    let mut retained_by_source: HashMap<SourceKind, usize> = HashMap::new();
+    let mut opencode_db_events = 0usize;
+    let mut opencode_legacy_events = 0usize;
+    for event in &loaded.events {
+        *retained_by_source.entry(event.source).or_insert(0) += 1;
+        if event.source == SourceKind::OpenCode {
+            let path = event.file_path.replace('\\', "/");
+            if path.ends_with("/opencode.db") {
+                opencode_db_events += 1;
+            } else if path.contains("/storage/message/") {
+                opencode_legacy_events += 1;
+            }
+        }
+    }
 
     let mut sources = Vec::new();
     for source in &source_configs {
+        let (opencode_db_files, opencode_legacy_files) = if source.kind == SourceKind::OpenCode {
+            let db = discovered
+                .iter()
+                .filter(|file| {
+                    file.source == SourceKind::OpenCode
+                        && file.path.file_name().and_then(|name| name.to_str())
+                            == Some("opencode.db")
+                })
+                .count();
+            let legacy = discovered
+                .iter()
+                .filter(|file| {
+                    file.source == SourceKind::OpenCode
+                        && file
+                            .path
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                            .contains("/storage/message/")
+                })
+                .count();
+            (Some(db), Some(legacy))
+        } else {
+            (None, None)
+        };
+        let (opencode_db_events_field, opencode_legacy_events_field) =
+            if source.kind == SourceKind::OpenCode {
+                (Some(opencode_db_events), Some(opencode_legacy_events))
+            } else {
+                (None, None)
+            };
         let mode = if source.kind == SourceKind::OpenCode {
-            let has_db = source.roots.iter().any(|root| root.join("opencode.db").is_file());
+            let has_db = source
+                .roots
+                .iter()
+                .any(|root| root.join("opencode.db").is_file());
             let has_legacy = source
                 .roots
                 .iter()
@@ -80,7 +133,12 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
                 .map(|path| path.to_string_lossy().to_string())
                 .collect(),
             discovered_files: *by_source.get(&source.kind).unwrap_or(&0),
+            retained_events: *retained_by_source.get(&source.kind).unwrap_or(&0),
             mode,
+            opencode_db_files,
+            opencode_legacy_files,
+            opencode_db_events: opencode_db_events_field,
+            opencode_legacy_events: opencode_legacy_events_field,
         });
     }
 
@@ -109,6 +167,19 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             println!("source: {}", source.source);
             println!("  mode: {}", source.mode);
             println!("  discovered-files: {}", source.discovered_files);
+            println!("  retained-events: {}", source.retained_events);
+            if let Some(db_files) = source.opencode_db_files {
+                println!("  opencode-db-files: {db_files}");
+            }
+            if let Some(legacy_files) = source.opencode_legacy_files {
+                println!("  opencode-legacy-files: {legacy_files}");
+            }
+            if let Some(db_events) = source.opencode_db_events {
+                println!("  opencode-db-events: {db_events}");
+            }
+            if let Some(legacy_events) = source.opencode_legacy_events {
+                println!("  opencode-legacy-events: {legacy_events}");
+            }
             for root in &source.roots {
                 println!("  root: {}", root);
             }

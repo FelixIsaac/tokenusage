@@ -1288,11 +1288,8 @@ pub(super) fn render_live_source_detail(
     context: &LiveFrameContext<'_>,
     source: SourceKind,
 ) {
-    let has_official = match source {
-        SourceKind::Codex => context.official_codex.is_some(),
-        SourceKind::Claude => context.official_claude.is_some(),
-        SourceKind::Gemini | SourceKind::OpenCode => false,
-    };
+    let has_official =
+        source.supports_official_limits() && official_for_source(context, source).is_some();
 
     if !has_official {
         let label = source.as_str();
@@ -1322,7 +1319,9 @@ pub(super) fn render_live_source_detail(
                 )));
             }
             SourceKind::Gemini | SourceKind::OpenCode => {
-                lines.push(Line::from("Official limits not implemented for this source."));
+                lines.push(Line::from(
+                    "Official limits not implemented for this source.",
+                ));
             }
         }
 
@@ -1368,9 +1367,7 @@ pub(super) fn render_live_progress_bars_for(
     source_override: Option<SourceKind>,
 ) {
     let preferred_official = match source_override {
-        Some(SourceKind::Codex) => context.official_codex.map(LiveOfficialRef::Codex),
-        Some(SourceKind::Claude) => context.official_claude.map(LiveOfficialRef::Claude),
-        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) => None,
+        Some(source) => official_for_source(context, source),
         None => preferred_official_for_live(context),
     };
     let show_weekly = preferred_official
@@ -1641,11 +1638,7 @@ pub(super) fn preferred_official_for_live<'a>(
     context: &'a LiveFrameContext<'a>,
 ) -> Option<LiveOfficialRef<'a>> {
     if let Some(source) = context.selected_source {
-        return match source {
-            SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
-            SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
-            SourceKind::Gemini | SourceKind::OpenCode => None,
-        };
+        return official_for_source(context, source);
     }
 
     // Antigravity is shown when it's the only available provider or alongside others
@@ -1669,6 +1662,17 @@ pub(super) fn preferred_official_for_live<'a>(
             }
         }
         (None, None) => None,
+    }
+}
+
+fn official_for_source<'a>(
+    context: &'a LiveFrameContext<'a>,
+    source: SourceKind,
+) -> Option<LiveOfficialRef<'a>> {
+    match source {
+        SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
+        SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
+        SourceKind::Gemini | SourceKind::OpenCode => None,
     }
 }
 

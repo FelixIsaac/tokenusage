@@ -129,8 +129,9 @@ tu                          # 经典合并 token 报表
 tu --tui                    # 同一份报表的终端 UI
 
 # 指定数据源
-tu codex
-tu claude
+tu codex daily
+tu claude daily
+tu parity --provider claude --period daily --since 20260401 --until 20260401 --json
 tu gemini
 tu opencode
 tu antigravity
@@ -197,14 +198,14 @@ tu img week
 
 **Claude** — 1,521 个 JSONL 文件, 2.2 GB
 
-| | `tu claude` | `bunx ccusage` | 加速比 |
+| | `tu claude daily` | `bunx ccusage` | 加速比 |
 |---|---:|---:|---:|
 | 冷启动（重建缓存） | **0.73s** | 17.15s | **23.5x** |
 | 热缓存（5 次最佳 / 3 次均值） | **0.08s** | 17.15s | **214x** |
 
 **Codex** — 91 个 JSONL 文件, 1.7 GB
 
-| | `tu codex` | `bunx @ccusage/codex` | 加速比 |
+| | `tu codex daily` | `bunx @ccusage/codex` | 加速比 |
 |---|---:|---:|---:|
 | 冷启动（重建缓存） | **0.92s** | 20.76s | **22.6x** |
 | 热缓存（5 次最佳 / 3 次均值） | **0.15s** | 20.76s | **138x** |

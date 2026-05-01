@@ -30,14 +30,14 @@ Machine: Apple M3 Max, macOS 15.6.1
 
 ### Claude logs — 1,521 JSONL files, 2.2 GB
 
-| | `tu claude` | `bunx ccusage` | Speedup |
+| | `tu claude daily` | `bunx ccusage` | Speedup |
 |---|---:|---:|---:|
 | Cold (rebuild cache) | **0.73s** | 17.15s | **23.5x** |
 | Warm (best of 5 / avg of 3) | **0.08s** | 17.15s | **214x** |
 
 ### Codex logs — 91 JSONL files, 1.7 GB
 
-| | `tu codex` | `bunx @ccusage/codex` | Speedup |
+| | `tu codex daily` | `bunx @ccusage/codex` | Speedup |
 |---|---:|---:|---:|
 | Cold (rebuild cache) | **0.92s** | 20.76s | **22.6x** |
 | Warm (best of 5 / avg of 3) | **0.15s** | 20.76s | **138x** |
@@ -57,13 +57,13 @@ cargo install tokenusage --bin tu
 npm install -g ccusage
 
 # Warm cache run (Claude)
-hyperfine --warmup 3 'tu claude' 'bunx ccusage' --min-runs 5
+hyperfine --warmup 3 'tu claude daily' 'bunx ccusage' --min-runs 5
 
 # Warm cache run (Codex)
-hyperfine --warmup 3 'tu codex' 'bunx @ccusage/codex' --min-runs 5
+hyperfine --warmup 3 'tu codex daily' 'bunx @ccusage/codex' --min-runs 5
 
 # Cold cache run (tu only — clears cache first)
-rm -rf ~/.cache/tokenusage && hyperfine --runs 1 'tu claude'
+rm -rf ~/.cache/tokenusage && hyperfine --runs 1 'tu claude daily'
 ```
 
 > Results will vary based on hardware, log volume, and filesystem cache state.

@@ -118,12 +118,7 @@ pub(super) fn estimate_membership_from_logs(
     )?;
 
     let mut source_breakdown = Vec::new();
-    for source in [
-        SourceKind::Claude,
-        SourceKind::Codex,
-        SourceKind::Gemini,
-        SourceKind::OpenCode,
-    ] {
+    for source in SourceKind::all() {
         let samples = per_source_block_totals
             .iter()
             .filter_map(|((kind, _), tokens)| (*kind == source).then_some(*tokens))

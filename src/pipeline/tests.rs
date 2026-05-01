@@ -3,6 +3,7 @@ use super::official::{
     extract_flag_value, normalize_official_used_percent, parse_antigravity_command_model_configs,
     parse_antigravity_reset_time, parse_antigravity_user_status, select_antigravity_models,
 };
+use super::parsing::dedupe_opencode_events;
 use super::statusline::active_block_summary_for_bounds;
 use super::*;
 use chrono::TimeZone;
@@ -285,4 +286,51 @@ fn parse_antigravity_error_code_rejects_nonzero() {
         "userStatus": null,
     });
     assert!(parse_antigravity_user_status(&json).is_err());
+}
+
+#[test]
+fn opencode_dedupe_removes_duplicate_signatures_only() {
+    let ts = utc_dt(2026, 4, 1, 10, 0, 0);
+    let base = UsageEvent {
+        timestamp: ts,
+        source: SourceKind::OpenCode,
+        model: "gpt-5".to_string(),
+        session: "s1".to_string(),
+        project: Some("p1".to_string()),
+        file_path: "a.json".to_string(),
+        usage: UsageAccumulator {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..UsageAccumulator::default()
+        },
+    };
+    let mut events = vec![
+        base.clone(),
+        UsageEvent {
+            file_path: "b.json".to_string(),
+            ..base.clone()
+        },
+        UsageEvent {
+            source: SourceKind::Codex,
+            ..base.clone()
+        },
+        UsageEvent {
+            usage: UsageAccumulator {
+                input_tokens: 11,
+                output_tokens: 5,
+                ..UsageAccumulator::default()
+            },
+            ..base
+        },
+    ];
+
+    dedupe_opencode_events(&mut events);
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.source == SourceKind::OpenCode)
+            .count(),
+        2
+    );
 }

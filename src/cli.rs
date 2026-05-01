@@ -273,9 +273,10 @@ impl CommonArgs {
     after_help = "Examples:\n\
                   tu\n\
                   tu --since 2026-04-01 --until 2026-04-30\n\
-                  tu codex | tu claude | tu gemini | tu opencode\n\
+                  tu codex daily\n\
+                  tu claude weekly --since 2026-04-01\n\
+                  tu opencode doctor --json\n\
                   tu --only codex,gemini\n\
-                  tu doctor --only opencode --json\n\
                   \n\
                   Default data locations (override with flags):\n\
                   - Claude:   ~/.claude/projects        (--claude-projects-dir)\n\
@@ -303,14 +304,8 @@ pub(crate) enum Commands {
     Heartbeat(HeartbeatArgs),
     #[command(about = "Inspect provider roots, files, and parser mode")]
     Doctor(DailyArgs),
-    #[command(about = "Daily usage report for Codex CLI only")]
-    Codex(DailyArgs),
-    #[command(about = "Daily usage report for Claude Code only")]
-    Claude(DailyArgs),
-    #[command(about = "Daily usage report for Gemini CLI only")]
-    Gemini(DailyArgs),
-    #[command(about = "Daily usage report for OpenCode only")]
-    Opencode(DailyArgs),
+    #[command(about = "Compare tu totals against ccusage provider output")]
+    Parity(ParityArgs),
     Antigravity(AntigravityArgs),
     Monthly(MonthlyArgs),
     #[command(alias = "week")]
@@ -714,6 +709,7 @@ pub(crate) struct ImgArgs {
 
 #[cfg(feature = "cli")]
 pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
+    normalize_provider_first(&mut argv);
     normalize_live_shortcuts(&mut argv);
     normalize_img_shortcuts(&mut argv);
 
@@ -722,9 +718,8 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         None => true,
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
-            | "heartbeat" | "doctor" | "monthly" | "weekly" | "week" | "img" | "session"
-            | "blocks" | "live" | "top" | "statusline" | "gui" | "codex" | "claude"
-            | "gemini" | "opencode" | "antigravity",
+            | "heartbeat" | "doctor" | "parity" | "monthly" | "weekly" | "week" | "img" | "session"
+            | "blocks" | "live" | "top" | "statusline" | "gui" | "antigravity",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
@@ -735,6 +730,94 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     }
 
     argv
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone)]
+pub(crate) struct ParityArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ProviderArg::Claude,
+        help = "Provider to compare"
+    )]
+    pub(crate) provider: ProviderArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ParityPeriod::Daily,
+        help = "Period to compare"
+    )]
+    pub(crate) period: ParityPeriod,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Maximum allowed absolute token delta for totals"
+    )]
+    pub(crate) max_token_delta: u64,
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        help = "Maximum allowed absolute USD delta for totals"
+    )]
+    pub(crate) max_cost_delta: f64,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Exit with error when parity thresholds are exceeded"
+    )]
+    pub(crate) fail_on_delta: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ParityPeriod {
+    #[default]
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+#[cfg(feature = "cli")]
+fn normalize_provider_first(argv: &mut Vec<String>) {
+    let Some(provider) = argv.get(1).map(|s| s.to_ascii_lowercase()) else {
+        return;
+    };
+    if !matches!(
+        provider.as_str(),
+        "claude" | "codex" | "gemini" | "opencode"
+    ) {
+        return;
+    }
+
+    let report = argv
+        .get(2)
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "daily".to_string());
+    if argv.get(2).is_some_and(|arg| arg.starts_with('-')) {
+        argv.insert(2, "daily".to_string());
+    }
+
+    let target = match report.as_str() {
+        "daily" | "weekly" | "monthly" | "live" | "top" | "statusline" | "img" | "blocks"
+        | "gui" | "session" | "doctor" | "today" | "activity" => report,
+        _ => "daily".to_string(),
+    };
+
+    argv.remove(1);
+    if argv.get(1).is_some_and(|v| v != &target) {
+        argv.insert(1, target);
+    } else if argv.get(1).is_none() {
+        argv.push(target);
+    }
+
+    if !argv.iter().any(|arg| arg == "--only") && !argv.iter().any(|arg| arg == "--sources") {
+        argv.insert(2, "--only".to_string());
+        argv.insert(3, provider);
+    }
 }
 
 #[cfg(feature = "cli")]
@@ -824,4 +907,81 @@ fn normalize_img_shortcuts(argv: &mut Vec<String>) {
     argv.remove(2);
     argv.insert(2, "--period".to_string());
     argv.insert(3, period.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_cli_args;
+
+    #[test]
+    fn provider_first_daily_is_rewritten() {
+        let argv = vec![
+            "tu".to_string(),
+            "codex".to_string(),
+            "daily".to_string(),
+            "--json".to_string(),
+        ];
+        let out = normalize_cli_args(argv);
+        assert_eq!(out[1], "daily");
+        assert_eq!(out[2], "--only");
+        assert_eq!(out[3], "codex");
+    }
+
+    #[test]
+    fn provider_first_weekly_is_rewritten() {
+        let argv = vec![
+            "tu".to_string(),
+            "claude".to_string(),
+            "weekly".to_string(),
+            "--since".to_string(),
+            "20260401".to_string(),
+        ];
+        let out = normalize_cli_args(argv);
+        assert_eq!(out[1], "weekly");
+        assert_eq!(out[2], "--only");
+        assert_eq!(out[3], "claude");
+    }
+
+    #[test]
+    fn provider_first_live_is_rewritten() {
+        let argv = vec!["tu".to_string(), "gemini".to_string(), "live".to_string()];
+        let out = normalize_cli_args(argv);
+        assert_eq!(out[1], "live");
+        assert_eq!(out[2], "--only");
+        assert_eq!(out[3], "gemini");
+    }
+
+    #[test]
+    fn provider_first_doctor_is_rewritten() {
+        let argv = vec![
+            "tu".to_string(),
+            "opencode".to_string(),
+            "doctor".to_string(),
+            "--json".to_string(),
+        ];
+        let out = normalize_cli_args(argv);
+        assert_eq!(out[1], "doctor");
+        assert_eq!(out[2], "--only");
+        assert_eq!(out[3], "opencode");
+    }
+
+    #[test]
+    fn provider_first_defaults_to_daily_when_missing_report() {
+        let argv = vec!["tu".to_string(), "codex".to_string(), "--json".to_string()];
+        let out = normalize_cli_args(argv);
+        assert_eq!(out[1], "daily");
+        assert_eq!(out[2], "--only");
+        assert_eq!(out[3], "codex");
+    }
+
+    #[test]
+    fn provider_first_monthly_top_statusline_img_blocks_gui_are_rewritten() {
+        for report in ["monthly", "top", "statusline", "img", "blocks", "gui"] {
+            let argv = vec!["tu".to_string(), "codex".to_string(), report.to_string()];
+            let out = normalize_cli_args(argv);
+            assert_eq!(out[1], report);
+            assert_eq!(out[2], "--only");
+            assert_eq!(out[3], "codex");
+        }
+    }
 }

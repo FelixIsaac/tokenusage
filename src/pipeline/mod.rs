@@ -9,6 +9,8 @@ mod live;
 #[cfg(feature = "cli")]
 mod membership;
 mod official;
+#[cfg(feature = "cli")]
+mod parity;
 mod parsing;
 mod pricing;
 #[cfg(feature = "cli")]
@@ -31,6 +33,8 @@ pub(crate) use commands::{
 };
 #[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
+#[cfg(feature = "cli")]
+pub(crate) use parity::run_parity;
 #[cfg(feature = "cli")]
 pub(crate) use statusline::run_statusline;
 #[cfg(feature = "cli")]
@@ -559,6 +563,7 @@ const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_PRICING_CACHE_VERSION: u32 = 1;
 const OPENROUTER_PRICING_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
 const CLAUDE_RECENT_DEDUPE_KEYS_LIMIT: usize = 8192;
+const MAX_JSON_LINE_BYTES: usize = 10 * 1024 * 1024;
 const CLAUDE_OAUTH_REFRESH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 

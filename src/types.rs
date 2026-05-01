@@ -53,6 +53,10 @@ impl SourceKind {
             SourceKind::OpenCode => "OpenCode",
         }
     }
+
+    pub const fn supports_official_limits(self) -> bool {
+        matches!(self, SourceKind::Claude | SourceKind::Codex)
+    }
 }
 
 /// A configured log source: kind + root directories to scan.

@@ -134,8 +134,8 @@ tu                          # classic merged token report
 tu --tui                    # same report in terminal UI
 
 # Source-specific
-tu codex
-tu claude
+tu codex daily
+tu claude daily
 tu gemini
 tu opencode
 tu antigravity
@@ -212,14 +212,14 @@ tu img week
 
 **Codex** — 91 JSONL files, 1.7 GB (`~/.codex/sessions`)
 
-| | `tu codex` | `bunx @ccusage/codex` | Speedup |
+| | `tu codex daily` | `bunx @ccusage/codex` | Speedup |
 |---|---:|---:|---:|
 | Cold (rebuild cache) | **0.92s** | 20.76s | **22.6x** |
 | Warm (best of 5 / avg of 3) | **0.15s** | 20.76s | **138x** |
 
 **Claude** — 1 521 JSONL files, 2.2 GB (`~/.claude/projects`)
 
-| | `tu claude` | `bunx ccusage` | Speedup |
+| | `tu claude daily` | `bunx ccusage` | Speedup |
 |---|---:|---:|---:|
 | Cold (rebuild cache) | **0.73s** | 17.15s | **23.5x** |
 | Warm (best of 5 / avg of 3) | **0.08s** | 17.15s | **214x** |
@@ -265,7 +265,10 @@ Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless
 ## Command Overview
 
 ```text
-tu [daily|today|activity|heartbeat|doctor|codex|claude|gemini|opencode|antigravity|monthly|weekly|img|session|blocks|live|top|statusline|gui]
+tu [daily|today|activity|heartbeat|doctor|parity|antigravity|monthly|weekly|img|session|blocks|live|top|statusline|gui]
+
+Provider-first grammar:
+- `tu <provider> <report>` e.g. `tu codex daily`, `tu claude weekly`, `tu opencode doctor`
 ```
 
 Useful commands:
@@ -283,6 +286,7 @@ Useful commands:
 - `tu live`
 - `tu img --output tokenusage-share.png` (today, hourly)
 - `tu img --period weekly --output tokenusage-week.png` (7 days, daily)
+- `tu parity --provider claude --period daily --since 20260401 --until 20260401 --json`
 - `tu img --logo ./logo.png --brand-url tokenusage.dev`
 - `tu statusline`
 

@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::cli::{
     ActivityArgs, BlocksArgs, Commands, CommonArgs, CostSource, DailyArgs, GuiArgs, GuiPeriod,
-    ImgArgs, ImgPeriod, LiveArgs, MonthlyArgs, ProviderArg, SessionArgs, SortOrder,
+    ImgArgs, ImgPeriod, LiveArgs, MonthlyArgs, ParityArgs, ProviderArg, SessionArgs, SortOrder,
     StatuslineArgs, TodayArgs, VisualBurnRate, WeekStart, WeeklyArgs,
 };
 
@@ -20,10 +20,7 @@ struct CommandConfigs {
     daily: Option<DailyConfig>,
     today: Option<TodayConfig>,
     activity: Option<ActivityConfig>,
-    codex: Option<DailyConfig>,
-    claude: Option<DailyConfig>,
-    gemini: Option<DailyConfig>,
-    opencode: Option<DailyConfig>,
+    parity: Option<ParityConfig>,
     monthly: Option<MonthlyConfig>,
     weekly: Option<WeeklyConfig>,
     img: Option<ImgConfig>,
@@ -107,6 +104,20 @@ struct ActivityConfig {
     project: Option<String>,
     days: Option<u32>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ParityConfig {
+    #[serde(flatten)]
+    common: CommonConfig,
+    provider: Option<ProviderArg>,
+    period: Option<crate::cli::ParityPeriod>,
+    #[serde(alias = "maxTokenDelta")]
+    max_token_delta: Option<u64>,
+    #[serde(alias = "maxCostDelta")]
+    max_cost_delta: Option<f64>,
+    #[serde(alias = "failOnDelta")]
+    fail_on_delta: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -237,6 +248,14 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Activity(args)
         }
+        Commands::Parity(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            if let Some(parity_cfg) = config.commands.as_ref().and_then(|c| c.parity.as_ref()) {
+                apply_common_config(&mut args.common, Some(&parity_cfg.common));
+                apply_parity_config(&mut args, parity_cfg);
+            }
+            Commands::Parity(args)
+        }
         Commands::Heartbeat(args) => Commands::Heartbeat(args),
         Commands::Doctor(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
@@ -245,55 +264,6 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
                 apply_daily_config(&mut args, daily_cfg);
             }
             Commands::Doctor(args)
-        }
-        Commands::Codex(mut args) => {
-            apply_common_config(&mut args.common, config.defaults.as_ref());
-            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
-                apply_common_config(&mut args.common, Some(&daily_cfg.common));
-                apply_daily_config(&mut args, daily_cfg);
-            }
-            if let Some(codex_cfg) = config.commands.as_ref().and_then(|c| c.codex.as_ref()) {
-                apply_common_config(&mut args.common, Some(&codex_cfg.common));
-                apply_daily_config(&mut args, codex_cfg);
-            }
-            Commands::Codex(args)
-        }
-        Commands::Claude(mut args) => {
-            apply_common_config(&mut args.common, config.defaults.as_ref());
-            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
-                apply_common_config(&mut args.common, Some(&daily_cfg.common));
-                apply_daily_config(&mut args, daily_cfg);
-            }
-            if let Some(claude_cfg) = config.commands.as_ref().and_then(|c| c.claude.as_ref()) {
-                apply_common_config(&mut args.common, Some(&claude_cfg.common));
-                apply_daily_config(&mut args, claude_cfg);
-            }
-            Commands::Claude(args)
-        }
-        Commands::Gemini(mut args) => {
-            apply_common_config(&mut args.common, config.defaults.as_ref());
-            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
-                apply_common_config(&mut args.common, Some(&daily_cfg.common));
-                apply_daily_config(&mut args, daily_cfg);
-            }
-            if let Some(gemini_cfg) = config.commands.as_ref().and_then(|c| c.gemini.as_ref()) {
-                apply_common_config(&mut args.common, Some(&gemini_cfg.common));
-                apply_daily_config(&mut args, gemini_cfg);
-            }
-            Commands::Gemini(args)
-        }
-        Commands::Opencode(mut args) => {
-            apply_common_config(&mut args.common, config.defaults.as_ref());
-            if let Some(daily_cfg) = config.commands.as_ref().and_then(|c| c.daily.as_ref()) {
-                apply_common_config(&mut args.common, Some(&daily_cfg.common));
-                apply_daily_config(&mut args, daily_cfg);
-            }
-            if let Some(opencode_cfg) = config.commands.as_ref().and_then(|c| c.opencode.as_ref())
-            {
-                apply_common_config(&mut args.common, Some(&opencode_cfg.common));
-                apply_daily_config(&mut args, opencode_cfg);
-            }
-            Commands::Opencode(args)
         }
         Commands::Antigravity(args) => Commands::Antigravity(args),
         Commands::Monthly(mut args) => {
@@ -380,12 +350,9 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Daily(args) => args.common.config.as_deref(),
         Commands::Today(args) => args.common.config.as_deref(),
         Commands::Activity(args) => args.common.config.as_deref(),
+        Commands::Parity(args) => args.common.config.as_deref(),
         Commands::Heartbeat(_) => None,
         Commands::Doctor(args) => args.common.config.as_deref(),
-        Commands::Codex(args) => args.common.config.as_deref(),
-        Commands::Claude(args) => args.common.config.as_deref(),
-        Commands::Gemini(args) => args.common.config.as_deref(),
-        Commands::Opencode(args) => args.common.config.as_deref(),
         Commands::Antigravity(args) => args.config.as_deref(),
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
@@ -446,10 +413,14 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_false(&mut common.no_gemini, cfg.no_gemini);
     merge_if_false(&mut common.no_opencode, cfg.no_opencode);
     merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
-    if common.only.is_empty() && let Some(values) = cfg.only.as_ref() {
+    if common.only.is_empty()
+        && let Some(values) = cfg.only.as_ref()
+    {
         common.only = values.clone();
     }
-    if common.sources.is_empty() && let Some(values) = cfg.sources.as_ref() {
+    if common.sources.is_empty()
+        && let Some(values) = cfg.sources.as_ref()
+    {
         common.sources = values.clone();
     }
     if common.claude_projects_dir.is_empty()
@@ -500,6 +471,22 @@ fn apply_activity_config(args: &mut ActivityArgs, cfg: &ActivityConfig) {
     merge_if_none(&mut args.project, &cfg.project);
     merge_if_u32_default(&mut args.days, cfg.days, 7);
     merge_if_usize_default(&mut args.limit, cfg.limit, 5);
+}
+
+fn apply_parity_config(args: &mut ParityArgs, cfg: &ParityConfig) {
+    merge_if_default(&mut args.provider, cfg.provider, ProviderArg::Claude);
+    merge_if_default(
+        &mut args.period,
+        cfg.period,
+        crate::cli::ParityPeriod::Daily,
+    );
+    merge_if_u64_default(&mut args.max_token_delta, cfg.max_token_delta, 0);
+    if args.max_cost_delta == 0.0
+        && let Some(value) = cfg.max_cost_delta
+    {
+        args.max_cost_delta = value;
+    }
+    merge_if_false(&mut args.fail_on_delta, cfg.fail_on_delta);
 }
 
 fn apply_weekly_config(args: &mut WeeklyArgs, cfg: &WeeklyConfig) {

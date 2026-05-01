@@ -49,12 +49,16 @@ use crate::types::{DailyReport, ParseStats, UsageEvent};
 ///
 /// This is the library-friendly equivalent of CLI arguments.
 /// All fields have sensible defaults; a `Config::default()` will discover
-/// usage logs from the standard locations for both Claude Code and Codex.
+/// usage logs from standard locations for Claude Code, Codex, Gemini CLI,
+/// and OpenCode.
 ///
 /// # Default behaviour
 ///
-/// - Scans `~/.claude/projects/*/` (Claude Code) and `~/.codex/sessions/`
-///   (Codex) for JSONL log files.
+/// - Scans default provider locations:
+///   - Claude: `~/.claude/projects/*/`
+///   - Codex: `~/.codex/sessions/`
+///   - Gemini: `~/.gemini/tmp/`
+///   - OpenCode: `~/.local/share/opencode/` (platform-dependent alternatives included)
 /// - Uses the system local timezone for date grouping.
 /// - Fetches live model pricing from the OpenRouter API; falls back to
 ///   built-in estimates if the network is unavailable.
@@ -126,6 +130,10 @@ pub struct Config {
     ///
     /// When `true`, only Claude Code logs are scanned.
     pub no_codex: bool,
+    /// Disable the Gemini CLI log source.
+    pub no_gemini: bool,
+    /// Disable the OpenCode log source.
+    pub no_opencode: bool,
 
     /// Custom Claude projects directory paths.
     ///
@@ -138,6 +146,10 @@ pub struct Config {
     /// Overrides the default `~/.codex/sessions/` discovery.
     /// Each string should be an absolute path.  Empty = use defaults.
     pub codex_sessions_dir: Vec<String>,
+    /// Custom Gemini data directory paths.
+    pub gemini_data_dir: Vec<String>,
+    /// Custom OpenCode data directory paths.
+    pub opencode_data_dir: Vec<String>,
 
     /// Path substring ignore rules.
     ///
@@ -383,15 +395,15 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         workers: config.workers,
         no_claude: config.no_claude,
         no_codex: config.no_codex,
-        no_gemini: true,
-        no_opencode: true,
+        no_gemini: config.no_gemini,
+        no_opencode: config.no_opencode,
         no_antigravity: true,
         only: Vec::new(),
         sources: Vec::new(),
         claude_projects_dir: config.claude_projects_dir.clone(),
         codex_sessions_dir: config.codex_sessions_dir.clone(),
-        gemini_data_dir: Vec::new(),
-        opencode_data_dir: Vec::new(),
+        gemini_data_dir: config.gemini_data_dir.clone(),
+        opencode_data_dir: config.opencode_data_dir.clone(),
         ignore_path: config.ignore_path.clone(),
         no_default_ignores: config.no_default_ignores,
         no_incremental_cache: config.no_incremental_cache,

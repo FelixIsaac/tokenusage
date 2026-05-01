@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -12,9 +12,9 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use crossbeam_channel::{Receiver, bounded};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use tokio::fs;
-use rusqlite::{Connection, OpenFlags};
 
 use crate::cli::CommonArgs;
 use crate::types::{
@@ -130,6 +130,7 @@ pub(super) fn parse_files_with_cache(
     if sort_events {
         events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
     }
+    dedupe_opencode_events(&mut events);
 
     ParsedUsageOutput {
         loaded: LoadedUsage {
@@ -369,151 +370,160 @@ pub(super) async fn load_usage(
 
 pub(super) async fn build_sources(common: &CommonArgs) -> Result<Vec<SourceConfig>> {
     let home = dirs::home_dir().context("Failed to resolve home directory")?;
-
-    let mut sources = Vec::new();
     let selected = common.selected_sources();
     let provider_selected = |kind: SourceKind| selected.is_empty() || selected.contains(&kind);
-
-    if !common.no_claude && provider_selected(SourceKind::Claude) {
-        let roots = if common.claude_projects_dir.is_empty() {
-            vec![
-                home.join(".config").join("claude").join("projects"),
-                home.join(".claude").join("projects"),
-            ]
-        } else {
-            common
-                .claude_projects_dir
-                .iter()
-                .map(|p| expand_user_path(p))
-                .collect()
-        };
-
-        let existing = filter_existing_dirs(roots).await;
-        if !existing.is_empty() {
-            sources.push(SourceConfig {
-                kind: SourceKind::Claude,
-                roots: existing,
-            });
+    let mut sources = Vec::new();
+    for spec in provider_registry() {
+        if !(spec.enabled)(common) || !provider_selected(spec.kind) {
+            continue;
         }
-    }
-
-    if !common.no_codex && provider_selected(SourceKind::Codex) {
-        let roots = if common.codex_sessions_dir.is_empty() {
-            {
-                let codex_home = std::env::var_os("CODEX_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".codex"));
-                vec![
-                    codex_home.join("sessions"),
-                    codex_home.join("archived_sessions"),
-                    home.join(".config").join("codex").join("sessions"),
-                    home.join(".config").join("codex").join("archived_sessions"),
-                ]
-            }
-        } else {
-            let mut out = Vec::new();
-            for raw in &common.codex_sessions_dir {
-                let path = expand_user_path(raw);
-                out.push(path.clone());
-                if path.file_name().and_then(|s| s.to_str()) == Some("sessions")
-                    && let Some(parent) = path.parent()
-                {
-                    out.push(parent.join("archived_sessions"));
-                }
-            }
-            out
-        };
-
+        let roots = (spec.roots)(common, &home);
         let existing = filter_existing_dirs(roots).await;
-        if !existing.is_empty() {
-            sources.push(SourceConfig {
-                kind: SourceKind::Codex,
-                roots: existing,
-            });
+        if existing.is_empty() {
+            continue;
         }
-    }
-
-    if !common.no_gemini && provider_selected(SourceKind::Gemini) {
-        let roots = if common.gemini_data_dir.is_empty() {
-            vec![home.join(".gemini").join("tmp")]
-        } else {
-            common
-                .gemini_data_dir
-                .iter()
-                .map(|p| expand_user_path(p))
-                .collect()
-        };
-
-        let existing = filter_existing_dirs(roots).await;
-        if !existing.is_empty() {
-            sources.push(SourceConfig {
-                kind: SourceKind::Gemini,
-                roots: existing,
-            });
-        }
-    }
-
-    if !common.no_opencode && provider_selected(SourceKind::OpenCode) {
-        let roots = if common.opencode_data_dir.is_empty() {
-            {
-                let mut candidates = Vec::<PathBuf>::new();
-
-                if let Some(value) = std::env::var_os("OPENCODE_DATA_DIR") {
-                    candidates.push(PathBuf::from(value));
-                }
-
-                if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
-                    candidates.push(PathBuf::from(value).join("opencode"));
-                }
-
-                candidates.push(home.join(".local").join("share").join("opencode"));
-
-                #[cfg(target_os = "windows")]
-                {
-                    if let Some(value) = std::env::var_os("LOCALAPPDATA") {
-                        candidates.push(PathBuf::from(value.clone()).join("opencode"));
-                        candidates.push(PathBuf::from(value).join("OpenCode"));
-                    }
-                    if let Some(value) = std::env::var_os("APPDATA") {
-                        candidates.push(PathBuf::from(value.clone()).join("opencode"));
-                        candidates.push(PathBuf::from(value).join("OpenCode"));
-                    }
-                }
-
-                #[cfg(target_os = "macos")]
-                {
-                    candidates.push(
-                        home.join("Library")
-                            .join("Application Support")
-                            .join("opencode"),
-                    );
-                    candidates.push(
-                        home.join("Library")
-                            .join("Application Support")
-                            .join("OpenCode"),
-                    );
-                }
-
-                candidates
-            }
-        } else {
-            common
-                .opencode_data_dir
-                .iter()
-                .map(|p| expand_user_path(p))
-                .collect()
-        };
-
-        let existing = filter_existing_dirs(roots).await;
-        if !existing.is_empty() {
-            sources.push(SourceConfig {
-                kind: SourceKind::OpenCode,
-                roots: existing,
-            });
-        }
+        sources.push(SourceConfig {
+            kind: spec.kind,
+            roots: existing,
+        });
     }
 
     Ok(sources)
+}
+
+struct ProviderSpec {
+    kind: SourceKind,
+    accepted_exts: &'static [&'static str],
+    enabled: fn(&CommonArgs) -> bool,
+    roots: fn(&CommonArgs, &Path) -> Vec<PathBuf>,
+}
+
+fn provider_registry() -> [ProviderSpec; 4] {
+    [
+        ProviderSpec {
+            kind: SourceKind::Claude,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_claude,
+            roots: claude_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::Codex,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_codex,
+            roots: codex_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::Gemini,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_gemini,
+            roots: gemini_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::OpenCode,
+            accepted_exts: &["json", "db"],
+            enabled: |common| !common.no_opencode,
+            roots: opencode_source_roots,
+        },
+    ]
+}
+
+fn claude_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if common.claude_projects_dir.is_empty() {
+        return vec![
+            home.join(".config").join("claude").join("projects"),
+            home.join(".claude").join("projects"),
+        ];
+    }
+    common
+        .claude_projects_dir
+        .iter()
+        .map(|p| expand_user_path(p))
+        .collect()
+}
+
+fn codex_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if common.codex_sessions_dir.is_empty() {
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"));
+        return vec![
+            codex_home.join("sessions"),
+            codex_home.join("archived_sessions"),
+            home.join(".config").join("codex").join("sessions"),
+            home.join(".config").join("codex").join("archived_sessions"),
+        ];
+    }
+
+    let mut out = Vec::new();
+    for raw in &common.codex_sessions_dir {
+        let path = expand_user_path(raw);
+        out.push(path.clone());
+        if path.file_name().and_then(|s| s.to_str()) == Some("sessions")
+            && let Some(parent) = path.parent()
+        {
+            out.push(parent.join("archived_sessions"));
+        }
+    }
+    out
+}
+
+fn gemini_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if common.gemini_data_dir.is_empty() {
+        return vec![home.join(".gemini").join("tmp")];
+    }
+    common
+        .gemini_data_dir
+        .iter()
+        .map(|p| expand_user_path(p))
+        .collect()
+}
+
+fn opencode_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if !common.opencode_data_dir.is_empty() {
+        return common
+            .opencode_data_dir
+            .iter()
+            .map(|p| expand_user_path(p))
+            .collect();
+    }
+
+    let mut candidates = Vec::<PathBuf>::new();
+
+    if let Some(value) = std::env::var_os("OPENCODE_DATA_DIR") {
+        candidates.push(PathBuf::from(value));
+    }
+    if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
+        candidates.push(PathBuf::from(value).join("opencode"));
+    }
+    candidates.push(home.join(".local").join("share").join("opencode"));
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(value.clone()).join("opencode"));
+            candidates.push(PathBuf::from(value).join("OpenCode"));
+        }
+        if let Some(value) = std::env::var_os("APPDATA") {
+            candidates.push(PathBuf::from(value.clone()).join("opencode"));
+            candidates.push(PathBuf::from(value).join("OpenCode"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("opencode"),
+        );
+        candidates.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("OpenCode"),
+        );
+    }
+
+    candidates
 }
 
 pub(super) async fn filter_existing_dirs(input: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -569,7 +579,7 @@ pub(super) fn discover_files_in_root(
     let mut out = Vec::new();
 
     if kind == SourceKind::OpenCode {
-        // Prefer the SQLite database which is authoritative and includes recent usage.
+        // Always merge both SQLite and legacy message logs when present.
         let db_path = root.join("opencode.db");
         if db_path.is_file() {
             out.push(DiscoveredFile {
@@ -577,9 +587,7 @@ pub(super) fn discover_files_in_root(
                 root: root.to_path_buf(),
                 path: normalized_discovered_path(&db_path),
             });
-            return out;
         }
-        // Fall back to legacy JSON message storage if the DB doesn't exist.
     }
     let rules = ignore_rules.clone();
     let mut builder = WalkBuilder::new(root);
@@ -602,17 +610,17 @@ pub(super) fn discover_files_in_root(
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        let should_keep = match kind {
-            SourceKind::Claude | SourceKind::Codex | SourceKind::Gemini => ext.eq_ignore_ascii_case("jsonl"),
-            SourceKind::OpenCode => ext.eq_ignore_ascii_case("json"),
-        };
+        let should_keep = provider_accepts_extension(kind, ext);
         if !should_keep {
             continue;
         }
 
         if kind == SourceKind::OpenCode {
             // Restrict OpenCode discovery to message JSONs; skip db/log/snapshots.
-            let normalized = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+            let normalized = path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_ascii_lowercase();
             if !normalized.contains("/storage/message/") {
                 continue;
             }
@@ -626,6 +634,38 @@ pub(super) fn discover_files_in_root(
     }
 
     out
+}
+
+pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
+    let mut seen = HashSet::new();
+    events.retain(|event| {
+        if event.source != SourceKind::OpenCode {
+            return true;
+        }
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            event.timestamp.timestamp_millis(),
+            event.model,
+            event.session,
+            event.project.as_deref().unwrap_or_default(),
+            event.usage.input_tokens,
+            event.usage.cache_creation_input_tokens,
+            event.usage.cache_read_input_tokens,
+            event.usage.output_tokens,
+            event.usage.reasoning_output_tokens
+        );
+        seen.insert(key)
+    });
+}
+
+fn provider_accepts_extension(kind: SourceKind, ext: &str) -> bool {
+    let meta = provider_registry()
+        .into_iter()
+        .find(|spec| spec.kind == kind)
+        .expect("provider metadata must exist");
+    meta.accepted_exts
+        .iter()
+        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
 }
 
 pub(super) fn parse_files_concurrently(
@@ -694,14 +734,9 @@ pub(super) fn worker_loop(
     let mut output = WorkerParseOutput::default();
     while let Ok(job) = rx.recv() {
         let cache_key = job.cache_key.clone();
-        if let Some(parsed) = parse_single_file(
-            job,
-            filter,
-            timezone,
-            pricing,
-            stats,
-            global_claude_dedupe,
-        ) {
+        if let Some(parsed) =
+            parse_single_file(job, filter, timezone, pricing, stats, global_claude_dedupe)
+        {
             output.events.extend(parsed.events);
             output.cache_updates.push((cache_key, parsed.cache_entry));
         }
@@ -810,6 +845,10 @@ pub(super) fn parse_single_file(
         if bytes == 0 {
             break;
         }
+        if bytes > MAX_JSON_LINE_BYTES {
+            lines_invalid_json += 1;
+            continue;
+        }
         if line.ends_with('\n') {
             line.pop();
             if line.ends_with('\r') {
@@ -825,12 +864,9 @@ pub(super) fn parse_single_file(
         }
 
         let parsed = match job.file.source {
-            SourceKind::Claude => parse_claude_usage_line(
-                &line,
-                pricing,
-                &mut claude_state,
-                global_claude_dedupe,
-            ),
+            SourceKind::Claude => {
+                parse_claude_usage_line(&line, pricing, &mut claude_state, global_claude_dedupe)
+            }
             SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
             SourceKind::Gemini => parse_gemini_usage_line(&line, pricing),
             SourceKind::OpenCode => unreachable!("OpenCode is parsed as whole-file JSON"),
@@ -911,23 +947,26 @@ pub(super) fn parse_single_file(
 }
 
 pub(super) fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -> bool {
+    let markers = provider_fast_line_markers(source);
+    !markers.is_empty() && !markers.iter().any(|marker| line.contains(marker))
+}
+
+fn provider_fast_line_markers(source: SourceKind) -> &'static [&'static str] {
     match source {
-        SourceKind::Codex => {
-            !(line.contains("\"type\":\"event_msg\"")
-                || line.contains("\"type\": \"event_msg\"")
-                || line.contains("\"type\":\"turn_context\"")
-                || line.contains("\"type\": \"turn_context\""))
-        }
-        SourceKind::Claude => {
-            !(line.contains("\"type\":\"assistant\"") || line.contains("\"type\": \"assistant\""))
-        }
-        SourceKind::Gemini => {
-            !(line.contains("\"type\":\"gemini\"")
-                || line.contains("\"type\": \"gemini\"")
-                || line.contains("\"tokens\":")
-                || line.contains("\"tokens\": "))
-        }
-        SourceKind::OpenCode => false,
+        SourceKind::Codex => &[
+            "\"type\":\"event_msg\"",
+            "\"type\": \"event_msg\"",
+            "\"type\":\"turn_context\"",
+            "\"type\": \"turn_context\"",
+        ],
+        SourceKind::Claude => &["\"type\":\"assistant\"", "\"type\": \"assistant\""],
+        SourceKind::Gemini => &[
+            "\"type\":\"gemini\"",
+            "\"type\": \"gemini\"",
+            "\"tokens\":",
+            "\"tokens\": ",
+        ],
+        SourceKind::OpenCode => &[],
     }
 }
 
@@ -1380,6 +1419,11 @@ fn parse_opencode_message_file(
     stats: &ParseStatsAtomic,
 ) -> Option<ParsedFileOutput> {
     let bytes = std::fs::read(&job.file.path).ok()?;
+    if bytes.len() > MAX_JSON_LINE_BYTES {
+        stats.lines_total.fetch_add(1, Ordering::Relaxed);
+        stats.lines_invalid_json.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
     let value: Value = serde_json::from_slice(&bytes).ok()?;
 
     stats.lines_total.fetch_add(1, Ordering::Relaxed);
@@ -1427,14 +1471,14 @@ fn parse_opencode_message_file(
     stats.lines_parsed.fetch_add(1, Ordering::Relaxed);
 
     let event = UsageEvent {
-            timestamp,
-            source: SourceKind::OpenCode,
-            model,
-            session,
-            project,
-            file_path: job.file.path.display().to_string(),
-            usage: UsageAccumulator { cost_usd, ..usage },
-        };
+        timestamp,
+        source: SourceKind::OpenCode,
+        model,
+        session,
+        project,
+        file_path: job.file.path.display().to_string(),
+        usage: UsageAccumulator { cost_usd, ..usage },
+    };
 
     Some(ParsedFileOutput {
         events: vec![event.clone()],
@@ -1491,10 +1535,7 @@ fn filter_bounds_utc_millis(filter: DateFilter, tz: &TimeZoneMode) -> Option<(i6
             .with_timezone(&Utc),
     };
 
-    Some((
-        start_utc.timestamp_millis(),
-        end_utc.timestamp_millis(),
-    ))
+    Some((start_utc.timestamp_millis(), end_utc.timestamp_millis()))
 }
 
 fn parse_opencode_db_file(
@@ -1558,6 +1599,10 @@ fn parse_opencode_db_file(
         let session_id: String = row.get(0).ok()?;
         let time_created: i64 = row.get(1).ok()?;
         let data: String = row.get(2).ok()?;
+        if data.len() > MAX_JSON_LINE_BYTES {
+            lines_invalid_json += 1;
+            continue;
+        }
         let session_dir: String = row.get(3).ok()?;
         let project_worktree: String = row.get(4).ok()?;
 
@@ -1638,7 +1683,9 @@ fn parse_opencode_db_file(
     }
 
     stats.lines_total.fetch_add(lines_total, Ordering::Relaxed);
-    stats.lines_parsed.fetch_add(lines_parsed, Ordering::Relaxed);
+    stats
+        .lines_parsed
+        .fetch_add(lines_parsed, Ordering::Relaxed);
     stats
         .lines_invalid_json
         .fetch_add(lines_invalid_json, Ordering::Relaxed);
@@ -1774,25 +1821,27 @@ pub(super) fn parse_codex_usage_line(
 }
 
 pub(super) fn extract_model(value: &Value, source: SourceKind) -> Option<String> {
-    let candidate_paths = match source {
+    extract_string(value, provider_model_paths(source))
+}
+
+fn provider_model_paths(source: SourceKind) -> &'static [&'static str] {
+    match source {
         SourceKind::Claude => &[
             "message.model",
             "usage.model",
             "model",
             "payload.model",
             "message.metadata.model",
-        ][..],
+        ],
         SourceKind::Codex => &[
             "payload.info.model",
             "payload.info.current_model",
             "payload.model",
             "model",
-        ][..],
-        SourceKind::Gemini => &["model"][..],
-        SourceKind::OpenCode => &["model.modelID", "modelID", "model"][..],
-    };
-
-    extract_string(value, candidate_paths)
+        ],
+        SourceKind::Gemini => &["model"],
+        SourceKind::OpenCode => &["model.modelID", "modelID", "model"],
+    }
 }
 
 pub(super) fn extract_codex_model(value: &Value) -> Option<String> {
