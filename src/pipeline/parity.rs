@@ -10,6 +10,7 @@ struct ParityOutput {
     provider: String,
     period: String,
     tu: TokenCounts,
+    tu_parity: TokenCounts,
     ccusage: TokenCounts,
     delta: TokenCountsDelta,
     within_threshold: bool,
@@ -41,18 +42,19 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
     let week_start = parity_week_start(args.provider, args.period);
     let tu_report = collect_report(common.clone(), period, false, None, week_start).await?;
     let tu_totals = tu_report.totals;
+    let tu_parity_totals = normalize_tu_for_provider(args.provider, &tu_totals);
     let cc_totals = fetch_ccusage_totals(&common, args.provider, args.period)?;
     let delta = TokenCountsDelta {
-        input_tokens: tu_totals.input_tokens as i128 - cc_totals.input_tokens as i128,
-        cache_creation_input_tokens: tu_totals.cache_creation_input_tokens as i128
+        input_tokens: tu_parity_totals.input_tokens as i128 - cc_totals.input_tokens as i128,
+        cache_creation_input_tokens: tu_parity_totals.cache_creation_input_tokens as i128
             - cc_totals.cache_creation_input_tokens as i128,
-        cache_read_input_tokens: tu_totals.cache_read_input_tokens as i128
+        cache_read_input_tokens: tu_parity_totals.cache_read_input_tokens as i128
             - cc_totals.cache_read_input_tokens as i128,
-        output_tokens: tu_totals.output_tokens as i128 - cc_totals.output_tokens as i128,
-        reasoning_output_tokens: tu_totals.reasoning_output_tokens as i128
+        output_tokens: tu_parity_totals.output_tokens as i128 - cc_totals.output_tokens as i128,
+        reasoning_output_tokens: tu_parity_totals.reasoning_output_tokens as i128
             - cc_totals.reasoning_output_tokens as i128,
-        total_tokens: tu_totals.total_tokens as i128 - cc_totals.total_tokens as i128,
-        cost_usd: tu_totals.cost_usd - cc_totals.cost_usd,
+        total_tokens: tu_parity_totals.total_tokens as i128 - cc_totals.total_tokens as i128,
+        cost_usd: tu_parity_totals.cost_usd - cc_totals.cost_usd,
     };
 
     let out = ParityOutput {
@@ -63,6 +65,7 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
             ParityPeriod::Monthly => "monthly".to_string(),
         },
         tu: tu_totals,
+        tu_parity: tu_parity_totals,
         ccusage: cc_totals,
         delta,
         within_threshold: true,
@@ -86,6 +89,41 @@ pub(crate) async fn run_parity(args: ParityArgs) -> Result<()> {
     }
 
     emit_json(&out, args.common.jq.as_deref())
+}
+
+fn normalize_tu_for_provider(provider: ProviderArg, raw: &TokenCounts) -> TokenCounts {
+    match provider {
+        ProviderArg::Codex => {
+            // @ccusage/codex reports "inputTokens" as raw input (including cached input),
+            // and totalTokens as inputTokens + outputTokens (reasoning tracked separately).
+            let input_tokens = raw.input_tokens + raw.cache_read_input_tokens;
+            let output_tokens = raw.output_tokens;
+            TokenCounts {
+                input_tokens,
+                cache_creation_input_tokens: raw.cache_creation_input_tokens,
+                cache_read_input_tokens: raw.cache_read_input_tokens,
+                output_tokens,
+                reasoning_output_tokens: raw.reasoning_output_tokens,
+                total_tokens: input_tokens + output_tokens,
+                cost_usd: raw.cost_usd,
+            }
+        }
+        ProviderArg::Claude | ProviderArg::Gemini | ProviderArg::Opencode => {
+            // ccusage-family totals generally exclude reasoning as a separate additive bucket.
+            TokenCounts {
+                input_tokens: raw.input_tokens,
+                cache_creation_input_tokens: raw.cache_creation_input_tokens,
+                cache_read_input_tokens: raw.cache_read_input_tokens,
+                output_tokens: raw.output_tokens,
+                reasoning_output_tokens: raw.reasoning_output_tokens,
+                total_tokens: raw.input_tokens
+                    + raw.cache_creation_input_tokens
+                    + raw.cache_read_input_tokens
+                    + raw.output_tokens,
+                cost_usd: raw.cost_usd,
+            }
+        }
+    }
 }
 
 fn parity_week_start(provider: ProviderArg, period: ParityPeriod) -> crate::cli::WeekStart {
