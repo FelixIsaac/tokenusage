@@ -192,6 +192,18 @@ mod tests {
         assert_eq!(totals.total_tokens, 5);
         assert!((totals.cost_usd - 1.25).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn parse_ccusage_totals_supports_opencode_shape() {
+        let raw = br#"{"totals":{"inputTokens":10,"outputTokens":20,"cacheCreationTokens":30,"cacheReadTokens":40,"totalTokens":100,"totalCost":12.5}}"#;
+        let totals = parse_ccusage_totals(raw).expect("parsed");
+        assert_eq!(totals.input_tokens, 10);
+        assert_eq!(totals.output_tokens, 20);
+        assert_eq!(totals.cache_creation_input_tokens, 30);
+        assert_eq!(totals.cache_read_input_tokens, 40);
+        assert_eq!(totals.total_tokens, 100);
+        assert!((totals.cost_usd - 12.5).abs() < f64::EPSILON);
+    }
 }
 
 fn parse_ccusage_totals(raw: &[u8]) -> Result<TokenCounts> {
@@ -212,6 +224,7 @@ fn parse_ccusage_totals(raw: &[u8]) -> Result<TokenCounts> {
             "cache_creation_input_tokens",
             "cacheCreationInputTokens",
             "cache_write_input_tokens",
+            "cacheCreationTokens",
         ],
     )
     .unwrap_or(0);
@@ -221,6 +234,8 @@ fn parse_ccusage_totals(raw: &[u8]) -> Result<TokenCounts> {
             "cache_read_input_tokens",
             "cacheReadInputTokens",
             "cached_input_tokens",
+            "cachedInputTokens",
+            "cacheReadTokens",
         ],
     )
     .unwrap_or(0);
@@ -238,7 +253,17 @@ fn parse_ccusage_totals(raw: &[u8]) -> Result<TokenCounts> {
                 + output_tokens
                 + reasoning_output_tokens
         });
-    let cost_usd = extract_f64(&totals, &["cost_usd", "costUSD", "cost"]).unwrap_or(0.0);
+    let cost_usd = extract_f64(
+        &totals,
+        &[
+            "cost_usd",
+            "costUSD",
+            "totalCostUSD",
+            "totalCost",
+            "cost",
+        ],
+    )
+    .unwrap_or(0.0);
 
     Ok(TokenCounts {
         input_tokens,
