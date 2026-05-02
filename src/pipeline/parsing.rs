@@ -642,7 +642,22 @@ pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
         if event.source != SourceKind::OpenCode {
             return true;
         }
-        let key = format!(
+        if let Some((_, suffix)) = event.file_path.rsplit_once('#')
+            && suffix.starts_with("msg_")
+        {
+            return seen.insert(suffix.to_string());
+        }
+
+        if let Some(file_name) = Path::new(&event.file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            && let Some(stem) = file_name.strip_suffix(".json")
+            && stem.starts_with("msg_")
+        {
+            return seen.insert(stem.to_string());
+        }
+
+        let fallback = format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{}",
             event.timestamp.timestamp_millis(),
             event.model,
@@ -654,7 +669,7 @@ pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
             event.usage.output_tokens,
             event.usage.reasoning_output_tokens
         );
-        seen.insert(key)
+        seen.insert(fallback)
     });
 }
 
@@ -1561,7 +1576,7 @@ fn parse_opencode_db_file(
     let bounds = filter_bounds_utc_millis(filter, timezone);
     let (sql, params): (&str, Vec<i64>) = if let Some((start_ms, end_ms)) = bounds {
         (
-            "SELECT m.session_id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, m.session_id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1571,7 +1586,7 @@ fn parse_opencode_db_file(
         )
     } else {
         (
-            "SELECT m.session_id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, m.session_id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1596,15 +1611,16 @@ fn parse_opencode_db_file(
 
     while let Ok(Some(row)) = rows.next() {
         lines_total += 1;
-        let session_id: String = row.get(0).ok()?;
-        let time_created: i64 = row.get(1).ok()?;
-        let data: String = row.get(2).ok()?;
+        let message_id: String = row.get(0).ok()?;
+        let session_id: String = row.get(1).ok()?;
+        let time_created: i64 = row.get(2).ok()?;
+        let data: String = row.get(3).ok()?;
         if data.len() > MAX_JSON_LINE_BYTES {
             lines_invalid_json += 1;
             continue;
         }
-        let session_dir: String = row.get(3).ok()?;
-        let project_worktree: String = row.get(4).ok()?;
+        let session_dir: String = row.get(4).ok()?;
+        let project_worktree: String = row.get(5).ok()?;
 
         let Some(timestamp) = DateTime::from_timestamp_millis(time_created) else {
             lines_missing_usage += 1;
@@ -1670,7 +1686,7 @@ fn parse_opencode_db_file(
             model: model.clone(),
             session: session_id,
             project,
-            file_path: path.display().to_string(),
+            file_path: format!("{}#{}", path.display(), message_id),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
         cached_events.push(CachedUsageEvent {
