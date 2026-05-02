@@ -289,7 +289,7 @@ fn parse_antigravity_error_code_rejects_nonzero() {
 }
 
 #[test]
-fn opencode_dedupe_removes_duplicate_signatures_only() {
+fn opencode_dedupe_prefers_message_id_across_db_and_legacy() {
     let ts = utc_dt(2026, 4, 1, 10, 0, 0);
     let base = UsageEvent {
         timestamp: ts,
@@ -297,7 +297,7 @@ fn opencode_dedupe_removes_duplicate_signatures_only() {
         model: "gpt-5".to_string(),
         session: "s1".to_string(),
         project: Some("p1".to_string()),
-        file_path: "a.json".to_string(),
+        file_path: "opencode.db#msg_abc123".to_string(),
         usage: UsageAccumulator {
             input_tokens: 10,
             output_tokens: 5,
@@ -307,19 +307,16 @@ fn opencode_dedupe_removes_duplicate_signatures_only() {
     let mut events = vec![
         base.clone(),
         UsageEvent {
-            file_path: "b.json".to_string(),
+            file_path: "C:/Users/me/.local/share/opencode/storage/message/s1/msg_abc123.json"
+                .to_string(),
+            ..base.clone()
+        },
+        UsageEvent {
+            file_path: "opencode.db#msg_def456".to_string(),
             ..base.clone()
         },
         UsageEvent {
             source: SourceKind::Codex,
-            ..base.clone()
-        },
-        UsageEvent {
-            usage: UsageAccumulator {
-                input_tokens: 11,
-                output_tokens: 5,
-                ..UsageAccumulator::default()
-            },
             ..base
         },
     ];
@@ -333,4 +330,40 @@ fn opencode_dedupe_removes_duplicate_signatures_only() {
             .count(),
         2
     );
+}
+
+#[test]
+fn opencode_dedupe_falls_back_to_signature_without_msg_id() {
+    let ts = utc_dt(2026, 4, 1, 10, 0, 0);
+    let base = UsageEvent {
+        timestamp: ts,
+        source: SourceKind::OpenCode,
+        model: "gpt-5".to_string(),
+        session: "s1".to_string(),
+        project: Some("p1".to_string()),
+        file_path: "unknown-a.json".to_string(),
+        usage: UsageAccumulator {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..UsageAccumulator::default()
+        },
+    };
+    let mut events = vec![
+        base.clone(),
+        UsageEvent {
+            file_path: "unknown-b.json".to_string(),
+            ..base.clone()
+        },
+        UsageEvent {
+            usage: UsageAccumulator {
+                input_tokens: 11,
+                output_tokens: 5,
+                ..UsageAccumulator::default()
+            },
+            ..base
+        },
+    ];
+
+    dedupe_opencode_events(&mut events);
+    assert_eq!(events.len(), 2);
 }
