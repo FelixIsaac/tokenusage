@@ -41,6 +41,15 @@ struct DoctorReport {
     timezone: String,
     selected_sources: Vec<String>,
     sources: Vec<DoctorSourceReport>,
+    opencode_debug: Option<DoctorOpencodeDebugReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorOpencodeDebugReport {
+    merged: TokenCounts,
+    db_only: TokenCounts,
+    legacy_only: TokenCounts,
+    overlap_estimate: TokenCounts,
 }
 
 #[cfg(feature = "cli")]
@@ -54,6 +63,7 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
     let source_configs = build_sources(&args.common).await?;
     let discovered = discover_files(&source_configs, &ignore_rules, filter);
     let loaded = load_usage(&args.common, &tz).await?;
+    let opencode_debug = build_opencode_debug_report(&args.common, &tz, &loaded).await?;
 
     let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
     for file in &discovered {
@@ -151,6 +161,7 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             .map(|source| source.as_str().to_string())
             .collect(),
         sources,
+        opencode_debug,
     };
 
     if should_emit_json(&args.common) {
@@ -185,8 +196,132 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             }
             println!();
         }
+        if let Some(debug) = &report.opencode_debug {
+            println!("opencode-debug:");
+            println!(
+                "  merged: input={} output={} cache-create={} cache-read={} total={} cost=${:.2}",
+                debug.merged.input_tokens,
+                debug.merged.output_tokens,
+                debug.merged.cache_creation_input_tokens,
+                debug.merged.cache_read_input_tokens,
+                debug.merged.total_tokens,
+                debug.merged.cost_usd
+            );
+            println!(
+                "  db-only: input={} output={} cache-create={} cache-read={} total={} cost=${:.2}",
+                debug.db_only.input_tokens,
+                debug.db_only.output_tokens,
+                debug.db_only.cache_creation_input_tokens,
+                debug.db_only.cache_read_input_tokens,
+                debug.db_only.total_tokens,
+                debug.db_only.cost_usd
+            );
+            println!(
+                "  legacy-only: input={} output={} cache-create={} cache-read={} total={} cost=${:.2}",
+                debug.legacy_only.input_tokens,
+                debug.legacy_only.output_tokens,
+                debug.legacy_only.cache_creation_input_tokens,
+                debug.legacy_only.cache_read_input_tokens,
+                debug.legacy_only.total_tokens,
+                debug.legacy_only.cost_usd
+            );
+            println!(
+                "  overlap-estimate: input={} output={} cache-create={} cache-read={} total={} cost=${:.2}",
+                debug.overlap_estimate.input_tokens,
+                debug.overlap_estimate.output_tokens,
+                debug.overlap_estimate.cache_creation_input_tokens,
+                debug.overlap_estimate.cache_read_input_tokens,
+                debug.overlap_estimate.total_tokens,
+                debug.overlap_estimate.cost_usd
+            );
+            println!();
+        }
         Ok(())
     }
+}
+
+fn collect_source_totals(events: &[UsageEvent], source: SourceKind) -> TokenCounts {
+    events
+        .iter()
+        .filter(|event| event.source == source)
+        .fold(TokenCounts::default(), |mut acc, event| {
+            acc.add_assign(event.usage.to_counts());
+            acc
+        })
+}
+
+fn overlap_estimate_counts(
+    merged: &TokenCounts,
+    db_only: &TokenCounts,
+    legacy_only: &TokenCounts,
+) -> TokenCounts {
+    TokenCounts {
+        input_tokens: db_only
+            .input_tokens
+            .saturating_add(legacy_only.input_tokens)
+            .saturating_sub(merged.input_tokens),
+        cache_creation_input_tokens: db_only
+            .cache_creation_input_tokens
+            .saturating_add(legacy_only.cache_creation_input_tokens)
+            .saturating_sub(merged.cache_creation_input_tokens),
+        cache_read_input_tokens: db_only
+            .cache_read_input_tokens
+            .saturating_add(legacy_only.cache_read_input_tokens)
+            .saturating_sub(merged.cache_read_input_tokens),
+        output_tokens: db_only
+            .output_tokens
+            .saturating_add(legacy_only.output_tokens)
+            .saturating_sub(merged.output_tokens),
+        reasoning_output_tokens: db_only
+            .reasoning_output_tokens
+            .saturating_add(legacy_only.reasoning_output_tokens)
+            .saturating_sub(merged.reasoning_output_tokens),
+        total_tokens: db_only
+            .total_tokens
+            .saturating_add(legacy_only.total_tokens)
+            .saturating_sub(merged.total_tokens),
+        cost_usd: (db_only.cost_usd + legacy_only.cost_usd - merged.cost_usd).max(0.0),
+    }
+}
+
+async fn build_opencode_debug_report(
+    common: &CommonArgs,
+    tz: &TimeZoneMode,
+    merged_loaded: &LoadedUsage,
+) -> Result<Option<DoctorOpencodeDebugReport>> {
+    let merged = collect_source_totals(&merged_loaded.events, SourceKind::OpenCode);
+    if merged.total_tokens == 0 {
+        return Ok(None);
+    }
+
+    let mut db_only_args = common.clone();
+    db_only_args.no_claude = true;
+    db_only_args.no_codex = true;
+    db_only_args.no_gemini = true;
+    db_only_args.no_opencode = false;
+    db_only_args.ignore_path.push("storage/message".to_string());
+    db_only_args.ignore_path.push("storage\\message".to_string());
+
+    let mut legacy_only_args = common.clone();
+    legacy_only_args.no_claude = true;
+    legacy_only_args.no_codex = true;
+    legacy_only_args.no_gemini = true;
+    legacy_only_args.no_opencode = false;
+    legacy_only_args.ignore_path.push("opencode.db".to_string());
+
+    let db_only_loaded = load_usage(&db_only_args, tz).await?;
+    let legacy_only_loaded = load_usage(&legacy_only_args, tz).await?;
+
+    let db_only = collect_source_totals(&db_only_loaded.events, SourceKind::OpenCode);
+    let legacy_only = collect_source_totals(&legacy_only_loaded.events, SourceKind::OpenCode);
+    let overlap_estimate = overlap_estimate_counts(&merged, &db_only, &legacy_only);
+
+    Ok(Some(DoctorOpencodeDebugReport {
+        merged,
+        db_only,
+        legacy_only,
+        overlap_estimate,
+    }))
 }
 
 pub(super) async fn enrich_rows_with_activity(
