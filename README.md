@@ -235,9 +235,16 @@ For a detailed feature comparison, see [tokenusage vs ccusage](docs/compare/toke
 From local log directories and IDE probes:
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
+- Gemini: `~/.gemini/tmp`
+- OpenCode: `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`
 - Antigravity: probed from running IDE language server (no log files needed)
 
-You can override with `--claude-projects-dir` and `--codex-sessions-dir`.
+You can override with `--claude-projects-dir`, `--codex-sessions-dir`, `--gemini-data-dir`, and `--opencode-data-dir`.
+
+OpenCode merge semantics:
+- `tu` ingests both `opencode.db` and legacy `storage/message/**/*.json` when both exist.
+- Cross-source dedupe prefers stable OpenCode message ids (`msg_*`) so DB and legacy copies of the same assistant message are counted once.
+- `tu doctor --only opencode --json` reports DB/legacy discovered and retained counts to debug overlap.
 
 ### How is cost estimated?
 
