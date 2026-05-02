@@ -10,3 +10,12 @@ examples/
 .tu/
 
 site/.next/
+
+# Local parity/debug artifacts
+tmp-cc-*
+tmp-tu-*
+tmp-ccusage/
+tmp-ccusage-main/
+tmp-opencode-legacy-only/
+tokenusage-share-daily.png
+tokenusage-share-weekly.png
