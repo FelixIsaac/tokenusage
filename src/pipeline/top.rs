@@ -15,7 +15,7 @@ use crate::types::{SourceKind, TokenCounts};
 use super::display::*;
 use super::live::BlocksLiveSession;
 use super::parsing::save_incremental_cache;
-use super::parsing::{ParseFilesConfig, extract_session_title, parse_files_with_cache};
+use super::parsing::{ParseFilesConfig, extract_session_title, load_usage, parse_files_with_cache};
 use super::*;
 
 #[derive(Clone)]
@@ -42,6 +42,17 @@ pub(super) enum TopSortKey {
 }
 
 pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
+    if args.smoke_check {
+        let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+        let loaded = load_usage(&args.common, &tz).await?;
+        println!(
+            "top-smoke-ok: events={} files={} parsed_lines={}",
+            loaded.events.len(),
+            loaded.stats.files_discovered,
+            loaded.stats.lines_parsed
+        );
+        return Ok(());
+    }
     if !std::io::stdout().is_terminal() {
         bail!("tu top requires an interactive terminal");
     }

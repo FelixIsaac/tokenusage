@@ -42,6 +42,16 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
+    if args.smoke_check {
+        let loaded = load_usage(&args.common, &tz).await?;
+        println!(
+            "live-smoke-ok: events={} files={} parsed_lines={}",
+            loaded.events.len(),
+            loaded.stats.files_discovered,
+            loaded.stats.lines_parsed
+        );
+        return Ok(());
+    }
     // For live mode, skip blocking initial fetch — go straight to TUI and fetch in background.
     if args.live {
         return run_blocks_live(&args, &tz, window_secs, token_limit_mode, None, None, None).await;

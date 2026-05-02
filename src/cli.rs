@@ -523,6 +523,11 @@ pub(crate) struct BlocksArgs {
     pub(crate) refresh_interval: u64,
     #[arg(
         long,
+        help = "Run non-interactive startup/data smoke check and exit"
+    )]
+    pub(crate) smoke_check: bool,
+    #[arg(
+        long,
         help = "Fetch official Codex/Claude 5h/weekly usage + plan via OAuth APIs (with CLI fallback)"
     )]
     pub(crate) official_limits: bool,
@@ -546,6 +551,11 @@ pub(crate) struct LiveArgs {
     pub(crate) session_length: u32,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
+    #[arg(
+        long,
+        help = "Run non-interactive startup/data smoke check and exit"
+    )]
+    pub(crate) smoke_check: bool,
 }
 
 #[cfg(feature = "cli")]
@@ -559,6 +569,7 @@ impl From<LiveArgs> for BlocksArgs {
             session_length: value.session_length,
             live: true,
             refresh_interval: value.refresh_interval,
+            smoke_check: value.smoke_check,
             official_limits: true,
         }
     }
@@ -584,6 +595,11 @@ pub(crate) struct TopArgs {
         help = "Active window in hours (0 = show all)"
     )]
     pub(crate) active_hours: u64,
+    #[arg(
+        long,
+        help = "Run non-interactive startup/data smoke check and exit"
+    )]
+    pub(crate) smoke_check: bool,
 }
 
 #[cfg(feature = "cli")]
