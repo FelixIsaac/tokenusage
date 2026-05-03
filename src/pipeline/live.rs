@@ -108,6 +108,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
                 totals: row.totals.clone(),
                 models: row.models.clone(),
                 sources: BTreeMap::new(),
+                models_by_source: BTreeMap::new(),
                 activity: None,
             })
             .collect::<Vec<_>>();

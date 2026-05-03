@@ -40,7 +40,7 @@ pub(crate) use statusline::run_statusline;
 #[cfg(feature = "cli")]
 pub(crate) use top::run_top;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 #[cfg(feature = "cli")]
 use std::io::IsTerminal;
 use std::io::Write;
@@ -114,6 +114,7 @@ struct GroupAggregate {
     totals: UsageAccumulator,
     by_model: HashMap<String, UsageAccumulator>,
     by_source: HashMap<SourceKind, UsageAccumulator>,
+    models_by_source: HashMap<SourceKind, BTreeSet<String>>,
     last_activity: Option<DateTime<Utc>>,
     project: Option<String>,
 }
@@ -130,6 +131,10 @@ impl GroupAggregate {
             .entry(event.source)
             .or_default()
             .add(event.usage);
+        self.models_by_source
+            .entry(event.source)
+            .or_default()
+            .insert(event.model.clone());
 
         self.last_activity = match self.last_activity {
             Some(ts) if ts >= event.timestamp => Some(ts),
@@ -208,6 +213,7 @@ struct SessionJsonRow {
     totals: TokenCounts,
     models: BTreeMap<String, TokenCounts>,
     sources: BTreeMap<String, TokenCounts>,
+    models_by_source: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -868,6 +874,11 @@ where
                 .by_source
                 .into_iter()
                 .map(|(source, totals)| (source.as_str().to_string(), totals.to_counts()))
+                .collect::<BTreeMap<_, _>>(),
+            models_by_source: agg
+                .models_by_source
+                .into_iter()
+                .map(|(source, models)| (source.as_str().to_string(), models))
                 .collect::<BTreeMap<_, _>>(),
             activity: None,
         })

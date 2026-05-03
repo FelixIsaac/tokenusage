@@ -227,7 +227,7 @@ pub(super) fn build_activity_daily_report(
             continue;
         }
 
-        let (totals, models, sources) = if let Some(group) = token_group {
+        let (totals, models, sources, models_by_source) = if let Some(group) = token_group {
             (
                 group.totals.to_counts(),
                 group
@@ -240,9 +240,19 @@ pub(super) fn build_activity_daily_report(
                     .into_iter()
                     .map(|(source, totals)| (source.as_str().to_string(), totals.to_counts()))
                     .collect::<BTreeMap<_, _>>(),
+                group
+                    .models_by_source
+                    .into_iter()
+                    .map(|(source, models)| (source.as_str().to_string(), models))
+                    .collect::<BTreeMap<_, _>>(),
             )
         } else {
-            (TokenCounts::default(), BTreeMap::new(), BTreeMap::new())
+            (
+                TokenCounts::default(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
         };
 
         rows.push(DailyRow {
@@ -250,6 +260,7 @@ pub(super) fn build_activity_daily_report(
             totals,
             models,
             sources,
+            models_by_source,
             activity,
         });
 

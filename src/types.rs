@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -638,6 +638,13 @@ pub struct DailyRow {
     pub models: BTreeMap<String, TokenCounts>,
     /// Per-source breakdown: `"claude"` / `"codex"` → token counts.
     pub sources: BTreeMap<String, TokenCounts>,
+    /// Per-source unique model names detected for this period.
+    ///
+    /// This is used for accurate per-provider model counts (e.g. in TOTAL rows),
+    /// even when the same model name can appear across multiple providers
+    /// (for example `gpt-*` models used by both Codex and OpenCode).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models_by_source: BTreeMap<String, BTreeSet<String>>,
     /// Coding activity summary (only present when `with_activity` is enabled).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivitySummary>,

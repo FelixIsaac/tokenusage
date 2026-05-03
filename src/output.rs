@@ -21,6 +21,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row as TuiRow, Table as TuiTab
 use terminal_size::{Width, terminal_size};
 
 use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
+use std::collections::BTreeSet;
 
 pub(crate) fn print_report_table_with_options(
     report: &DailyReport,
@@ -29,6 +30,7 @@ pub(crate) fn print_report_table_with_options(
 ) {
     let terminal_width = detect_terminal_width();
     let show_activity = report_has_activity(report);
+    let total_models_cell = report_unique_model_count_by_source_multiline(report);
     let layout = if force_compact {
         TableLayout::Compact
     } else {
@@ -118,7 +120,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell.clone())
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_activity_text(report.activity_totals.as_ref()))
@@ -136,7 +138,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell.clone())
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_u64(report.totals.total_tokens))
@@ -154,7 +156,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell.clone())
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_activity_text(report.activity_totals.as_ref()))
@@ -178,7 +180,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell.clone())
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_u64(report.totals.input_tokens))
@@ -202,7 +204,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell.clone())
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_activity_text(report.activity_totals.as_ref()))
@@ -238,7 +240,7 @@ pub(crate) fn print_report_table_with_options(
                     Cell::new("TOTAL")
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
-                    Cell::new("-")
+                    Cell::new(total_models_cell)
                         .add_attribute(Attribute::Bold)
                         .fg(Color::Yellow),
                     Cell::new(format_u64(report.totals.input_tokens))
@@ -739,12 +741,13 @@ fn tui_day_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Vec<
 }
 
 fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool) -> Vec<String> {
+    let models_cell = report_unique_model_count_by_source_multiline(report);
     match layout {
         TableLayout::Compact => {
             if show_activity {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_activity_text(report.activity_totals.as_ref()),
                     format_u64(report.totals.total_tokens),
                     format_usd(report.totals.cost_usd),
@@ -752,7 +755,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             } else {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_u64(report.totals.total_tokens),
                     format_usd(report.totals.cost_usd),
                 ]
@@ -762,7 +765,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             if show_activity {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_activity_text(report.activity_totals.as_ref()),
                     format_tokens_per_hour(
                         report.activity_totals.as_ref(),
@@ -774,7 +777,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             } else {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_u64(report.totals.input_tokens),
                     format_u64(report.totals.output_tokens),
                     format_u64(report.totals.total_tokens),
@@ -786,7 +789,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             if show_activity {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_activity_text(report.activity_totals.as_ref()),
                     format_tokens_per_hour(
                         report.activity_totals.as_ref(),
@@ -802,7 +805,7 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             } else {
                 vec![
                     "TOTAL".to_string(),
-                    "-".to_string(),
+                    models_cell,
                     format_u64(report.totals.input_tokens),
                     format_u64(report.totals.output_tokens),
                     format_u64(report.totals.cache_creation_input_tokens),
@@ -813,6 +816,28 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
             }
         }
     }
+}
+
+fn report_unique_model_count_by_source_multiline(report: &DailyReport) -> String {
+    let mut per_source: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in &report.daily {
+        for (source, models) in &row.models_by_source {
+            per_source
+                .entry(source.clone())
+                .or_default()
+                .extend(models.iter().cloned());
+        }
+    }
+
+    if per_source.is_empty() {
+        return "-".to_string();
+    }
+
+    per_source
+        .into_iter()
+        .map(|(source, models)| format!("{source}: {} models", models.len()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn report_has_activity(report: &DailyReport) -> bool {

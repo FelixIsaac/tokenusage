@@ -851,6 +851,11 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
                 .into_iter()
                 .map(|(source, totals)| (source.as_str().to_string(), totals.to_counts()))
                 .collect::<BTreeMap<_, _>>();
+            let models_by_source = agg
+                .models_by_source
+                .into_iter()
+                .map(|(source, models)| (source.as_str().to_string(), models))
+                .collect::<BTreeMap<_, _>>();
             let last_activity = agg
                 .last_activity
                 .unwrap_or(DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now));
@@ -862,6 +867,7 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
                 totals: agg.totals.to_counts(),
                 models,
                 sources,
+                models_by_source,
             }
         })
         .collect::<Vec<_>>();
@@ -895,6 +901,7 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
                 totals: row.totals.clone(),
                 models: row.models.clone(),
                 sources: row.sources.clone(),
+                models_by_source: row.models_by_source.clone(),
                 activity: None,
             })
             .collect::<Vec<_>>();
