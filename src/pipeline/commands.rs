@@ -40,8 +40,19 @@ struct DoctorSourceReport {
 struct DoctorReport {
     timezone: String,
     selected_sources: Vec<String>,
+    pricing: DoctorPricingReport,
     sources: Vec<DoctorSourceReport>,
     opencode_debug: Option<DoctorOpencodeDebugReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorPricingReport {
+    offline: bool,
+    openrouter_cache_path: Option<String>,
+    openrouter_cache_fetched_unix: Option<u64>,
+    openrouter_cache_age_secs: Option<u64>,
+    openrouter_cache_ttl_secs: u64,
+    openrouter_cached_models: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +75,22 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
     let discovered = discover_files(&source_configs, &ignore_rules, filter);
     let loaded = load_usage(&args.common, &tz).await?;
     let opencode_debug = build_opencode_debug_report(&args.common, &tz, &loaded).await?;
+
+    let now_unix = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+    let (openrouter_cache_path, openrouter_cache_fetched_unix, openrouter_cached_models) =
+        super::pricing::openrouter_pricing_cache_path()
+            .and_then(|path| {
+                let store = super::pricing::load_openrouter_pricing_cache(&path)?;
+                Some((
+                    Some(path.to_string_lossy().to_string()),
+                    Some(store.fetched_unix),
+                    Some(store.exact.len()),
+                ))
+            })
+            .unwrap_or((None, None, None));
+    let openrouter_cache_age_secs = openrouter_cache_fetched_unix.map(|fetched| {
+        now_unix.saturating_sub(fetched)
+    });
 
     let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
     for file in &discovered {
@@ -160,6 +187,14 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             .into_iter()
             .map(|source| source.as_str().to_string())
             .collect(),
+        pricing: DoctorPricingReport {
+            offline: args.common.offline,
+            openrouter_cache_path,
+            openrouter_cache_fetched_unix,
+            openrouter_cache_age_secs,
+            openrouter_cache_ttl_secs: OPENROUTER_PRICING_CACHE_TTL_SECS,
+            openrouter_cached_models,
+        },
         sources,
         opencode_debug,
     };
@@ -172,6 +207,22 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             println!("selected-sources: all");
         } else {
             println!("selected-sources: {}", report.selected_sources.join(", "));
+        }
+        println!(
+            "pricing: openrouter cache ttl={}s offline={}",
+            report.pricing.openrouter_cache_ttl_secs, report.pricing.offline
+        );
+        if let Some(path) = &report.pricing.openrouter_cache_path {
+            println!("  openrouter-cache: {path}");
+        }
+        if let Some(fetched) = report.pricing.openrouter_cache_fetched_unix {
+            println!("  openrouter-cache-fetched-unix: {fetched}");
+        }
+        if let Some(age) = report.pricing.openrouter_cache_age_secs {
+            println!("  openrouter-cache-age-secs: {age}");
+        }
+        if let Some(models) = report.pricing.openrouter_cached_models {
+            println!("  openrouter-cache-models: {models}");
         }
         println!();
         for source in &report.sources {
