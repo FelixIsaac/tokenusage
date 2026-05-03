@@ -637,24 +637,46 @@ pub(super) fn discover_files_in_root(
 }
 
 pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
-    let mut seen = HashSet::new();
-    events.retain(|event| {
-        if event.source != SourceKind::OpenCode {
-            return true;
-        }
-        if let Some((_, suffix)) = event.file_path.rsplit_once('#')
+    fn opencode_msg_id(file_path: &str) -> Option<String> {
+        if let Some((_, suffix)) = file_path.rsplit_once('#')
             && suffix.starts_with("msg_")
         {
-            return seen.insert(suffix.to_string());
+            return Some(suffix.to_string());
         }
 
-        if let Some(file_name) = Path::new(&event.file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            && let Some(stem) = file_name.strip_suffix(".json")
-            && stem.starts_with("msg_")
-        {
-            return seen.insert(stem.to_string());
+        let file_name = Path::new(file_path).file_name()?.to_str()?;
+        let stem = file_name.strip_suffix(".json")?;
+        if stem.starts_with("msg_") {
+            return Some(stem.to_string());
+        }
+
+        None
+    }
+
+    let mut seen_msg = std::collections::HashMap::<String, usize>::new();
+    let mut seen_fallback = HashSet::new();
+
+    let mut out = Vec::with_capacity(events.len());
+    for mut event in events.drain(..) {
+        if event.source != SourceKind::OpenCode {
+            out.push(event);
+            continue;
+        }
+
+        if let Some(msg_id) = opencode_msg_id(&event.file_path) {
+            if let Some(&existing_idx) = seen_msg.get(&msg_id) {
+                let existing = &mut out[existing_idx];
+                if existing.session.is_empty() && !event.session.is_empty() {
+                    existing.session = std::mem::take(&mut event.session);
+                }
+                if existing.project.is_none() && event.project.is_some() {
+                    existing.project = event.project.take();
+                }
+                continue;
+            }
+            seen_msg.insert(msg_id, out.len());
+            out.push(event);
+            continue;
         }
 
         let fallback = format!(
@@ -669,8 +691,12 @@ pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
             event.usage.output_tokens,
             event.usage.reasoning_output_tokens
         );
-        seen.insert(fallback)
-    });
+        if seen_fallback.insert(fallback) {
+            out.push(event);
+        }
+    }
+
+    *events = out;
 }
 
 fn provider_accepts_extension(kind: SourceKind, ext: &str) -> bool {
@@ -1480,7 +1506,33 @@ fn parse_opencode_message_file(
         stats.lines_unknown_pricing.fetch_add(1, Ordering::Relaxed);
     }
 
-    let session = extract_string(&value, &["sessionID"]).unwrap_or_default();
+    let session = extract_string(&value, &["sessionID", "sessionId", "session_id"])
+        .or_else(|| {
+            // Legacy OpenCode stores messages as:
+            //   .../storage/message/<session_id>/<message_id>.json
+            // Some exports omit the session id field in the JSON blob.
+            let mut found = None;
+            for (idx, component) in job.file.path.components().enumerate() {
+                if component.as_os_str() == "message" {
+                    found = job
+                        .file
+                        .path
+                        .components()
+                        .nth(idx + 1)
+                        .map(|c| c.as_os_str().to_string_lossy().to_string());
+                    break;
+                }
+            }
+            found
+        })
+        .or_else(|| {
+            job.file
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
     let project = opencode_project_from_root(&value);
 
     stats.lines_parsed.fetch_add(1, Ordering::Relaxed);
@@ -1576,7 +1628,7 @@ fn parse_opencode_db_file(
     let bounds = filter_bounds_utc_millis(filter, timezone);
     let (sql, params): (&str, Vec<i64>) = if let Some((start_ms, end_ms)) = bounds {
         (
-            "SELECT m.id, m.session_id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1586,7 +1638,7 @@ fn parse_opencode_db_file(
         )
     } else {
         (
-            "SELECT m.id, m.session_id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1612,7 +1664,12 @@ fn parse_opencode_db_file(
     while let Ok(Some(row)) = rows.next() {
         lines_total += 1;
         let message_id: String = row.get(0).ok()?;
-        let session_id: String = row.get(1).ok()?;
+        let session_id: String = row
+            .get::<_, String>(1)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| row.get::<_, i64>(1).ok().map(|v| v.to_string()))
+            .unwrap_or_default();
         let time_created: i64 = row.get(2).ok()?;
         let data: String = row.get(3).ok()?;
         if data.len() > MAX_JSON_LINE_BYTES {
@@ -1680,11 +1737,26 @@ fn parse_opencode_db_file(
                     .map(|n| n.to_string_lossy().to_string())
             });
 
+        let session = Path::new(&session_dir)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or(session_dir.clone());
+        let session = if session.is_empty() {
+            session_id
+        } else {
+            session
+        };
+        let session = if session.is_empty() {
+            project.clone().unwrap_or_default()
+        } else {
+            session
+        };
+
         let event = UsageEvent {
             timestamp,
             source: SourceKind::OpenCode,
             model: model.clone(),
-            session: session_id,
+            session,
             project,
             file_path: format!("{}#{}", path.display(), message_id),
             usage: UsageAccumulator { cost_usd, ..usage },

@@ -832,8 +832,13 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
         {
             continue;
         }
+        let session_key = if event.session.is_empty() {
+            "unknown".to_string()
+        } else {
+            event.session.clone()
+        };
         grouped
-            .entry(event.session.clone())
+            .entry(session_key)
             .or_default()
             .add_event(&event);
     }
