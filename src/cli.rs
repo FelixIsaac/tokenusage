@@ -134,6 +134,11 @@ pub struct CommonArgs {
     pub offline: bool,
     #[cfg_attr(
         feature = "cli",
+        arg(long, help = "Print models missing pricing data (doctor only)")
+    )]
+    pub pricing_debug: bool,
+    #[cfg_attr(
+        feature = "cli",
         arg(
             long,
             short = 'z',

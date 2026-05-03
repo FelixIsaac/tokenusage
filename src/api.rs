@@ -388,6 +388,7 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         },
         breakdown: false,
         offline: config.offline,
+        pricing_debug: false,
         timezone: config.timezone.clone(),
         locale: None,
         config: None,

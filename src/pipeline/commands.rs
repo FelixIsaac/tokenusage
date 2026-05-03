@@ -18,7 +18,7 @@ use crate::types::{ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCoun
 use super::activity_report::*;
 #[cfg(feature = "cli")]
 use super::official::{fetch_antigravity_official_limits, select_antigravity_models};
-use super::parsing::{build_sources, discover_files, load_usage};
+use super::parsing::{build_sources, discover_files, load_pricing, load_usage};
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
 use super::*;
@@ -75,6 +75,19 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
     let discovered = discover_files(&source_configs, &ignore_rules, filter);
     let loaded = load_usage(&args.common, &tz).await?;
     let opencode_debug = build_opencode_debug_report(&args.common, &tz, &loaded).await?;
+
+    let pricing = load_pricing(args.common.pricing_file.as_deref(), args.common.offline).await?;
+    let mut missing_pricing_models: BTreeMap<String, usize> = BTreeMap::new();
+    if args.common.pricing_debug {
+        for event in &loaded.events {
+            if event.usage.total_tokens() == 0 {
+                continue;
+            }
+            if pricing.find_rate(&event.model).is_none() {
+                *missing_pricing_models.entry(event.model.clone()).or_insert(0) += 1;
+            }
+        }
+    }
 
     let now_unix = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
     let (openrouter_cache_path, openrouter_cache_fetched_unix, openrouter_cached_models) =
@@ -223,6 +236,18 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
         }
         if let Some(models) = report.pricing.openrouter_cached_models {
             println!("  openrouter-cache-models: {models}");
+        }
+        if args.common.pricing_debug {
+            println!("pricing-debug: unknown-models={}", missing_pricing_models.len());
+            for (model, count) in missing_pricing_models.iter().take(20) {
+                println!("  missing: {model} (events={count})");
+            }
+            if missing_pricing_models.len() > 20 {
+                println!(
+                    "  ... +{} more (rerun with --json for full list)",
+                    missing_pricing_models.len() - 20
+                );
+            }
         }
         println!();
         for source in &report.sources {
