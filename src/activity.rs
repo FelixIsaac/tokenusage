@@ -130,6 +130,13 @@ impl ActivityDataset {
         self.days.is_empty()
     }
 
+    pub(crate) fn active_days_in_range(&self, start: NaiveDate, end: NaiveDate) -> u32 {
+        self.days
+            .range(start..=end)
+            .filter(|(_, detail)| detail.total_seconds > 0)
+            .count() as u32
+    }
+
     pub(crate) fn summary_for_day(&self, day: NaiveDate) -> Option<ActivitySummary> {
         let detail = self.days.get(&day)?;
         Some(summary_from_detail(detail))
@@ -687,6 +694,40 @@ mod tests {
     use crate::heartbeat::{HeartbeatEntityKind, HeartbeatRecord};
     use crate::pipeline::TimeZoneMode;
     use crate::types::{SourceKind, UsageAccumulator, UsageEvent};
+
+    #[test]
+    fn active_days_in_range_counts_only_nonzero_days() {
+        let mut dataset = ActivityDataset::default();
+        dataset.days.insert(
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            super::ActivityDayDetail {
+                total_seconds: 0,
+                ..super::ActivityDayDetail::default()
+            },
+        );
+        dataset.days.insert(
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
+            super::ActivityDayDetail {
+                total_seconds: 60,
+                ..super::ActivityDayDetail::default()
+            },
+        );
+        dataset.days.insert(
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 3).unwrap(),
+            super::ActivityDayDetail {
+                total_seconds: 120,
+                ..super::ActivityDayDetail::default()
+            },
+        );
+
+        assert_eq!(
+            dataset.active_days_in_range(
+                chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 5, 3).unwrap()
+            ),
+            2
+        );
+    }
 
     #[test]
     fn formats_activity_duration_compactly() {

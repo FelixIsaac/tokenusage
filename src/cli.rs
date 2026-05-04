@@ -301,7 +301,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Daily(DailyArgs),
-    #[command(about = "Daily coding activity view inferred from local usage")]
+    #[command(about = "Coding activity summary (defaults to today; supports --since/--until)")]
     Today(TodayArgs),
     #[command(about = "Coding activity view with per-day breakdowns")]
     Activity(ActivityArgs),
@@ -526,10 +526,7 @@ pub(crate) struct BlocksArgs {
     pub(crate) live: bool,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
-    #[arg(
-        long,
-        help = "Run non-interactive startup/data smoke check and exit"
-    )]
+    #[arg(long, help = "Run non-interactive startup/data smoke check and exit")]
     pub(crate) smoke_check: bool,
     #[arg(
         long,
@@ -556,10 +553,7 @@ pub(crate) struct LiveArgs {
     pub(crate) session_length: u32,
     #[arg(long, default_value_t = 1, help = "Live refresh interval seconds")]
     pub(crate) refresh_interval: u64,
-    #[arg(
-        long,
-        help = "Run non-interactive startup/data smoke check and exit"
-    )]
+    #[arg(long, help = "Run non-interactive startup/data smoke check and exit")]
     pub(crate) smoke_check: bool,
 }
 
@@ -600,10 +594,7 @@ pub(crate) struct TopArgs {
         help = "Active window in hours (0 = show all)"
     )]
     pub(crate) active_hours: u64,
-    #[arg(
-        long,
-        help = "Run non-interactive startup/data smoke check and exit"
-    )]
+    #[arg(long, help = "Run non-interactive startup/data smoke check and exit")]
     pub(crate) smoke_check: bool,
 }
 

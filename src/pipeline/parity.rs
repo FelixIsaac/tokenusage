@@ -309,13 +309,7 @@ fn parse_ccusage_totals(raw: &[u8]) -> Result<TokenCounts> {
         });
     let cost_usd = extract_f64(
         &totals,
-        &[
-            "cost_usd",
-            "costUSD",
-            "totalCostUSD",
-            "totalCost",
-            "cost",
-        ],
+        &["cost_usd", "costUSD", "totalCostUSD", "totalCost", "cost"],
     )
     .unwrap_or(0.0);
 

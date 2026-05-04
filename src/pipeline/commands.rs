@@ -84,7 +84,9 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
                 continue;
             }
             if pricing.find_rate(&event.model).is_none() {
-                *missing_pricing_models.entry(event.model.clone()).or_insert(0) += 1;
+                *missing_pricing_models
+                    .entry(event.model.clone())
+                    .or_insert(0) += 1;
             }
         }
     }
@@ -101,9 +103,8 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
                 ))
             })
             .unwrap_or((None, None, None));
-    let openrouter_cache_age_secs = openrouter_cache_fetched_unix.map(|fetched| {
-        now_unix.saturating_sub(fetched)
-    });
+    let openrouter_cache_age_secs =
+        openrouter_cache_fetched_unix.map(|fetched| now_unix.saturating_sub(fetched));
 
     let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
     for file in &discovered {
@@ -238,7 +239,10 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             println!("  openrouter-cache-models: {models}");
         }
         if args.common.pricing_debug {
-            println!("pricing-debug: unknown-models={}", missing_pricing_models.len());
+            println!(
+                "pricing-debug: unknown-models={}",
+                missing_pricing_models.len()
+            );
             for (model, count) in missing_pricing_models.iter().take(20) {
                 println!("  missing: {model} (events={count})");
             }
@@ -317,13 +321,13 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
 }
 
 fn collect_source_totals(events: &[UsageEvent], source: SourceKind) -> TokenCounts {
-    events
-        .iter()
-        .filter(|event| event.source == source)
-        .fold(TokenCounts::default(), |mut acc, event| {
+    events.iter().filter(|event| event.source == source).fold(
+        TokenCounts::default(),
+        |mut acc, event| {
             acc.add_assign(event.usage.to_counts());
             acc
-        })
+        },
+    )
 }
 
 fn overlap_estimate_counts(
@@ -376,7 +380,9 @@ async fn build_opencode_debug_report(
     db_only_args.no_gemini = true;
     db_only_args.no_opencode = false;
     db_only_args.ignore_path.push("storage/message".to_string());
-    db_only_args.ignore_path.push("storage\\message".to_string());
+    db_only_args
+        .ignore_path
+        .push("storage\\message".to_string());
 
     let mut legacy_only_args = common.clone();
     legacy_only_args.no_claude = true;
@@ -669,10 +675,17 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
 #[cfg(feature = "cli")]
 pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let today = tz.now_date();
     args.common.with_activity = true;
-    args.common.since = Some(today.to_string());
-    args.common.until = Some(today.to_string());
+
+    let today = tz.now_date();
+    let start = parse_date_filter(args.common.since.as_deref())?.unwrap_or(today);
+    let end = parse_date_filter(args.common.until.as_deref())?.unwrap_or(today);
+    if end < start {
+        anyhow::bail!("--until must be on/after --since");
+    }
+
+    args.common.since = Some(start.to_string());
+    args.common.until = Some(end.to_string());
 
     let use_json = should_emit_json(&args.common);
     let loaded = load_usage(&args.common, &tz).await?;
@@ -685,28 +698,24 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
         fetch_activity_dataset(&args.common, &tz, &filtered_events, args.project.as_deref())
             .await?
             .unwrap_or_default();
-    let activity = dataset.summary_for_day(today);
-    let hourly_activity = dataset.hourly_buckets_for_day(today, None);
-    let hourly_tokens = aggregate_hourly_token_counts(&filtered_events, today, &tz);
+    let activity = dataset.summary_for_range(start, end);
+    let active_days = dataset.active_days_in_range(start, end);
+    let hourly_activity = dataset.hourly_buckets_for_day(end, None);
+    let hourly_tokens = aggregate_hourly_token_counts(&filtered_events, end, &tz);
     let hourly_rows = join_hourly_rows(&hourly_activity, &hourly_tokens);
-    let overview = build_activity_overview(
-        today,
-        today,
-        u32::from(day_totals.total_tokens > 0 || activity.is_some()),
-        &filtered_events,
-        activity.as_ref(),
-    );
+    let overview =
+        build_activity_overview(start, end, active_days, &filtered_events, activity.as_ref());
     let breakdowns = TodayProjectBreakdowns {
         projects: enrich_activity_breakdowns_with_tokens(
-            dataset.project_breakdowns(today, today, 5),
+            dataset.project_breakdowns(start, end, 5),
             &aggregate_usage_totals_by_project(&filtered_events),
         ),
         languages: enrich_activity_breakdowns_with_tokens(
-            dataset.language_breakdowns(today, today, 5),
+            dataset.language_breakdowns(start, end, 5),
             &aggregate_usage_totals_by_language(&filtered_events),
         ),
         sources: enrich_activity_breakdowns_with_tokens(
-            dataset.source_breakdowns(today, today, 5),
+            dataset.source_breakdowns(start, end, 5),
             &aggregate_usage_totals_by_source(&filtered_events),
         ),
         models,
@@ -714,7 +723,7 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
 
     if use_json {
         let out = TodayOut {
-            date: today.to_string(),
+            date: end.to_string(),
             overview,
             hourly: hourly_rows,
             breakdowns,
@@ -723,7 +732,7 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
         emit_json(&out, args.common.jq.as_deref())
     } else {
         print_today_view(
-            &today.to_string(),
+            &end.to_string(),
             &overview,
             &hourly_rows,
             &breakdowns,
@@ -916,10 +925,7 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
         } else {
             event.session.clone()
         };
-        grouped
-            .entry(session_key)
-            .or_default()
-            .add_event(&event);
+        grouped.entry(session_key).or_default().add_event(&event);
     }
 
     let mut sessions = grouped
