@@ -598,12 +598,14 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
             totals: TokenCounts,
             activity_totals: Option<ActivitySummary>,
             stats: ParseStats,
+            insights: Option<crate::ReportInsights>,
         }
         let out = MonthlyOut {
             monthly: report.daily,
             totals: report.totals,
             activity_totals: report.activity_totals,
             stats: report.stats,
+            insights: report.insights,
         };
         emit_json(&out, args.common.jq.as_deref())
     } else {
@@ -612,6 +614,7 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
             totals: report.totals,
             activity_totals: report.activity_totals,
             stats: report.stats,
+            insights: report.insights,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
         print_debug(&show.stats, &args.common);
@@ -651,12 +654,14 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
             totals: TokenCounts,
             activity_totals: Option<ActivitySummary>,
             stats: ParseStats,
+            insights: Option<crate::ReportInsights>,
         }
         let out = WeeklyOut {
             weekly: report.daily,
             totals: report.totals,
             activity_totals: report.activity_totals,
             stats: report.stats,
+            insights: report.insights,
         };
         emit_json(&out, args.common.jq.as_deref())
     } else {
@@ -665,6 +670,7 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
             totals: report.totals,
             activity_totals: report.activity_totals,
             stats: report.stats,
+            insights: report.insights,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
         print_debug(&show.stats, &args.common);
@@ -996,11 +1002,15 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             })
             .collect::<Vec<_>>();
 
+        let totals = json_report.totals.clone();
+        let insights = Some(crate::insights::compute_report_insights(&rows, &totals));
+
         let show = DailyReport {
             daily: rows,
-            totals: json_report.totals,
+            totals,
             activity_totals: None,
             stats: json_report.stats,
+            insights,
         };
         print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
         print_debug(&show.stats, &args.common);

@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::ReportInsights;
+
 /// Which AI coding assistant produced a log entry.
 ///
 /// Each usage event is tagged with a source so reports can break down
@@ -316,6 +318,21 @@ pub struct ParseStats {
     pub lines_invalid_json: usize,
     pub lines_missing_usage: usize,
     pub lines_unknown_pricing: usize,
+}
+
+impl Default for ParseStats {
+    fn default() -> Self {
+        Self {
+            files_discovered: 0,
+            files_open_failed: 0,
+            lines_total: 0,
+            lines_parsed: 0,
+            lines_filtered: 0,
+            lines_invalid_json: 0,
+            lines_missing_usage: 0,
+            lines_unknown_pricing: 0,
+        }
+    }
 }
 
 impl ParseStatsAtomic {
@@ -670,6 +687,22 @@ pub struct DailyReport {
     pub activity_totals: Option<ActivitySummary>,
     /// Parsing diagnostics for this report.
     pub stats: ParseStats,
+
+    /// Extra derived analytics for the report (cache ratio, peak period, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insights: Option<ReportInsights>,
+}
+
+impl Default for DailyReport {
+    fn default() -> Self {
+        Self {
+            daily: Vec::new(),
+            totals: TokenCounts::default(),
+            activity_totals: None,
+            stats: ParseStats::default(),
+            insights: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

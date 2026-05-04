@@ -20,6 +20,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Row as TuiRow, Table as TuiTable, Wrap};
 use terminal_size::{Width, terminal_size};
 
+use crate::ReportInsights;
 use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
 use std::collections::BTreeSet;
 
@@ -266,6 +267,41 @@ pub(crate) fn print_report_table_with_options(
         }
     }
     println!("{daily_table}");
+
+    if let Some(insights) = report.insights.as_ref() {
+        print_report_insights(insights);
+    }
+}
+
+fn print_report_insights(insights: &ReportInsights) {
+    let mut parts = Vec::new();
+    if let Some(cache_share) = insights.cache_share_pct {
+        parts.push(format!("cache share {:.1}%", cache_share));
+    }
+    if let Some(output_share) = insights.output_share_pct {
+        parts.push(format!("output share {:.1}%", output_share));
+    }
+    if let Some(cost_per_mtoken) = insights.cost_per_mtoken {
+        parts.push(format!("${:.2}/1M tok", cost_per_mtoken));
+    }
+    if let Some(tokens_per_usd) = insights.tokens_per_usd {
+        parts.push(format!("{} tok/$", format_u64(tokens_per_usd)));
+    }
+    if let Some(top_source) = insights.top_source.as_deref() {
+        parts.push(format!("top source {top_source}"));
+    }
+    if let Some(peak) = insights.peak_period.as_ref() {
+        parts.push(format!(
+            "peak {} ({} tok, {})",
+            peak.date,
+            format_u64(peak.total_tokens),
+            format_usd(peak.cost_usd)
+        ));
+    }
+
+    if !parts.is_empty() {
+        println!("Insights: {}", parts.join(" · "));
+    }
 }
 
 fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row {

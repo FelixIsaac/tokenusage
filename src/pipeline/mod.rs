@@ -539,7 +539,7 @@ enum BurnStatus {
 ///
 /// Passed to [`daily_report`](crate::daily_report) to control how events
 /// are bucketed into [`DailyRow`](crate::DailyRow) entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReportPeriod {
     /// One row per calendar day.
     Daily,
@@ -842,11 +842,14 @@ fn build_report_from_rows(
         acc
     });
 
+    let insights = Some(crate::insights::compute_report_insights(&rows, &totals));
+
     DailyReport {
         daily: rows,
         totals,
         activity_totals,
         stats,
+        insights,
     }
 }
 

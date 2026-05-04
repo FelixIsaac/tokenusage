@@ -116,6 +116,7 @@ mod config;
 #[cfg(feature = "cli")]
 mod gui;
 mod heartbeat;
+mod insights;
 #[cfg(feature = "cli")]
 mod output;
 mod pipeline;
@@ -136,6 +137,8 @@ pub use types::{
     ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats, PricingRate, PricingTable,
     SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
 };
+
+pub use insights::ReportInsights;
 
 // ---------------------------------------------------------------------------
 // CLI entry point — only available with `cli` feature

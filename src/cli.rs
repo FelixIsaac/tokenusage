@@ -13,7 +13,7 @@ use crate::types::SourceKind;
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(feature = "cli", derive(ValueEnum))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum SortOrder {
     #[default]
@@ -22,7 +22,7 @@ pub enum SortOrder {
 }
 
 #[cfg_attr(feature = "cli", derive(ValueEnum))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum WeekStart {
     #[default]

@@ -5,11 +5,12 @@ use iced::widget::{
     vertical_space,
 };
 use iced::{Color, Element, Font, Length, Subscription, Task, Theme, window};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use crate::cli::{CommonArgs, GuiArgs, SortOrder};
 use crate::pipeline::{ReportPeriod, collect_report};
-use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
+use crate::types::{DailyReport, DailyRow, SourceKind, TableLayout, TokenCounts};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -48,7 +49,7 @@ struct GuiState {
     project: String,
     loading: bool,
     report: Option<DailyReport>,
-    report_cache: HashMap<String, DailyReport>,
+    report_cache: ReportCache,
     tokens_chart: TrendChart,
     cost_chart: TrendChart,
     hovered_tokens_bar: Option<usize>,
@@ -106,7 +107,7 @@ impl GuiState {
             project: args.project.unwrap_or_default(),
             loading: true,
             report: None,
-            report_cache: HashMap::new(),
+            report_cache: ReportCache::new(12),
             tokens_chart: TrendChart::empty_tokens(),
             cost_chart: TrendChart::empty_cost(),
             hovered_tokens_bar: None,
@@ -129,29 +130,160 @@ impl GuiState {
             start_of_week: self.start_of_week,
         }
     }
+}
 
-    fn request_cache_key(&self) -> String {
-        request_cache_key(&self.request())
+#[derive(Debug, Clone, Eq)]
+struct CacheKey {
+    period: ReportPeriod,
+    instances: bool,
+    project: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    timezone: Option<String>,
+    order: SortOrder,
+    disabled: [bool; 4],
+    selected_sources: Vec<SourceKind>,
+    claude_projects_dir: Vec<String>,
+    codex_sessions_dir: Vec<String>,
+    gemini_data_dir: Vec<String>,
+    opencode_data_dir: Vec<String>,
+    ignore_path: Vec<String>,
+    no_default_ignores: bool,
+    no_incremental_cache: bool,
+    rebuild_cache: bool,
+    with_activity: bool,
+    start_of_week: crate::cli::WeekStart,
+}
+
+impl PartialEq for CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.period == other.period
+            && self.instances == other.instances
+            && self.project == other.project
+            && self.since == other.since
+            && self.until == other.until
+            && self.timezone == other.timezone
+            && self.order == other.order
+            && self.disabled == other.disabled
+            && self.selected_sources == other.selected_sources
+            && self.claude_projects_dir == other.claude_projects_dir
+            && self.codex_sessions_dir == other.codex_sessions_dir
+            && self.gemini_data_dir == other.gemini_data_dir
+            && self.opencode_data_dir == other.opencode_data_dir
+            && self.ignore_path == other.ignore_path
+            && self.no_default_ignores == other.no_default_ignores
+            && self.no_incremental_cache == other.no_incremental_cache
+            && self.rebuild_cache == other.rebuild_cache
+            && self.with_activity == other.with_activity
+            && self.start_of_week == other.start_of_week
     }
 }
 
-fn request_cache_key(req: &ReportRequest) -> String {
-    format!(
-        "period={:?}|instances={}|project={}|since={}|until={}|tz={}|order={:?}|claude={}|codex={}|gemini={}|opencode={}|only={:?}|sources={:?}",
-        req.period,
-        req.instances,
-        req.project.as_deref().unwrap_or(""),
-        req.common.since.as_deref().unwrap_or(""),
-        req.common.until.as_deref().unwrap_or(""),
-        req.common.timezone.as_deref().unwrap_or(""),
-        req.common.order,
-        !req.common.no_claude,
-        !req.common.no_codex,
-        !req.common.no_gemini,
-        !req.common.no_opencode,
-        req.common.only,
-        req.common.sources
-    )
+impl Hash for CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.period.hash(state);
+        self.instances.hash(state);
+        self.project.hash(state);
+        self.since.hash(state);
+        self.until.hash(state);
+        self.timezone.hash(state);
+        self.order.hash(state);
+        self.disabled.hash(state);
+        self.selected_sources.hash(state);
+        self.claude_projects_dir.hash(state);
+        self.codex_sessions_dir.hash(state);
+        self.gemini_data_dir.hash(state);
+        self.opencode_data_dir.hash(state);
+        self.ignore_path.hash(state);
+        self.no_default_ignores.hash(state);
+        self.no_incremental_cache.hash(state);
+        self.rebuild_cache.hash(state);
+        self.with_activity.hash(state);
+        self.start_of_week.hash(state);
+    }
+}
+
+impl CacheKey {
+    fn from_request(req: &ReportRequest) -> Self {
+        let mut selected_sources = req.common.selected_sources();
+        selected_sources.sort();
+
+        let mut claude_projects_dir = req.common.claude_projects_dir.clone();
+        claude_projects_dir.sort();
+        let mut codex_sessions_dir = req.common.codex_sessions_dir.clone();
+        codex_sessions_dir.sort();
+        let mut gemini_data_dir = req.common.gemini_data_dir.clone();
+        gemini_data_dir.sort();
+        let mut opencode_data_dir = req.common.opencode_data_dir.clone();
+        opencode_data_dir.sort();
+
+        let mut ignore_path = req.common.ignore_path.clone();
+        ignore_path.sort();
+
+        Self {
+            period: req.period,
+            instances: req.instances,
+            project: req.project.clone(),
+            since: req.common.since.clone(),
+            until: req.common.until.clone(),
+            timezone: req.common.timezone.clone(),
+            order: req.common.order,
+            disabled: [
+                req.common.no_claude,
+                req.common.no_codex,
+                req.common.no_gemini,
+                req.common.no_opencode,
+            ],
+            selected_sources,
+            claude_projects_dir,
+            codex_sessions_dir,
+            gemini_data_dir,
+            opencode_data_dir,
+            ignore_path,
+            no_default_ignores: req.common.no_default_ignores,
+            no_incremental_cache: req.common.no_incremental_cache,
+            rebuild_cache: req.common.rebuild_cache,
+            with_activity: req.common.with_activity,
+            start_of_week: req.start_of_week,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReportCache {
+    capacity: usize,
+    order: VecDeque<CacheKey>,
+    map: HashMap<CacheKey, DailyReport>,
+}
+
+impl ReportCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            order: VecDeque::new(),
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &CacheKey) -> Option<DailyReport> {
+        self.map.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: CacheKey, report: DailyReport) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key, report);
+            return;
+        }
+
+        self.order.push_back(key.clone());
+        self.map.insert(key, report);
+
+        while self.order.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+    }
 }
 
 pub(crate) fn run_gui(args: GuiArgs) -> Result<()> {
@@ -208,8 +340,8 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Daily;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            let key = state.request_cache_key();
-            if let Some(cached) = state.report_cache.get(&key).cloned() {
+            let key = CacheKey::from_request(&state.request());
+            if let Some(cached) = state.report_cache.get(&key) {
                 let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
                 state.report = Some(cached);
                 state.tokens_chart = tokens_chart;
@@ -232,8 +364,8 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Monthly;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            let key = state.request_cache_key();
-            if let Some(cached) = state.report_cache.get(&key).cloned() {
+            let key = CacheKey::from_request(&state.request());
+            if let Some(cached) = state.report_cache.get(&key) {
                 let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
                 state.report = Some(cached);
                 state.tokens_chart = tokens_chart;
@@ -256,8 +388,8 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.period = ReportPeriod::Weekly;
             state.hovered_tokens_bar = None;
             state.hovered_cost_bar = None;
-            let key = state.request_cache_key();
-            if let Some(cached) = state.report_cache.get(&key).cloned() {
+            let key = CacheKey::from_request(&state.request());
+            if let Some(cached) = state.report_cache.get(&key) {
                 let (tokens_chart, cost_chart) = build_trend_charts(&cached, state.common.order);
                 state.report = Some(cached);
                 state.tokens_chart = tokens_chart;
@@ -302,9 +434,8 @@ fn update(state: &mut GuiState, message: Message) -> Task<Message> {
             state.loading = false;
             match result {
                 Ok(report) => {
-                    state
-                        .report_cache
-                        .insert(state.request_cache_key(), report.clone());
+                    let key = CacheKey::from_request(&state.request());
+                    state.report_cache.insert(key, report.clone());
                     let (tokens_chart, cost_chart) =
                         build_trend_charts(&report, state.common.order);
                     state.report = Some(report);
@@ -482,6 +613,63 @@ async fn load_report(request: ReportRequest) -> Result<DailyReport, String> {
     )
     .await
     .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::ProviderArg;
+
+    fn base_request() -> ReportRequest {
+        let mut common = CommonArgs::default();
+        common.order = SortOrder::Desc;
+        common.no_claude = false;
+        common.no_codex = false;
+        common.no_gemini = false;
+        common.no_opencode = false;
+        common.timezone = Some("Asia/Singapore".to_string());
+        common.since = Some("2026-04-01".to_string());
+        common.until = Some("2026-04-30".to_string());
+        common.only = vec![ProviderArg::Claude, ProviderArg::Codex];
+        common.sources = vec![ProviderArg::Opencode];
+
+        ReportRequest {
+            common,
+            period: ReportPeriod::Daily,
+            instances: false,
+            project: None,
+            start_of_week: crate::cli::WeekStart::Sunday,
+        }
+    }
+
+    #[test]
+    fn cache_key_selected_sources_is_order_insensitive() {
+        let req_a = base_request();
+        let mut req_b = base_request();
+        req_b.common.only = vec![ProviderArg::Codex, ProviderArg::Claude];
+        req_b.common.sources = vec![ProviderArg::Opencode];
+
+        let key_a = CacheKey::from_request(&req_a);
+        let key_b = CacheKey::from_request(&req_b);
+
+        assert_eq!(key_a, key_b);
+    }
+
+    #[test]
+    fn report_cache_eviction_respects_capacity() {
+        let mut cache = ReportCache::new(2);
+        let mut req = base_request();
+
+        for idx in 0..3 {
+            req.common.since = Some(format!("2026-04-0{}", idx + 1));
+            let key = CacheKey::from_request(&req);
+            let report = DailyReport::default();
+            cache.insert(key, report);
+        }
+
+        assert_eq!(cache.map.len(), 2);
+        assert_eq!(cache.order.len(), 2);
+    }
 }
 
 fn charts_panel(state: &GuiState) -> Element<'_, Message> {
