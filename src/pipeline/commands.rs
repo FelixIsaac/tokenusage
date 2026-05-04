@@ -909,7 +909,10 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             continue;
         }
         let session_key = if event.session.is_empty() {
-            "unknown".to_string()
+            event
+                .project
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string())
         } else {
             event.session.clone()
         };

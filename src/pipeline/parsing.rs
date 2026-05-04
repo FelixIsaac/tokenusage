@@ -1628,7 +1628,7 @@ fn parse_opencode_db_file(
     let bounds = filter_bounds_utc_millis(filter, timezone);
     let (sql, params): (&str, Vec<i64>) = if let Some((start_ms, end_ms)) = bounds {
         (
-            "SELECT m.id, s.id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1638,7 +1638,7 @@ fn parse_opencode_db_file(
         )
     } else {
         (
-            "SELECT m.id, s.id, m.time_created, m.data, s.directory, p.worktree \
+            "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
              JOIN session s ON m.session_id = s.id \
              JOIN project p ON s.project_id = p.id \
@@ -1664,20 +1664,26 @@ fn parse_opencode_db_file(
     while let Ok(Some(row)) = rows.next() {
         lines_total += 1;
         let message_id: String = row.get(0).ok()?;
-        let session_id: String = row
+        let msg_session_id: String = row
             .get::<_, String>(1)
             .ok()
             .filter(|s| !s.is_empty())
             .or_else(|| row.get::<_, i64>(1).ok().map(|v| v.to_string()))
             .unwrap_or_default();
-        let time_created: i64 = row.get(2).ok()?;
-        let data: String = row.get(3).ok()?;
+        let session_id: String = row
+            .get::<_, String>(2)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| row.get::<_, i64>(2).ok().map(|v| v.to_string()))
+            .unwrap_or_default();
+        let time_created: i64 = row.get(3).ok()?;
+        let data: String = row.get(4).ok()?;
         if data.len() > MAX_JSON_LINE_BYTES {
             lines_invalid_json += 1;
             continue;
         }
-        let session_dir: String = row.get(4).ok()?;
-        let project_worktree: String = row.get(5).ok()?;
+        let session_dir: String = row.get(5).ok()?;
+        let project_worktree: String = row.get(6).ok()?;
 
         let Some(timestamp) = DateTime::from_timestamp_millis(time_created) else {
             lines_missing_usage += 1;
@@ -1728,7 +1734,7 @@ fn parse_opencode_db_file(
             lines_unknown_pricing += 1;
         }
 
-        let project = Path::new(&session_dir)
+        let mut project = Path::new(&session_dir)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .or_else(|| {
@@ -1737,20 +1743,19 @@ fn parse_opencode_db_file(
                     .map(|n| n.to_string_lossy().to_string())
             });
 
-        let session = Path::new(&session_dir)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or(session_dir.clone());
-        let session = if session.is_empty() {
+        let session = if !msg_session_id.is_empty() {
+            msg_session_id
+        } else if !session_id.is_empty() {
             session_id
         } else {
-            session
+            Path::new(&session_dir)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
         };
-        let session = if session.is_empty() {
-            project.clone().unwrap_or_default()
-        } else {
-            session
-        };
+        if project.is_none() && !session.is_empty() {
+            project = Some(session.clone());
+        }
 
         let event = UsageEvent {
             timestamp,
