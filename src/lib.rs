@@ -269,12 +269,6 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Live(args) => pipeline::run_blocks(args.into()).await,
         Commands::Top(args) => pipeline::run_top(args).await,
         Commands::Statusline(args) => pipeline::run_statusline(args).await,
-        Commands::Gui(args) => {
-            let handle = std::thread::spawn(move || gui::run_gui(args));
-            match handle.join() {
-                Ok(result) => result,
-                Err(_) => anyhow::bail!("GUI thread panicked"),
-            }
-        }
+        Commands::Gui(args) => gui::run_gui(args),
     }
 }
