@@ -320,16 +320,28 @@ fn print_report_insights(insights: &ReportInsights) {
     }
     if !insights.spikes.is_empty() {
         let spike = &insights.spikes[0];
-        parts.push(format!(
+        let mut text = format!(
             "spike {} ({} tok; med {})",
             spike.date,
             format_u64(spike.total_tokens),
             format_u64(spike.baseline_median)
-        ));
+        );
+        if spike.top_source.is_some() || spike.top_model.is_some() {
+            let src = spike.top_source.as_deref().unwrap_or("-");
+            let model = spike.top_model.as_deref().unwrap_or("-");
+            text.push_str(&format!(" [{src} / {model}]"));
+        }
+        parts.push(text);
     }
     if !insights.anomalies.is_empty() {
         let a = &insights.anomalies[0];
-        parts.push(format!("anomaly {} (z={:.1})", a.date, a.robust_z.max(0.0)));
+        let mut text = format!("anomaly {} (z={:.1})", a.date, a.robust_z.max(0.0));
+        if a.top_source.is_some() || a.top_model.is_some() {
+            let src = a.top_source.as_deref().unwrap_or("-");
+            let model = a.top_model.as_deref().unwrap_or("-");
+            text.push_str(&format!(" [{src} / {model}]"));
+        }
+        parts.push(text);
     }
     if !insights.mix_tokens_pct.is_empty() {
         let mut top = insights

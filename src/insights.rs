@@ -55,6 +55,10 @@ pub struct SpikePeriod {
     pub date: String,
     pub total_tokens: u64,
     pub baseline_median: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +69,10 @@ pub struct AnomalyPeriod {
     pub mad: u64,
     /// Robust z-score using median absolute deviation.
     pub robust_z: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_model: Option<String>,
 }
 
 pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> ReportInsights {
@@ -269,10 +277,15 @@ fn token_spikes(rows: &[DailyRow], limit: usize) -> Vec<SpikePeriod> {
         .into_iter()
         .filter(|(_, tokens)| *tokens > median.saturating_mul(3))
         .take(limit)
-        .map(|(date, total_tokens)| SpikePeriod {
-            date,
-            total_tokens,
-            baseline_median: median,
+        .map(|(date, total_tokens)| {
+            let (top_source, top_model) = row_attribution(rows, &date);
+            SpikePeriod {
+                date,
+                total_tokens,
+                baseline_median: median,
+                top_source,
+                top_model,
+            }
         })
         .collect()
 }
@@ -312,16 +325,36 @@ fn token_anomalies(rows: &[DailyRow], limit: usize) -> Vec<AnomalyPeriod> {
             if robust_z < 3.5 {
                 return None;
             }
+            let (top_source, top_model) = row_attribution(rows, &date);
             Some(AnomalyPeriod {
                 date,
                 total_tokens,
                 median,
                 mad,
                 robust_z,
+                top_source,
+                top_model,
             })
         })
         .take(limit)
         .collect()
+}
+
+fn row_attribution(rows: &[DailyRow], date: &str) -> (Option<String>, Option<String>) {
+    let Some(row) = rows.iter().find(|row| row.date == date) else {
+        return (None, None);
+    };
+    let top_source = row
+        .sources
+        .iter()
+        .max_by_key(|(_, counts)| counts.total_tokens)
+        .map(|(source, _)| source.clone());
+    let top_model = row
+        .models
+        .iter()
+        .max_by_key(|(_, counts)| counts.total_tokens)
+        .map(|(model, _)| model.clone());
+    (top_source, top_model)
 }
 
 fn provider_mix(rows: &[DailyRow]) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
@@ -426,5 +459,41 @@ mod tests {
         let (mix_tokens, mix_cost) = provider_mix(&rows);
         assert!(mix_tokens.is_empty());
         assert!(mix_cost.is_empty());
+    }
+
+    #[test]
+    fn spikes_include_top_source_and_model() {
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "codex".to_string(),
+            TokenCounts {
+                total_tokens: 10_000,
+                ..TokenCounts::default()
+            },
+        );
+        let mut models = BTreeMap::new();
+        models.insert(
+            "gpt-5.2".to_string(),
+            TokenCounts {
+                total_tokens: 10_000,
+                ..TokenCounts::default()
+            },
+        );
+        let mut rows = vec![
+            row("2026-05-01", 10, 0.0),
+            row("2026-05-02", 10, 0.0),
+            row("2026-05-03", 10, 0.0),
+            row("2026-05-04", 10, 0.0),
+            row("2026-05-05", 10, 0.0),
+            row("2026-05-06", 10, 0.0),
+            row("2026-05-07", 10_000, 0.0),
+        ];
+        rows[6].sources = sources;
+        rows[6].models = models;
+
+        let spikes = token_spikes(&rows, 3);
+        assert_eq!(spikes.len(), 1);
+        assert_eq!(spikes[0].top_source.as_deref(), Some("codex"));
+        assert_eq!(spikes[0].top_model.as_deref(), Some("gpt-5.2"));
     }
 }

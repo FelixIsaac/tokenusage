@@ -157,6 +157,7 @@ tu monthly
 
 # Native time views inferred from local AI usage
 tu today
+tu today --since 2026-05-01 --until 2026-05-05
 tu activity
 tu activity --days 14
 tu activity --project tokenusage
@@ -264,6 +265,19 @@ From that local activity signal, `tu` derives:
 The dedicated time views (`tu today`, `tu activity`) enable this automatically. `--with-activity` adds the same local activity context to daily/weekly/monthly reports and `tu live`.
 
 By default, `tu` keeps the original merged token report layout. The extra `Coding` / `Tok/hr` columns only appear when activity context is explicitly enabled with `--with-activity`, or when you use the dedicated time views.
+
+### What are `Insights` in reports?
+
+`tu` now computes derived analytics for daily/weekly/monthly reports and includes them in both CLI and JSON output:
+
+- cache/output token share
+- unit efficiency (`$/1M tok`, `tok/$`)
+- top source and top model concentration
+- streaks and average active-day usage
+- peak period, token spikes, robust anomaly detection
+- provider mix by tokens/cost
+
+Spike and anomaly entries include top source/model attribution for faster root-cause checks on heavy periods. In `tu gui`, the same insights are surfaced as summary cards.
 
 ### Is my data private?
 

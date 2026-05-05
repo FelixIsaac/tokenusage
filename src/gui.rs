@@ -8,6 +8,7 @@ use iced::{Color, Element, Font, Length, Subscription, Task, Theme, window};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
+use crate::ReportInsights;
 use crate::cli::{CommonArgs, GuiArgs, SortOrder};
 use crate::pipeline::{ReportPeriod, collect_report};
 use crate::types::{DailyReport, DailyRow, SourceKind, TableLayout, TokenCounts};
@@ -574,9 +575,15 @@ fn view(state: &GuiState) -> Element<'_, Message> {
         );
     }
 
-    let mut content = column![title, summary_cards(state), controls, charts_panel(state)]
-        .spacing(12)
-        .width(Length::Fill);
+    let mut content = column![
+        title,
+        summary_cards(state),
+        insights_cards(state),
+        controls,
+        charts_panel(state)
+    ]
+    .spacing(12)
+    .width(Length::Fill);
 
     if let Some(err) = &state.error {
         content = content.push(
@@ -930,6 +937,67 @@ fn stat_card(label: &'static str, value: String) -> Element<'static, Message> {
     .style(style_summary_card)
     .width(Length::FillPortion(1))
     .into()
+}
+
+fn insights_cards(state: &GuiState) -> Element<'static, Message> {
+    let Some(report) = &state.report else {
+        return row![].spacing(0).into();
+    };
+    let Some(insights) = report.insights.as_ref() else {
+        return row![].spacing(0).into();
+    };
+
+    row![
+        stat_card("Top Source", insight_top_source(insights)),
+        stat_card("Top Model", insight_top_model(insights)),
+        stat_card("Peak", insight_peak(insights)),
+        stat_card("Anomaly", insight_anomaly(insights)),
+    ]
+    .spacing(10)
+    .width(Length::Fill)
+    .into()
+}
+
+fn insight_top_source(insights: &ReportInsights) -> String {
+    insights.top_source.as_deref().map_or_else(
+        || "-".to_string(),
+        |name| {
+            if let Some(share) = insights.top_source_share_pct {
+                format!("{name} ({share:.1}%)")
+            } else {
+                name.to_string()
+            }
+        },
+    )
+}
+
+fn insight_top_model(insights: &ReportInsights) -> String {
+    insights.top_model.as_deref().map_or_else(
+        || "-".to_string(),
+        |name| {
+            if let Some(share) = insights.top_model_share_pct {
+                format!("{name} ({share:.1}%)")
+            } else {
+                name.to_string()
+            }
+        },
+    )
+}
+
+fn insight_peak(insights: &ReportInsights) -> String {
+    insights
+        .peak_period
+        .as_ref()
+        .map(|peak| format!("{} · {}", peak.date, format_u64(peak.total_tokens)))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn insight_anomaly(insights: &ReportInsights) -> String {
+    insights
+        .anomalies
+        .first()
+        .map(|a| format!("{} (z={:.1})", a.date, a.robust_z.max(0.0)))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn period_button<'a>(
