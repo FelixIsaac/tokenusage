@@ -385,6 +385,8 @@ cargo clippy --all-targets --all-features
 cargo check
 ```
 
+Release notes: see [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
