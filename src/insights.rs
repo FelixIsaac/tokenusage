@@ -35,6 +35,12 @@ pub struct ReportInsights {
     pub avg_cost_per_active_day: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spikes: Vec<SpikePeriod>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mix_tokens_pct: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mix_cost_pct: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anomalies: Vec<AnomalyPeriod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +55,16 @@ pub struct SpikePeriod {
     pub date: String,
     pub total_tokens: u64,
     pub baseline_median: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnomalyPeriod {
+    pub date: String,
+    pub total_tokens: u64,
+    pub median: u64,
+    pub mad: u64,
+    /// Robust z-score using median absolute deviation.
+    pub robust_z: f64,
 }
 
 pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> ReportInsights {
@@ -94,6 +110,8 @@ pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> Repor
     };
 
     let spikes = token_spikes(rows, 3);
+    let anomalies = token_anomalies(rows, 3);
+    let (mix_tokens_pct, mix_cost_pct) = provider_mix(rows);
 
     ReportInsights {
         cache_share_pct,
@@ -110,6 +128,9 @@ pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> Repor
         avg_tokens_per_active_day,
         avg_cost_per_active_day,
         spikes,
+        mix_tokens_pct,
+        mix_cost_pct,
+        anomalies,
     }
 }
 
@@ -256,6 +277,87 @@ fn token_spikes(rows: &[DailyRow], limit: usize) -> Vec<SpikePeriod> {
         .collect()
 }
 
+fn token_anomalies(rows: &[DailyRow], limit: usize) -> Vec<AnomalyPeriod> {
+    let mut values = rows
+        .iter()
+        .map(|row| (row.date.clone(), row.totals.total_tokens))
+        .collect::<Vec<_>>();
+    if values.len() < 7 {
+        return Vec::new();
+    }
+    let mut samples = values.iter().map(|(_, t)| *t).collect::<Vec<_>>();
+    samples.sort_unstable();
+    let median = samples[samples.len() / 2];
+    if median == 0 {
+        return Vec::new();
+    }
+    let mut deviations = samples
+        .iter()
+        .map(|t| t.abs_diff(median))
+        .collect::<Vec<_>>();
+    deviations.sort_unstable();
+    let mad = deviations[deviations.len() / 2];
+    if mad == 0 {
+        return Vec::new();
+    }
+
+    values.sort_by(|a, b| b.1.cmp(&a.1));
+    values
+        .into_iter()
+        .filter_map(|(date, total_tokens)| {
+            if total_tokens <= median {
+                return None;
+            }
+            let robust_z = 0.6745 * (total_tokens.abs_diff(median) as f64 / mad.max(1) as f64);
+            if robust_z < 3.5 {
+                return None;
+            }
+            Some(AnomalyPeriod {
+                date,
+                total_tokens,
+                median,
+                mad,
+                robust_z,
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
+fn provider_mix(rows: &[DailyRow]) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
+    let mut token_totals = BTreeMap::<String, u64>::new();
+    let mut cost_totals = BTreeMap::<String, f64>::new();
+    let mut grand_tokens = 0u64;
+    let mut grand_cost = 0.0;
+    for row in rows {
+        for (source, counts) in &row.sources {
+            let label = source.trim().to_string();
+            grand_tokens += counts.total_tokens;
+            grand_cost += counts.cost_usd;
+            *token_totals.entry(label.clone()).or_insert(0) += counts.total_tokens;
+            *cost_totals.entry(label).or_insert(0.0) += counts.cost_usd;
+        }
+    }
+
+    let mut mix_tokens = BTreeMap::new();
+    if grand_tokens > 0 {
+        for (label, total) in token_totals {
+            if total > 0 {
+                mix_tokens.insert(label, (total as f64 / grand_tokens as f64) * 100.0);
+            }
+        }
+    }
+    let mut mix_cost = BTreeMap::new();
+    if grand_cost > f64::EPSILON {
+        for (label, total) in cost_totals {
+            if total > f64::EPSILON {
+                mix_cost.insert(label, (total / grand_cost) * 100.0);
+            }
+        }
+    }
+    (mix_tokens, mix_cost)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +418,13 @@ mod tests {
         assert_eq!(longest, Some(2));
         assert_eq!(current, Some(1));
         assert_eq!(active_days, 3);
+    }
+
+    #[test]
+    fn provider_mix_returns_empty_when_no_sources() {
+        let rows = vec![row("2026-05-01", 10, 0.1)];
+        let (mix_tokens, mix_cost) = provider_mix(&rows);
+        assert!(mix_tokens.is_empty());
+        assert!(mix_cost.is_empty());
     }
 }

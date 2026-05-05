@@ -327,6 +327,25 @@ fn print_report_insights(insights: &ReportInsights) {
             format_u64(spike.baseline_median)
         ));
     }
+    if !insights.anomalies.is_empty() {
+        let a = &insights.anomalies[0];
+        parts.push(format!("anomaly {} (z={:.1})", a.date, a.robust_z.max(0.0)));
+    }
+    if !insights.mix_tokens_pct.is_empty() {
+        let mut top = insights
+            .mix_tokens_pct
+            .iter()
+            .map(|(k, v)| (k.as_str(), *v))
+            .collect::<Vec<_>>();
+        top.sort_by(|a, b| b.1.total_cmp(&a.1));
+        top.truncate(2);
+        let mix = top
+            .into_iter()
+            .map(|(k, v)| format!("{k} {v:.0}%"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("mix {mix}"));
+    }
 
     if !parts.is_empty() {
         println!("Insights: {}", parts.join(" · "));
