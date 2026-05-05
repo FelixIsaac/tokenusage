@@ -12,9 +12,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 - CLI `Insights:` summary now includes spike/anomaly attribution with top source/model.
+- Spike/anomaly attribution now includes top project/session per period when event context is available.
 - TOTAL-row model summary now reports provider-aware model counts.
 
 ### Fixed
 - OpenCode ingestion improved for DB + legacy merge behavior and session id stability.
 - `tu gui` startup panic on Windows async runtime teardown.
-

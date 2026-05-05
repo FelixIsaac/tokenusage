@@ -277,7 +277,7 @@ By default, `tu` keeps the original merged token report layout. The extra `Codin
 - peak period, token spikes, robust anomaly detection
 - provider mix by tokens/cost
 
-Spike and anomaly entries include top source/model attribution for faster root-cause checks on heavy periods. In `tu gui`, the same insights are surfaced as summary cards.
+Spike and anomaly entries include top source/model attribution, and when available, top project/session attribution for faster root-cause checks on heavy periods. In `tu gui`, the same insights are surfaced as summary cards.
 
 ### Is my data private?
 

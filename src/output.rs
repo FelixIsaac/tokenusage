@@ -331,6 +331,11 @@ fn print_report_insights(insights: &ReportInsights) {
             let model = spike.top_model.as_deref().unwrap_or("-");
             text.push_str(&format!(" [{src} / {model}]"));
         }
+        if spike.top_project.is_some() || spike.top_session.is_some() {
+            let project = spike.top_project.as_deref().unwrap_or("-");
+            let session = spike.top_session.as_deref().unwrap_or("-");
+            text.push_str(&format!(" {{{project} / {session}}}"));
+        }
         parts.push(text);
     }
     if !insights.anomalies.is_empty() {
@@ -340,6 +345,11 @@ fn print_report_insights(insights: &ReportInsights) {
             let src = a.top_source.as_deref().unwrap_or("-");
             let model = a.top_model.as_deref().unwrap_or("-");
             text.push_str(&format!(" [{src} / {model}]"));
+        }
+        if a.top_project.is_some() || a.top_session.is_some() {
+            let project = a.top_project.as_deref().unwrap_or("-");
+            let session = a.top_session.as_deref().unwrap_or("-");
+            text.push_str(&format!(" {{{project} / {session}}}"));
         }
         parts.push(text);
     }

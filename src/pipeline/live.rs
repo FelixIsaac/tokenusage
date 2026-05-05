@@ -114,7 +114,9 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             .collect::<Vec<_>>();
 
         let totals = json_report.totals.clone();
-        let insights = Some(crate::insights::compute_report_insights(&rows, &totals));
+        let insights = Some(crate::insights::compute_report_insights(
+            &rows, &totals, None,
+        ));
 
         let show = DailyReport {
             daily: rows,

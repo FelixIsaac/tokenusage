@@ -57,6 +57,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{CommonArgs, SortOrder, WeekStart};
+use crate::insights::PeriodAttribution;
 #[cfg(feature = "cli")]
 use crate::output::print_report_table_with_options;
 use crate::types::{
@@ -836,13 +837,18 @@ fn build_report_from_rows(
     rows: Vec<DailyRow>,
     activity_totals: Option<ActivitySummary>,
     stats: ParseStats,
+    period_attribution: Option<BTreeMap<String, PeriodAttribution>>,
 ) -> DailyReport {
     let totals = rows.iter().fold(TokenCounts::default(), |mut acc, row| {
         acc.add_assign(row.totals.clone());
         acc
     });
 
-    let insights = Some(crate::insights::compute_report_insights(&rows, &totals));
+    let insights = Some(crate::insights::compute_report_insights(
+        &rows,
+        &totals,
+        period_attribution.as_ref(),
+    ));
 
     DailyReport {
         daily: rows,
@@ -851,6 +857,82 @@ fn build_report_from_rows(
         stats,
         insights,
     }
+}
+
+fn build_period_attribution<F>(
+    events: &[UsageEvent],
+    mut key_fn: F,
+) -> BTreeMap<String, PeriodAttribution>
+where
+    F: FnMut(&UsageEvent) -> String,
+{
+    #[derive(Default)]
+    struct AttributionAggregate {
+        by_source: HashMap<String, u64>,
+        by_model: HashMap<String, u64>,
+        by_project: HashMap<String, u64>,
+        by_session: HashMap<String, u64>,
+    }
+
+    let mut grouped: HashMap<String, AttributionAggregate> = HashMap::new();
+    for event in events {
+        let period_key = key_fn(event);
+        let aggregate = grouped.entry(period_key).or_default();
+        let total_tokens = event.usage.total_tokens();
+        *aggregate
+            .by_source
+            .entry(event.source.as_str().to_string())
+            .or_insert(0) += total_tokens;
+        *aggregate.by_model.entry(event.model.clone()).or_insert(0) += total_tokens;
+        if let Some(project) = event
+            .project
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            *aggregate.by_project.entry(project.to_string()).or_insert(0) += total_tokens;
+        }
+        if !event.session.trim().is_empty() {
+            *aggregate
+                .by_session
+                .entry(event.session.clone())
+                .or_insert(0) += total_tokens;
+        }
+    }
+
+    grouped
+        .into_iter()
+        .map(|(period, aggregate)| {
+            let top_source = aggregate
+                .by_source
+                .into_iter()
+                .max_by_key(|(_, tokens)| *tokens)
+                .map(|(label, _)| label);
+            let top_model = aggregate
+                .by_model
+                .into_iter()
+                .max_by_key(|(_, tokens)| *tokens)
+                .map(|(label, _)| label);
+            let top_project = aggregate
+                .by_project
+                .into_iter()
+                .max_by_key(|(_, tokens)| *tokens)
+                .map(|(label, _)| label);
+            let top_session = aggregate
+                .by_session
+                .into_iter()
+                .max_by_key(|(_, tokens)| *tokens)
+                .map(|(label, _)| label);
+            (
+                period,
+                PeriodAttribution {
+                    top_source,
+                    top_model,
+                    top_project,
+                    top_session,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>()
 }
 
 fn build_group_rows<F>(events: &[UsageEvent], order: &SortOrder, mut key_fn: F) -> Vec<DailyRow>

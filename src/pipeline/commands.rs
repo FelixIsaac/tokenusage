@@ -542,6 +542,18 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
             day_key
         }
     });
+    let period_attribution = build_period_attribution(&events, |event| {
+        let day = local_date(event.timestamp, &tz);
+        let day_key = day.format("%Y-%m-%d").to_string();
+        if args.instances {
+            match event.project.as_deref() {
+                Some(project) => format!("{project} | {day_key}"),
+                None => format!("- | {day_key}"),
+            }
+        } else {
+            day_key
+        }
+    });
 
     let (rows, activity_totals) = enrich_rows_with_activity(
         &args.common,
@@ -554,7 +566,12 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
     )
     .await?;
 
-    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
+    let report = build_report_from_rows(
+        rows,
+        activity_totals,
+        loaded.stats,
+        Some(period_attribution),
+    );
 
     if use_json {
         emit_json(&report, args.common.jq.as_deref())
@@ -577,6 +594,10 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
         let day = local_date(event.timestamp, &tz);
         format!("{:04}-{:02}", day.year(), day.month())
     });
+    let period_attribution = build_period_attribution(&loaded.events, |event| {
+        let day = local_date(event.timestamp, &tz);
+        format!("{:04}-{:02}", day.year(), day.month())
+    });
 
     let (rows, activity_totals) = enrich_rows_with_activity(
         &args.common,
@@ -589,7 +610,12 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     )
     .await?;
 
-    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
+    let report = build_report_from_rows(
+        rows,
+        activity_totals,
+        loaded.stats,
+        Some(period_attribution),
+    );
 
     if use_json {
         #[derive(Serialize)]
@@ -633,6 +659,11 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
         let start = week_start(day, args.start_of_week);
         format!("{}", start.format("%Y-%m-%d"))
     });
+    let period_attribution = build_period_attribution(&loaded.events, |event| {
+        let day = local_date(event.timestamp, &tz);
+        let start = week_start(day, args.start_of_week);
+        format!("{}", start.format("%Y-%m-%d"))
+    });
 
     let (rows, activity_totals) = enrich_rows_with_activity(
         &args.common,
@@ -645,7 +676,12 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     )
     .await?;
 
-    let report = build_report_from_rows(rows, activity_totals, loaded.stats);
+    let report = build_report_from_rows(
+        rows,
+        activity_totals,
+        loaded.stats,
+        Some(period_attribution),
+    );
 
     if use_json {
         #[derive(Serialize)]
@@ -1003,7 +1039,9 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             .collect::<Vec<_>>();
 
         let totals = json_report.totals.clone();
-        let insights = Some(crate::insights::compute_report_insights(&rows, &totals));
+        let insights = Some(crate::insights::compute_report_insights(
+            &rows, &totals, None,
+        ));
 
         let show = DailyReport {
             daily: rows,
@@ -1082,7 +1120,36 @@ pub async fn collect_report(
     )
     .await?;
 
-    Ok(build_report_from_rows(rows, activity_totals, loaded.stats))
+    let period_attribution = build_period_attribution(&loaded.events, |event| match period {
+        ReportPeriod::Daily => {
+            let day = local_date(event.timestamp, &tz);
+            let day_key = day.format("%Y-%m-%d").to_string();
+            if instances {
+                match event.project.as_deref() {
+                    Some(project_name) => format!("{project_name} | {day_key}"),
+                    None => format!("- | {day_key}"),
+                }
+            } else {
+                day_key
+            }
+        }
+        ReportPeriod::Monthly => {
+            let day = local_date(event.timestamp, &tz);
+            format!("{:04}-{:02}", day.year(), day.month())
+        }
+        ReportPeriod::Weekly => {
+            let day = local_date(event.timestamp, &tz);
+            let start = week_start(day, start_of_week);
+            start.format("%Y-%m-%d").to_string()
+        }
+    });
+
+    Ok(build_report_from_rows(
+        rows,
+        activity_totals,
+        loaded.stats,
+        Some(period_attribution),
+    ))
 }
 
 pub async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {

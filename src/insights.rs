@@ -43,6 +43,18 @@ pub struct ReportInsights {
     pub anomalies: Vec<AnomalyPeriod>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PeriodAttribution {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_session: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeakPeriod {
     pub date: String,
@@ -59,6 +71,10 @@ pub struct SpikePeriod {
     pub top_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_session: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +89,17 @@ pub struct AnomalyPeriod {
     pub top_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_session: Option<String>,
 }
 
-pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> ReportInsights {
+pub fn compute_report_insights(
+    rows: &[DailyRow],
+    totals: &TokenCounts,
+    period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
+) -> ReportInsights {
     let total_tokens = totals.total_tokens;
     let cache_tokens = totals.cache_creation_input_tokens + totals.cache_read_input_tokens;
     let output_tokens = totals.output_tokens + totals.reasoning_output_tokens;
@@ -117,8 +141,8 @@ pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> Repor
         None
     };
 
-    let spikes = token_spikes(rows, 3);
-    let anomalies = token_anomalies(rows, 3);
+    let spikes = token_spikes(rows, 3, period_attribution);
+    let anomalies = token_anomalies(rows, 3, period_attribution);
     let (mix_tokens_pct, mix_cost_pct) = provider_mix(rows);
 
     ReportInsights {
@@ -257,7 +281,11 @@ fn streaks_if_daily(rows: &[DailyRow]) -> (Option<u32>, Option<u32>, u32) {
     )
 }
 
-fn token_spikes(rows: &[DailyRow], limit: usize) -> Vec<SpikePeriod> {
+fn token_spikes(
+    rows: &[DailyRow],
+    limit: usize,
+    period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
+) -> Vec<SpikePeriod> {
     let mut values = rows
         .iter()
         .filter_map(|row| Some((row.date.clone(), row.totals.total_tokens)))
@@ -278,19 +306,25 @@ fn token_spikes(rows: &[DailyRow], limit: usize) -> Vec<SpikePeriod> {
         .filter(|(_, tokens)| *tokens > median.saturating_mul(3))
         .take(limit)
         .map(|(date, total_tokens)| {
-            let (top_source, top_model) = row_attribution(rows, &date);
+            let attribution = attribution_for_period(rows, &date, period_attribution);
             SpikePeriod {
                 date,
                 total_tokens,
                 baseline_median: median,
-                top_source,
-                top_model,
+                top_source: attribution.top_source,
+                top_model: attribution.top_model,
+                top_project: attribution.top_project,
+                top_session: attribution.top_session,
             }
         })
         .collect()
 }
 
-fn token_anomalies(rows: &[DailyRow], limit: usize) -> Vec<AnomalyPeriod> {
+fn token_anomalies(
+    rows: &[DailyRow],
+    limit: usize,
+    period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
+) -> Vec<AnomalyPeriod> {
     let mut values = rows
         .iter()
         .map(|row| (row.date.clone(), row.totals.total_tokens))
@@ -325,15 +359,17 @@ fn token_anomalies(rows: &[DailyRow], limit: usize) -> Vec<AnomalyPeriod> {
             if robust_z < 3.5 {
                 return None;
             }
-            let (top_source, top_model) = row_attribution(rows, &date);
+            let attribution = attribution_for_period(rows, &date, period_attribution);
             Some(AnomalyPeriod {
                 date,
                 total_tokens,
                 median,
                 mad,
                 robust_z,
-                top_source,
-                top_model,
+                top_source: attribution.top_source,
+                top_model: attribution.top_model,
+                top_project: attribution.top_project,
+                top_session: attribution.top_session,
             })
         })
         .take(limit)
@@ -355,6 +391,23 @@ fn row_attribution(rows: &[DailyRow], date: &str) -> (Option<String>, Option<Str
         .max_by_key(|(_, counts)| counts.total_tokens)
         .map(|(model, _)| model.clone());
     (top_source, top_model)
+}
+
+fn attribution_for_period(
+    rows: &[DailyRow],
+    period: &str,
+    period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
+) -> PeriodAttribution {
+    if let Some(found) = period_attribution.and_then(|map| map.get(period)) {
+        return found.clone();
+    }
+    let (top_source, top_model) = row_attribution(rows, period);
+    PeriodAttribution {
+        top_source,
+        top_model,
+        top_project: None,
+        top_session: None,
+    }
 }
 
 fn provider_mix(rows: &[DailyRow]) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
@@ -420,7 +473,7 @@ mod tests {
             cost_usd: 0.3,
             ..TokenCounts::default()
         };
-        let insights = compute_report_insights(&rows, &totals);
+        let insights = compute_report_insights(&rows, &totals, None);
         assert_eq!(insights.peak_period.unwrap().date, "2026-05-02");
     }
 
@@ -491,9 +544,39 @@ mod tests {
         rows[6].sources = sources;
         rows[6].models = models;
 
-        let spikes = token_spikes(&rows, 3);
+        let spikes = token_spikes(&rows, 3, None);
         assert_eq!(spikes.len(), 1);
         assert_eq!(spikes[0].top_source.as_deref(), Some("codex"));
         assert_eq!(spikes[0].top_model.as_deref(), Some("gpt-5.2"));
+    }
+
+    #[test]
+    fn spikes_use_period_attribution_when_available() {
+        let rows = vec![
+            row("2026-05-01", 10, 0.0),
+            row("2026-05-02", 10, 0.0),
+            row("2026-05-03", 10, 0.0),
+            row("2026-05-04", 10, 0.0),
+            row("2026-05-05", 10, 0.0),
+            row("2026-05-06", 10, 0.0),
+            row("2026-05-07", 10_000, 0.0),
+        ];
+        let mut period_attribution = BTreeMap::new();
+        period_attribution.insert(
+            "2026-05-07".to_string(),
+            PeriodAttribution {
+                top_source: Some("opencode".to_string()),
+                top_model: Some("gpt-5.2".to_string()),
+                top_project: Some("Life/OS".to_string()),
+                top_session: Some("ses_abc123".to_string()),
+            },
+        );
+
+        let spikes = token_spikes(&rows, 3, Some(&period_attribution));
+        assert_eq!(spikes.len(), 1);
+        assert_eq!(spikes[0].top_source.as_deref(), Some("opencode"));
+        assert_eq!(spikes[0].top_model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(spikes[0].top_project.as_deref(), Some("Life/OS"));
+        assert_eq!(spikes[0].top_session.as_deref(), Some("ses_abc123"));
     }
 }

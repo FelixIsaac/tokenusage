@@ -275,7 +275,7 @@ pub(super) fn build_activity_daily_report(
 
     let activity_totals = dataset.summary_for_range(options.start, options.end);
 
-    build_report_from_rows(rows, activity_totals, options.stats)
+    build_report_from_rows(rows, activity_totals, options.stats, None)
 }
 
 pub(super) fn build_activity_overview(
