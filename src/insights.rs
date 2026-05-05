@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{DailyRow, SourceKind, TokenCounts};
@@ -17,7 +18,23 @@ pub struct ReportInsights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_source_share_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_model_share_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_period: Option<PeakPeriod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longest_streak_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_streak_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_tokens_per_active_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_cost_per_active_day: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spikes: Vec<SpikePeriod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +42,13 @@ pub struct PeakPeriod {
     pub date: String,
     pub total_tokens: u64,
     pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpikePeriod {
+    pub date: String,
+    pub total_tokens: u64,
+    pub baseline_median: u64,
 }
 
 pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> ReportInsights {
@@ -45,7 +69,8 @@ pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> Repor
         None
     };
 
-    let top_source = top_source_label(rows);
+    let (top_source, top_source_share_pct) = top_source_label(rows, total_tokens);
+    let (top_model, top_model_share_pct) = top_model_label(rows, total_tokens);
     let peak_period = rows
         .iter()
         .max_by_key(|row| row.totals.total_tokens)
@@ -56,13 +81,35 @@ pub fn compute_report_insights(rows: &[DailyRow], totals: &TokenCounts) -> Repor
         })
         .filter(|peak| peak.total_tokens > 0);
 
+    let (longest_streak_days, current_streak_days, active_days) = streaks_if_daily(rows);
+    let avg_tokens_per_active_day = if active_days > 0 && total_tokens > 0 {
+        Some((total_tokens as f64 / active_days as f64).round().max(0.0) as u64)
+    } else {
+        None
+    };
+    let avg_cost_per_active_day = if active_days > 0 && totals.cost_usd > 0.0 {
+        Some(totals.cost_usd / active_days as f64)
+    } else {
+        None
+    };
+
+    let spikes = token_spikes(rows, 3);
+
     ReportInsights {
         cache_share_pct,
         output_share_pct,
         cost_per_mtoken,
         tokens_per_usd,
         top_source,
+        top_model,
+        top_source_share_pct,
+        top_model_share_pct,
         peak_period,
+        longest_streak_days,
+        current_streak_days,
+        avg_tokens_per_active_day,
+        avg_cost_per_active_day,
+        spikes,
     }
 }
 
@@ -73,7 +120,7 @@ fn percent(part: u64, total: u64) -> Option<f64> {
     Some((part as f64 / total as f64) * 100.0)
 }
 
-fn top_source_label(rows: &[DailyRow]) -> Option<String> {
+fn top_source_label(rows: &[DailyRow], grand_total: u64) -> (Option<String>, Option<f64>) {
     let mut totals = BTreeMap::<SourceKind, u64>::new();
     for row in rows {
         for (source, counts) in &row.sources {
@@ -82,10 +129,14 @@ fn top_source_label(rows: &[DailyRow]) -> Option<String> {
             }
         }
     }
-    totals
-        .into_iter()
-        .max_by_key(|(_, total)| *total)
-        .map(|(kind, _)| kind.display_name().to_string())
+    let top = totals.into_iter().max_by_key(|(_, total)| *total);
+    let Some((kind, total)) = top else {
+        return (None, None);
+    };
+    (
+        Some(kind.display_name().to_string()),
+        percent(total, grand_total),
+    )
 }
 
 fn parse_source_kind(raw: &str) -> Option<SourceKind> {
@@ -97,6 +148,112 @@ fn parse_source_kind(raw: &str) -> Option<SourceKind> {
         "opencode" => Some(SourceKind::OpenCode),
         _ => None,
     }
+}
+
+fn top_model_label(rows: &[DailyRow], grand_total: u64) -> (Option<String>, Option<f64>) {
+    let mut totals = BTreeMap::<String, u64>::new();
+    for row in rows {
+        for (model, counts) in &row.models {
+            *totals.entry(model.clone()).or_insert(0) += counts.total_tokens;
+        }
+    }
+    let top = totals.into_iter().max_by_key(|(_, total)| *total);
+    let Some((model, total)) = top else {
+        return (None, None);
+    };
+    (Some(model), percent(total, grand_total))
+}
+
+fn streaks_if_daily(rows: &[DailyRow]) -> (Option<u32>, Option<u32>, u32) {
+    // Only makes sense for daily rows. We detect this by parsing the date.
+    let mut days = rows
+        .iter()
+        .filter_map(|row| {
+            let day = NaiveDate::parse_from_str(&row.date, "%Y-%m-%d").ok()?;
+            let active = row.totals.total_tokens > 0;
+            Some((day, active))
+        })
+        .collect::<Vec<_>>();
+    if days.len() != rows.len() || days.is_empty() {
+        return (None, None, 0);
+    }
+    days.sort_by_key(|(day, _)| *day);
+
+    let mut active_days = 0u32;
+    let mut longest = 0u32;
+    let mut current_run = 0u32;
+    let mut last_day = None::<NaiveDate>;
+    for (day, active) in &days {
+        if *active {
+            active_days += 1;
+        }
+        if let Some(prev) = last_day {
+            if *day != prev.succ_opt().unwrap_or(prev) {
+                current_run = 0;
+            }
+        }
+        if *active {
+            current_run += 1;
+            longest = longest.max(current_run);
+        } else {
+            current_run = 0;
+        }
+        last_day = Some(*day);
+    }
+
+    let current = days
+        .last()
+        .and_then(|(last, _)| {
+            let mut run = 0u32;
+            let mut cursor = *last;
+            for (day, active) in days.iter().rev() {
+                if *day != cursor {
+                    break;
+                }
+                if *active {
+                    run += 1;
+                } else {
+                    break;
+                }
+                cursor = cursor.pred_opt().unwrap_or(cursor);
+            }
+            Some(run)
+        })
+        .unwrap_or(0);
+
+    (
+        Some(longest).filter(|v| *v > 0),
+        Some(current).filter(|v| *v > 0),
+        active_days,
+    )
+}
+
+fn token_spikes(rows: &[DailyRow], limit: usize) -> Vec<SpikePeriod> {
+    let mut values = rows
+        .iter()
+        .filter_map(|row| Some((row.date.clone(), row.totals.total_tokens)))
+        .collect::<Vec<_>>();
+    if values.len() < 7 {
+        return Vec::new();
+    }
+    let mut token_samples = values.iter().map(|(_, t)| *t).collect::<Vec<_>>();
+    token_samples.sort_unstable();
+    let median = token_samples[token_samples.len() / 2];
+    if median == 0 {
+        return Vec::new();
+    }
+
+    values.sort_by(|a, b| b.1.cmp(&a.1));
+    values
+        .into_iter()
+        .filter(|(_, tokens)| *tokens > median.saturating_mul(3))
+        .take(limit)
+        .map(|(date, total_tokens)| SpikePeriod {
+            date,
+            total_tokens,
+            baseline_median: median,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -136,5 +293,28 @@ mod tests {
     fn percent_handles_zero_total() {
         assert!(percent(1, 0).is_none());
         assert!((percent(1, 4).unwrap() - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn streaks_return_none_for_non_daily_rows() {
+        let rows = vec![row("2026-05", 10, 0.1)];
+        let (longest, current, active) = streaks_if_daily(&rows);
+        assert!(longest.is_none());
+        assert!(current.is_none());
+        assert_eq!(active, 0);
+    }
+
+    #[test]
+    fn streaks_compute_for_daily_rows() {
+        let rows = vec![
+            row("2026-05-01", 1, 0.0),
+            row("2026-05-02", 1, 0.0),
+            row("2026-05-03", 0, 0.0),
+            row("2026-05-04", 1, 0.0),
+        ];
+        let (longest, current, active_days) = streaks_if_daily(&rows);
+        assert_eq!(longest, Some(2));
+        assert_eq!(current, Some(1));
+        assert_eq!(active_days, 3);
     }
 }

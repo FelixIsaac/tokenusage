@@ -288,7 +288,27 @@ fn print_report_insights(insights: &ReportInsights) {
         parts.push(format!("{} tok/$", format_u64(tokens_per_usd)));
     }
     if let Some(top_source) = insights.top_source.as_deref() {
-        parts.push(format!("top source {top_source}"));
+        if let Some(share) = insights.top_source_share_pct {
+            parts.push(format!("top source {top_source} ({share:.1}%)"));
+        } else {
+            parts.push(format!("top source {top_source}"));
+        }
+    }
+    if let Some(top_model) = insights.top_model.as_deref() {
+        if let Some(share) = insights.top_model_share_pct {
+            parts.push(format!("top model {top_model} ({share:.1}%)"));
+        } else {
+            parts.push(format!("top model {top_model}"));
+        }
+    }
+    if let Some(avg) = insights.avg_tokens_per_active_day {
+        parts.push(format!("avg {} tok/active day", format_u64(avg)));
+    }
+    if let Some(avg) = insights.avg_cost_per_active_day {
+        parts.push(format!("avg {}/active day", format_usd(avg)));
+    }
+    if let Some(streak) = insights.current_streak_days {
+        parts.push(format!("streak {}d", streak));
     }
     if let Some(peak) = insights.peak_period.as_ref() {
         parts.push(format!(
@@ -296,6 +316,15 @@ fn print_report_insights(insights: &ReportInsights) {
             peak.date,
             format_u64(peak.total_tokens),
             format_usd(peak.cost_usd)
+        ));
+    }
+    if !insights.spikes.is_empty() {
+        let spike = &insights.spikes[0];
+        parts.push(format!(
+            "spike {} ({} tok; med {})",
+            spike.date,
+            format_u64(spike.total_tokens),
+            format_u64(spike.baseline_median)
         ));
     }
 
