@@ -3,10 +3,12 @@ use super::official::{
     extract_flag_value, normalize_official_used_percent, parse_antigravity_command_model_configs,
     parse_antigravity_reset_time, parse_antigravity_user_status, select_antigravity_models,
 };
-use super::parsing::dedupe_opencode_events;
+use super::parsing::{dedupe_opencode_events, hydrate_cached_events};
 use super::statusline::active_block_summary_for_bounds;
 use super::*;
 use chrono::TimeZone;
+use crate::types::ParseStatsAtomic;
+use std::path::PathBuf;
 
 fn utc_dt(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
@@ -366,4 +368,56 @@ fn opencode_dedupe_falls_back_to_signature_without_msg_id() {
 
     dedupe_opencode_events(&mut events);
     assert_eq!(events.len(), 2);
+}
+
+#[test]
+fn hydrate_cached_events_prefers_cached_metadata_over_file_fallback() {
+    let ts = utc_dt(2026, 4, 10, 9, 30, 0);
+    let file = DiscoveredFile {
+        source: SourceKind::OpenCode,
+        root: PathBuf::from("C:/Users/me/.local/share/opencode"),
+        path: PathBuf::from("C:/Users/me/.local/share/opencode/storage/message/s1/msg_abc.json"),
+    };
+    let cached = CachedFileEntry {
+        fingerprint: FileFingerprint {
+            size: 100,
+            modified_unix_secs: 1,
+            modified_unix_nanos: 0,
+        },
+        stats: CachedFileStats::default(),
+        events: vec![CachedUsageEvent {
+            timestamp: ts,
+            model: "gpt-5".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: 12,
+                output_tokens: 4,
+                ..UsageAccumulator::default()
+            },
+            session: Some("cached-session".to_string()),
+            project: Some("cached-project".to_string()),
+            file_path: Some("opencode.db#msg_abc".to_string()),
+        }],
+        parsed_offset: 100,
+        codex_last_model: None,
+        codex_last_totals: None,
+        claude_recent_keys: Vec::new(),
+    };
+
+    let stats = ParseStatsAtomic::default();
+    let events = hydrate_cached_events(
+        &file,
+        &cached,
+        DateFilter {
+            since: None,
+            until: None,
+        },
+        &TimeZoneMode::Utc,
+        &stats,
+    );
+
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.session, "cached-session");
+    assert_eq!(event.project.as_deref(), Some("cached-project"));
+    assert_eq!(event.file_path, "opencode.db#msg_abc");
 }

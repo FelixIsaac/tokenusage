@@ -283,6 +283,12 @@ Spike and anomaly entries include top source/model attribution, and when availab
 
 Yes for usage logs: parsing is local. `tu` only requests pricing metadata unless you run `--offline`.
 
+### Why did historical tokens drop after a machine cleanup?
+
+`tu` only counts what still exists in local provider logs. If old session files were deleted/rotated by the provider, OS cleanup, or storage migration, past token totals can drop and cannot be reconstructed exactly from pricing/cache data alone.
+
+Use `tu doctor --json` to verify current discovered roots/files. Keep periodic backups of provider log dirs (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, OpenCode data dir) if long-term parity matters.
+
 ## Command Overview
 
 ```text

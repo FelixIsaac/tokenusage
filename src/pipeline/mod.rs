@@ -565,7 +565,7 @@ const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".venv",
     "venv",
 ];
-const INCREMENTAL_CACHE_VERSION: u32 = 3;
+const INCREMENTAL_CACHE_VERSION: u32 = 4;
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_PRICING_CACHE_VERSION: u32 = 1;
 const OPENROUTER_PRICING_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
@@ -647,6 +647,12 @@ struct CachedUsageEvent {
     timestamp: DateTime<Utc>,
     model: String,
     usage: UsageAccumulator,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

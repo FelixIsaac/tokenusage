@@ -929,21 +929,17 @@ pub(super) fn parse_single_file(
             lines_unknown_pricing += 1;
         }
 
-        cached_events.push(CachedUsageEvent {
-            timestamp: parsed.event.timestamp,
-            model: parsed.event.model.clone(),
-            usage: parsed.event.usage,
-        });
+        parsed.event.session = session.clone();
+        parsed.event.project = project.clone();
+        parsed.event.file_path = file_path.clone();
+
+        cached_events.push(cached_usage_event(&parsed.event));
 
         let day = local_date(parsed.event.timestamp, timezone);
         if !filter.allows(day) {
             lines_filtered += 1;
             continue;
         }
-
-        parsed.event.session = session.clone();
-        parsed.event.project = project.clone();
-        parsed.event.file_path = file_path.clone();
 
         local_events.push(parsed.event);
         lines_parsed += 1;
@@ -1557,11 +1553,7 @@ fn parse_opencode_message_file(
                 lines_missing_usage: 0,
                 lines_unknown_pricing: if used_unknown_pricing { 1 } else { 0 },
             },
-            events: vec![CachedUsageEvent {
-                timestamp: event.timestamp,
-                model: event.model.clone(),
-                usage: event.usage,
-            }],
+            events: vec![cached_usage_event(&event)],
             parsed_offset: job.fingerprint.size,
             codex_last_model: None,
             codex_last_totals: None,
@@ -1620,6 +1612,9 @@ fn parse_opencode_db_file(
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI,
     )
+    .map_err(|_| {
+        stats.files_open_failed.fetch_add(1, Ordering::Relaxed);
+    })
     .ok()?;
 
     let mut events = Vec::new();
@@ -1766,11 +1761,7 @@ fn parse_opencode_db_file(
             file_path: format!("{}#{}", path.display(), message_id),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
-        cached_events.push(CachedUsageEvent {
-            timestamp: event.timestamp,
-            model: event.model.clone(),
-            usage: event.usage,
-        });
+        cached_events.push(cached_usage_event(&event));
         events.push(event);
         lines_parsed += 1;
     }
@@ -2239,9 +2230,15 @@ pub(super) fn hydrate_cached_events(
             timestamp: cached_event.timestamp,
             source: file.source,
             model: cached_event.model.clone(),
-            session: session.clone(),
-            project: project.clone(),
-            file_path: file_path.clone(),
+            session: cached_event
+                .session
+                .clone()
+                .unwrap_or_else(|| session.clone()),
+            project: cached_event.project.clone().or_else(|| project.clone()),
+            file_path: cached_event
+                .file_path
+                .clone()
+                .unwrap_or_else(|| file_path.clone()),
             usage: cached_event.usage,
         });
     }
@@ -2250,6 +2247,17 @@ pub(super) fn hydrate_cached_events(
     stats.lines_parsed.fetch_add(parsed, Ordering::Relaxed);
 
     events
+}
+
+fn cached_usage_event(event: &UsageEvent) -> CachedUsageEvent {
+    CachedUsageEvent {
+        timestamp: event.timestamp,
+        model: event.model.clone(),
+        usage: event.usage,
+        session: Some(event.session.clone()),
+        project: event.project.clone(),
+        file_path: Some(event.file_path.clone()),
+    }
 }
 
 pub(super) fn pricing_cache_key(pricing: &PricingTable) -> String {
