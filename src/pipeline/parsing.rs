@@ -595,6 +595,13 @@ pub(super) fn discover_files_in_root(
         .follow_links(false)
         // keep hidden entries visible because source roots often start with '.'
         .hidden(false)
+        // source roots may live inside git repos with .gitignore rules that
+        // exclude log files (e.g. ~/.claude has `projects/*/` ignored); always
+        // walk them regardless of ignore files.
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
         .filter_entry(move |entry| entry.depth() == 0 || !rules.should_skip_dir(entry.path()));
 
     for entry in builder.build().filter_map(Result::ok) {
