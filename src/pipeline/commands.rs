@@ -7,7 +7,8 @@ use serde::Serialize;
 use crate::activity::{ActivityDataset, activity_enabled, fetch_activity_dataset};
 #[cfg(feature = "cli")]
 use crate::cli::{
-    ActivityArgs, AntigravityArgs, DailyArgs, MonthlyArgs, SessionArgs, TodayArgs, WeeklyArgs,
+    ActivityArgs, AnthropicApiArgs, AntigravityArgs, DailyArgs, DeepseekArgs, GrokArgs, KimiArgs,
+    MonthlyArgs, OpenrouterArgs, SessionArgs, TodayArgs, WeeklyArgs,
 };
 use crate::cli::{CommonArgs, SortOrder};
 #[cfg(feature = "cli")]
@@ -17,7 +18,11 @@ use crate::types::{ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCoun
 #[cfg(feature = "cli")]
 use super::activity_report::*;
 #[cfg(feature = "cli")]
-use super::official::{fetch_antigravity_official_limits, select_antigravity_models};
+use super::official::{
+    fetch_anthropic_api_limits, fetch_antigravity_official_limits, fetch_deepseek_official_limits,
+    fetch_grok_official_limits, fetch_kimi_official_limits, fetch_openrouter_account_limits,
+    select_antigravity_models,
+};
 use super::parsing::{build_sources, discover_files, load_pricing, load_usage};
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
@@ -1160,4 +1165,144 @@ pub async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot>
         stats: loaded.stats,
         timezone,
     })
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_deepseek(args: DeepseekArgs) -> Result<()> {
+    let snapshot = fetch_deepseek_official_limits()
+        .await
+        .context("Failed to query DeepSeek balance API")?;
+    if args.json {
+        emit_json(&snapshot, None)?;
+        return Ok(());
+    }
+    if !snapshot.is_available {
+        println!("DeepSeek  balance=unavailable");
+        return Ok(());
+    }
+    let currency = snapshot.currency.as_deref().unwrap_or("USD");
+    let total = snapshot.total_balance.unwrap_or(0.0);
+    let granted = snapshot.granted_balance.unwrap_or(0.0);
+    let topped_up = snapshot.topped_up_balance.unwrap_or(0.0);
+    println!("DeepSeek");
+    println!();
+    println!("  balance        {total:.4} {currency}");
+    println!("  granted        {granted:.4} {currency}");
+    println!("  topped-up      {topped_up:.4} {currency}");
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_openrouter(args: OpenrouterArgs) -> Result<()> {
+    let snapshot = fetch_openrouter_account_limits()
+        .await
+        .context("Failed to query OpenRouter account API")?;
+    if args.json {
+        emit_json(&snapshot, None)?;
+        return Ok(());
+    }
+    let label = snapshot.label.as_deref().unwrap_or("(no label)");
+    println!("OpenRouter  key={label}");
+    println!();
+    let tier = if snapshot.is_free_tier {
+        "free"
+    } else {
+        "paid"
+    };
+    println!("  tier           {tier}");
+    if let Some(used) = snapshot.credits_used {
+        println!("  credits used   ${used:.4}");
+    }
+    if let Some(limit) = snapshot.credits_limit {
+        println!("  credits limit  ${limit:.4}");
+    }
+    if let Some(pct) = snapshot.used_percent {
+        let bar = quota_bar(100.0 - pct);
+        println!("  {bar}  {pct:.1}% used");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_grok(args: GrokArgs) -> Result<()> {
+    let snapshot = fetch_grok_official_limits()
+        .await
+        .context("Failed to query Grok billing API")?;
+    if args.json {
+        emit_json(&snapshot, None)?;
+        return Ok(());
+    }
+    let currency = snapshot.currency.as_deref().unwrap_or("USD");
+    println!("Grok (xAI)");
+    println!();
+    if let Some(granted) = snapshot.total_granted {
+        println!("  total granted  {granted:.4} {currency}");
+    }
+    if let Some(used) = snapshot.total_used {
+        println!("  total used     {used:.4} {currency}");
+    }
+    if let Some(remaining) = snapshot.total_remaining {
+        println!("  remaining      {remaining:.4} {currency}");
+    }
+    if let Some(pct) = snapshot.used_percent {
+        let bar = quota_bar(100.0 - pct);
+        println!("  {bar}  {pct:.1}% used");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_kimi(args: KimiArgs) -> Result<()> {
+    let snapshot = fetch_kimi_official_limits()
+        .await
+        .context("Failed to query Kimi balance API")?;
+    if args.json {
+        emit_json(&snapshot, None)?;
+        return Ok(());
+    }
+    let currency = snapshot.currency.as_deref().unwrap_or("CNY");
+    println!("Kimi (Moonshot AI)");
+    println!();
+    if let Some(avail) = snapshot.available_balance {
+        println!("  available      {avail:.4} {currency}");
+    }
+    if let Some(voucher) = snapshot.voucher_balance {
+        println!("  voucher        {voucher:.4} {currency}");
+    }
+    if let Some(cash) = snapshot.cash_balance {
+        println!("  cash           {cash:.4} {currency}");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_anthropic_api(args: AnthropicApiArgs) -> Result<()> {
+    let snapshot = fetch_anthropic_api_limits()
+        .await
+        .context("Failed to query Anthropic API usage")?;
+    if args.json {
+        emit_json(&snapshot, None)?;
+        return Ok(());
+    }
+    println!("Anthropic API  (today)");
+    println!();
+    let key_label = if std::env::var("ANTHROPIC_ADMIN_KEY").is_ok() {
+        "admin key"
+    } else {
+        "standard key"
+    };
+    println!("  auth           {key_label}");
+    if let Some(input) = snapshot.input_tokens_today {
+        println!("  input tokens   {input}");
+    }
+    if let Some(output) = snapshot.output_tokens_today {
+        println!("  output tokens  {output}");
+    }
+    if let Some(cache) = snapshot.cache_read_tokens_today {
+        println!("  cache read     {cache}");
+    }
+    if let Some(cost) = snapshot.cost_usd_today {
+        println!("  cost today     ${cost:.4} USD");
+    }
+    Ok(())
 }

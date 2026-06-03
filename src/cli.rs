@@ -312,6 +312,18 @@ pub(crate) enum Commands {
     #[command(about = "Compare tu totals against ccusage provider output")]
     Parity(ParityArgs),
     Antigravity(AntigravityArgs),
+    #[command(about = "Show DeepSeek API credit balance (requires DEEPSEEK_API_KEY)")]
+    Deepseek(DeepseekArgs),
+    #[command(about = "Show OpenRouter API credit balance (requires OPENROUTER_API_KEY)")]
+    Openrouter(OpenrouterArgs),
+    #[command(about = "Show Grok (xAI) credit balance (requires XAI_API_KEY)")]
+    Grok(GrokArgs),
+    #[command(about = "Show Kimi (Moonshot) credit balance (requires MOONSHOT_API_KEY)")]
+    Kimi(KimiArgs),
+    #[command(
+        about = "Show Anthropic API usage today (requires ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY)"
+    )]
+    AnthropicApi(AnthropicApiArgs),
     Monthly(MonthlyArgs),
     #[command(alias = "week")]
     Weekly(WeeklyArgs),
@@ -478,6 +490,41 @@ pub(crate) struct AntigravityArgs {
     pub(crate) timezone: Option<String>,
     #[arg(long, help = "Path to config JSON")]
     pub(crate) config: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct DeepseekArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct OpenrouterArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct GrokArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct KimiArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct AnthropicApiArgs {
+    #[arg(long, short = 'j', help = "Output JSON report")]
+    pub(crate) json: bool,
 }
 
 #[cfg(feature = "cli")]

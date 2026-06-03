@@ -266,6 +266,11 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             Commands::Doctor(args)
         }
         Commands::Antigravity(args) => Commands::Antigravity(args),
+        Commands::Deepseek(args) => Commands::Deepseek(args),
+        Commands::Openrouter(args) => Commands::Openrouter(args),
+        Commands::Grok(args) => Commands::Grok(args),
+        Commands::Kimi(args) => Commands::Kimi(args),
+        Commands::AnthropicApi(args) => Commands::AnthropicApi(args),
         Commands::Monthly(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(monthly_cfg) = config.commands.as_ref().and_then(|c| c.monthly.as_ref()) {
@@ -354,6 +359,11 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Heartbeat(_) => None,
         Commands::Doctor(args) => args.common.config.as_deref(),
         Commands::Antigravity(args) => args.config.as_deref(),
+        Commands::Deepseek(_) => None,
+        Commands::Openrouter(_) => None,
+        Commands::Grok(_) => None,
+        Commands::Kimi(_) => None,
+        Commands::AnthropicApi(_) => None,
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),

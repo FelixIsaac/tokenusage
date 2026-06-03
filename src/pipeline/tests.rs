@@ -421,3 +421,26 @@ fn hydrate_cached_events_prefers_cached_metadata_over_file_fallback() {
     assert_eq!(event.project.as_deref(), Some("cached-project"));
     assert_eq!(event.file_path, "opencode.db#msg_abc");
 }
+
+#[test]
+fn test_deepseek_parse() {
+    let mock = r#"{
+        "is_available": true,
+        "balance_infos": [{"currency":"USD","total_balance":"24.50","granted_balance":"5.00","topped_up_balance":"19.50"}]
+    }"#;
+    let body: serde_json::Value = serde_json::from_str(mock).unwrap();
+    let infos = body.get("balance_infos").and_then(|v| v.as_array());
+    let first = infos.and_then(|arr| arr.first()).unwrap();
+    let total = first.get("total_balance").unwrap().as_str().unwrap().parse::<f64>().unwrap();
+    assert!((total - 24.50).abs() < 0.001);
+}
+
+#[test]
+fn test_openrouter_parse() {
+    let mock = r#"{"data":{"label":"My Key","usage":1.50,"limit":10.00,"is_free_tier":false}}"#;
+    let body: serde_json::Value = serde_json::from_str(mock).unwrap();
+    let data = body.get("data").unwrap();
+    let pct = data["usage"].as_f64().unwrap() / data["limit"].as_f64().unwrap() * 100.0;
+    assert!((pct - 15.0).abs() < 0.001);
+}
+

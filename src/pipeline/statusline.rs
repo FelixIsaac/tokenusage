@@ -57,15 +57,15 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
 
     let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
     let block_summary = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
-    let (official_codex, official_claude, official_antigravity) = if args.official_limits {
-        let (codex, claude, antigravity, errors) =
+    let (official_codex, official_claude, official_antigravity, _, _, _, _, _) = if args.official_limits {
+        let (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic, errors) =
             fetch_selected_official_limits(&args.common).await;
         for error in errors {
             eprintln!("{error}");
         }
-        (codex, claude, antigravity)
+        (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic)
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None, None, None)
     };
     let line = build_statusline_line(
         &args,

@@ -628,6 +628,11 @@ pub(super) struct LiveFrameCache {
     pub(super) official_codex: Option<OfficialCodexSnapshot>,
     pub(super) official_claude: Option<OfficialClaudeSnapshot>,
     pub(super) official_antigravity: Option<OfficialAntigravitySnapshot>,
+    pub(super) official_deepseek: Option<OfficialDeepSeekSnapshot>,
+    pub(super) official_openrouter: Option<OfficialOpenRouterSnapshot>,
+    pub(super) official_grok: Option<OfficialGrokSnapshot>,
+    pub(super) official_kimi: Option<OfficialKimiSnapshot>,
+    pub(super) official_anthropic_api: Option<OfficialAnthropicApiSnapshot>,
 }
 
 pub(super) fn live_frame_cache_path() -> Option<PathBuf> {
@@ -2254,5 +2259,328 @@ pub(super) fn rpc_envelope_id(envelope: &RpcEnvelope) -> Option<i64> {
         } else {
             id.as_u64().map(|v| v as i64)
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// DeepSeek API — credit balance probe.
+// Reads DEEPSEEK_API_KEY from env and hits /user/balance.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct OfficialDeepSeekSnapshot {
+    pub is_available: bool,
+    pub currency: Option<String>,
+    pub total_balance: Option<f64>,
+    pub granted_balance: Option<f64>,
+    pub topped_up_balance: Option<f64>,
+}
+
+pub(super) async fn fetch_deepseek_official_limits() -> Result<OfficialDeepSeekSnapshot> {
+    let api_key = std::env::var("DEEPSEEK_API_KEY")
+        .context("DEEPSEEK_API_KEY environment variable not set")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("failed to build HTTP client for DeepSeek")?;
+    let response = client
+        .get("https://api.deepseek.com/user/balance")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .context("DeepSeek balance request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("DeepSeek balance API returned {status}: {body}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("Invalid DeepSeek response JSON")?;
+    let is_available = body
+        .get("is_available")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let infos = body.get("balance_infos").and_then(|v| v.as_array());
+    let first = infos.and_then(|arr| arr.first());
+    let parse_balance = |key: &str| -> Option<f64> {
+        first?
+            .get(key)
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+    };
+    Ok(OfficialDeepSeekSnapshot {
+        is_available,
+        currency: first
+            .and_then(|o| o.get("currency"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        total_balance: parse_balance("total_balance"),
+        granted_balance: parse_balance("granted_balance"),
+        topped_up_balance: parse_balance("topped_up_balance"),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// OpenRouter — API credit balance probe.
+// Reads OPENROUTER_API_KEY from env and hits /api/v1/auth/key.
+// Note: OpenRouter model pricing is already used for token cost calculation.
+// This adds account credit balance tracking on top.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct OfficialOpenRouterSnapshot {
+    pub label: Option<String>,
+    pub credits_used: Option<f64>,
+    pub credits_limit: Option<f64>,
+    pub used_percent: Option<f64>,
+    pub is_free_tier: bool,
+}
+
+pub(super) async fn fetch_openrouter_account_limits() -> Result<OfficialOpenRouterSnapshot> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("OPENROUTER_API_KEY environment variable not set")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("failed to build HTTP client for OpenRouter")?;
+    let response = client
+        .get("https://openrouter.ai/api/v1/auth/key")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .context("OpenRouter key info request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("OpenRouter API returned {status}: {body}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("Invalid OpenRouter response JSON")?;
+    let data = body
+        .get("data")
+        .context("missing 'data' field in OpenRouter /auth/key response")?;
+    let used = data.get("usage").and_then(|v| v.as_f64());
+    let limit = data.get("limit").and_then(|v| v.as_f64());
+    let used_percent = used.zip(limit).and_then(|(u, l)| {
+        if l > 0.0 {
+            Some((u / l * 100.0).clamp(0.0, 100.0))
+        } else {
+            None
+        }
+    });
+    Ok(OfficialOpenRouterSnapshot {
+        label: data
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        credits_used: used,
+        credits_limit: limit,
+        used_percent,
+        is_free_tier: data
+            .get("is_free_tier")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Grok (xAI) — credit balance probe.
+// Reads XAI_API_KEY from env and hits /v1/dashboard/billing/credit_grants.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct OfficialGrokSnapshot {
+    pub total_granted: Option<f64>,
+    pub total_used: Option<f64>,
+    pub total_remaining: Option<f64>,
+    pub used_percent: Option<f64>,
+    pub currency: Option<String>,
+}
+
+pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot> {
+    let api_key = std::env::var("XAI_API_KEY")
+        .context("XAI_API_KEY environment variable not set")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("failed to build HTTP client for Grok")?;
+    let response = client
+        .get("https://api.x.ai/v1/dashboard/billing/credit_grants")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .context("Grok billing request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Grok billing API returned {status}: {body}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("Invalid Grok response JSON")?;
+    let total_granted = body
+        .get("total_granted_credits")
+        .and_then(|v| v.as_f64());
+    let total_used = body.get("total_used_credits").and_then(|v| v.as_f64());
+    let total_remaining = body
+        .get("total_remaining_credits")
+        .and_then(|v| v.as_f64());
+    let used_percent = total_used.zip(total_granted).and_then(|(u, g)| {
+        if g > 0.0 {
+            Some((u / g * 100.0).clamp(0.0, 100.0))
+        } else {
+            None
+        }
+    });
+    Ok(OfficialGrokSnapshot {
+        total_granted,
+        total_used,
+        total_remaining,
+        used_percent,
+        currency: Some("USD".to_string()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Kimi (Moonshot AI) — credit balance probe.
+// Reads MOONSHOT_API_KEY from env and hits /v1/users/me/balance.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct OfficialKimiSnapshot {
+    pub available_balance: Option<f64>,
+    pub voucher_balance: Option<f64>,
+    pub cash_balance: Option<f64>,
+    pub currency: Option<String>,
+}
+
+pub(super) async fn fetch_kimi_official_limits() -> Result<OfficialKimiSnapshot> {
+    let api_key = std::env::var("MOONSHOT_API_KEY")
+        .context("MOONSHOT_API_KEY environment variable not set")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("failed to build HTTP client for Kimi")?;
+    let response = client
+        .get("https://api.moonshot.cn/v1/users/me/balance")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .context("Kimi balance request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Kimi balance API returned {status}: {body}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("Invalid Kimi response JSON")?;
+    // Response: {"data":{"available_balance":100.0,"voucher_balance":20.0,"cash_balance":80.0}}
+    let data = body.get("data").unwrap_or(&body);
+    Ok(OfficialKimiSnapshot {
+        available_balance: data
+            .get("available_balance")
+            .and_then(|v| v.as_f64()),
+        voucher_balance: data.get("voucher_balance").and_then(|v| v.as_f64()),
+        cash_balance: data.get("cash_balance").and_then(|v| v.as_f64()),
+        currency: Some("CNY".to_string()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic Developer API — usage probe.
+// Distinct from the Claude consumer OAuth (already supported in this file).
+// Reads ANTHROPIC_API_KEY from env and hits the organization usage endpoint.
+// Note: Full cost reports require an ANTHROPIC_ADMIN_KEY (sk-ant-admin...).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct OfficialAnthropicApiSnapshot {
+    pub input_tokens_today: Option<u64>,
+    pub output_tokens_today: Option<u64>,
+    pub cache_read_tokens_today: Option<u64>,
+    pub cost_usd_today: Option<f64>,
+}
+
+pub(super) async fn fetch_anthropic_api_limits() -> Result<OfficialAnthropicApiSnapshot> {
+    // Prefer admin key for org-level cost reports; fall back to standard key.
+    let api_key = std::env::var("ANTHROPIC_ADMIN_KEY")
+        .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+        .context("ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY environment variable not set")?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .context("failed to build HTTP client for Anthropic API")?;
+    let response = client
+        .get("https://api.anthropic.com/v1/organizations/usage")
+        .query(&[("start_date", today.as_str()), ("end_date", today.as_str())])
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .context("Anthropic API usage request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Anthropic usage API returned {status}: {body}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("Invalid Anthropic usage response JSON")?;
+    // Sum up across all models in the response data array.
+    let mut input_tokens: u64 = 0;
+    let mut output_tokens: u64 = 0;
+    let mut cache_read_tokens: u64 = 0;
+    let mut cost_usd: f64 = 0.0;
+    if let Some(data) = body.get("data").and_then(|v| v.as_array()) {
+        for entry in data {
+            input_tokens += entry
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            output_tokens += entry
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            cache_read_tokens += entry
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            cost_usd += entry
+                .get("cost_usd")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+        }
+    }
+    Ok(OfficialAnthropicApiSnapshot {
+        input_tokens_today: if input_tokens > 0 {
+            Some(input_tokens)
+        } else {
+            None
+        },
+        output_tokens_today: if output_tokens > 0 {
+            Some(output_tokens)
+        } else {
+            None
+        },
+        cache_read_tokens_today: if cache_read_tokens > 0 {
+            Some(cache_read_tokens)
+        } else {
+            None
+        },
+        cost_usd_today: if cost_usd > 0.0 { Some(cost_usd) } else { None },
     })
 }

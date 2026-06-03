@@ -22,6 +22,11 @@ pub(super) fn build_block_json_report(
         official_codex,
         official_claude,
         official_antigravity,
+        official_deepseek,
+        official_openrouter,
+        official_grok,
+        official_kimi,
+        official_anthropic_api,
         now,
     } = options;
     let mut grouped: HashMap<i64, GroupAggregate> = HashMap::new();
@@ -98,5 +103,10 @@ pub(super) fn build_block_json_report(
         official_codex,
         official_claude,
         official_antigravity,
+        official_deepseek,
+        official_openrouter,
+        official_grok,
+        official_kimi,
+        official_anthropic_api,
     }
 }

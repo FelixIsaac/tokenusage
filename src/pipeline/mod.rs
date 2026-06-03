@@ -28,8 +28,8 @@ pub use commands::{collect_report, collect_usage_snapshot};
 // Re-exports: crate-internal (CLI commands)
 #[cfg(feature = "cli")]
 pub(crate) use commands::{
-    run_activity, run_antigravity, run_daily, run_doctor, run_monthly, run_session, run_today,
-    run_weekly,
+    run_activity, run_anthropic_api, run_antigravity, run_daily, run_deepseek, run_doctor,
+    run_grok, run_kimi, run_monthly, run_openrouter, run_session, run_today, run_weekly,
 };
 #[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
@@ -279,6 +279,11 @@ struct BlockJsonReport {
     official_codex: Option<OfficialCodexSnapshot>,
     official_claude: Option<OfficialClaudeSnapshot>,
     official_antigravity: Option<OfficialAntigravitySnapshot>,
+    official_deepseek: Option<official::OfficialDeepSeekSnapshot>,
+    official_openrouter: Option<official::OfficialOpenRouterSnapshot>,
+    official_grok: Option<official::OfficialGrokSnapshot>,
+    official_kimi: Option<official::OfficialKimiSnapshot>,
+    official_anthropic_api: Option<official::OfficialAnthropicApiSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -293,6 +298,11 @@ struct BlockReportBuildOptions {
     official_codex: Option<OfficialCodexSnapshot>,
     official_claude: Option<OfficialClaudeSnapshot>,
     official_antigravity: Option<OfficialAntigravitySnapshot>,
+    official_deepseek: Option<official::OfficialDeepSeekSnapshot>,
+    official_openrouter: Option<official::OfficialOpenRouterSnapshot>,
+    official_grok: Option<official::OfficialGrokSnapshot>,
+    official_kimi: Option<official::OfficialKimiSnapshot>,
+    official_anthropic_api: Option<official::OfficialAnthropicApiSnapshot>,
     now: DateTime<Utc>,
 }
 
@@ -409,6 +419,11 @@ enum LiveTab {
     Gemini,
     OpenCode,
     Antigravity,
+    DeepSeek,
+    OpenRouter,
+    Grok,
+    Kimi,
+    AnthropicApi,
 }
 
 const ALL_LIVE_TABS: &[LiveTab] = &[
@@ -418,6 +433,11 @@ const ALL_LIVE_TABS: &[LiveTab] = &[
     LiveTab::Gemini,
     LiveTab::OpenCode,
     LiveTab::Antigravity,
+    LiveTab::DeepSeek,
+    LiveTab::OpenRouter,
+    LiveTab::Grok,
+    LiveTab::Kimi,
+    LiveTab::AnthropicApi,
 ];
 
 impl LiveTab {
@@ -429,6 +449,11 @@ impl LiveTab {
             LiveTab::Gemini => "Gemini",
             LiveTab::OpenCode => "OpenCode",
             LiveTab::Antigravity => "Antigravity",
+            LiveTab::DeepSeek => "DeepSeek",
+            LiveTab::OpenRouter => "OpenRouter",
+            LiveTab::Grok => "Grok",
+            LiveTab::Kimi => "Kimi",
+            LiveTab::AnthropicApi => "AnthropicApi",
         }
     }
 
@@ -462,6 +487,11 @@ struct LiveFrameContext<'a> {
     official_codex: Option<&'a OfficialCodexSnapshot>,
     official_claude: Option<&'a OfficialClaudeSnapshot>,
     official_antigravity: Option<&'a OfficialAntigravitySnapshot>,
+    official_deepseek: Option<&'a official::OfficialDeepSeekSnapshot>,
+    official_openrouter: Option<&'a official::OfficialOpenRouterSnapshot>,
+    official_grok: Option<&'a official::OfficialGrokSnapshot>,
+    official_kimi: Option<&'a official::OfficialKimiSnapshot>,
+    official_anthropic_api: Option<&'a official::OfficialAnthropicApiSnapshot>,
     selected_source: Option<SourceKind>,
     today_totals: TokenCounts,
     last_30d_totals: TokenCounts,
@@ -483,6 +513,11 @@ impl<'a> LiveFrameContext<'a> {
         official_codex: Option<&'a OfficialCodexSnapshot>,
         official_claude: Option<&'a OfficialClaudeSnapshot>,
         official_antigravity: Option<&'a OfficialAntigravitySnapshot>,
+        official_deepseek: Option<&'a official::OfficialDeepSeekSnapshot>,
+        official_openrouter: Option<&'a official::OfficialOpenRouterSnapshot>,
+        official_grok: Option<&'a official::OfficialGrokSnapshot>,
+        official_kimi: Option<&'a official::OfficialKimiSnapshot>,
+        official_anthropic_api: Option<&'a official::OfficialAnthropicApiSnapshot>,
         selected_source: Option<SourceKind>,
         today_totals: TokenCounts,
         last_30d_totals: TokenCounts,
@@ -510,6 +545,11 @@ impl<'a> LiveFrameContext<'a> {
             official_codex,
             official_claude,
             official_antigravity,
+            official_deepseek,
+            official_openrouter,
+            official_grok,
+            official_kimi,
+            official_anthropic_api,
             selected_source,
             today_totals,
             last_30d_totals,

@@ -54,18 +54,50 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     }
     // For live mode, skip blocking initial fetch — go straight to TUI and fetch in background.
     if args.live {
-        return run_blocks_live(&args, &tz, window_secs, token_limit_mode, None, None, None).await;
+        return run_blocks_live(
+            &args,
+            &tz,
+            window_secs,
+            token_limit_mode,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
     }
 
-    let (official_codex, official_claude, official_antigravity) = if args.official_limits {
-        let (codex, claude, antigravity, errors) =
+    let (
+        official_codex,
+        official_claude,
+        official_antigravity,
+        official_deepseek,
+        official_openrouter,
+        official_grok,
+        official_kimi,
+        official_anthropic_api,
+    ) = if args.official_limits {
+        let (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic, errors) =
             fetch_selected_official_limits(&args.common).await;
         for error in errors {
             eprintln!("{error}");
         }
-        (codex, claude, antigravity)
+        (
+            codex,
+            claude,
+            antigravity,
+            deepseek,
+            openrouter,
+            grok,
+            kimi,
+            anthropic,
+        )
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None, None, None)
     };
 
     let loaded = load_usage(&args.common, &tz).await?;
@@ -93,6 +125,11 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             official_codex: official_codex.clone(),
             official_claude: official_claude.clone(),
             official_antigravity: official_antigravity.clone(),
+            official_deepseek: official_deepseek.clone(),
+            official_openrouter: official_openrouter.clone(),
+            official_grok: official_grok.clone(),
+            official_kimi: official_kimi.clone(),
+            official_anthropic_api: official_anthropic_api.clone(),
             now,
         },
     );
@@ -147,12 +184,33 @@ pub(super) async fn fetch_selected_official_limits(
     Option<OfficialCodexSnapshot>,
     Option<OfficialClaudeSnapshot>,
     Option<OfficialAntigravitySnapshot>,
+    Option<OfficialDeepSeekSnapshot>,
+    Option<OfficialOpenRouterSnapshot>,
+    Option<OfficialGrokSnapshot>,
+    Option<OfficialKimiSnapshot>,
+    Option<OfficialAnthropicApiSnapshot>,
     Vec<String>,
 ) {
     let codex_enabled = !common.no_codex;
     let claude_enabled = !common.no_claude;
     let antigravity_enabled = !common.no_antigravity;
-    let (codex_result, claude_result, antigravity_result) = tokio::join!(
+    let deepseek_enabled = std::env::var("DEEPSEEK_API_KEY").is_ok();
+    let openrouter_enabled = std::env::var("OPENROUTER_API_KEY").is_ok();
+    let grok_enabled = std::env::var("XAI_API_KEY").is_ok();
+    let kimi_enabled = std::env::var("MOONSHOT_API_KEY").is_ok();
+    let anthropic_api_enabled =
+        std::env::var("ANTHROPIC_API_KEY").is_ok() || std::env::var("ANTHROPIC_ADMIN_KEY").is_ok();
+
+    let (
+        codex_result,
+        claude_result,
+        antigravity_result,
+        deepseek_result,
+        openrouter_result,
+        grok_result,
+        kimi_result,
+        anthropic_result,
+    ) = tokio::join!(
         async {
             if codex_enabled {
                 Some(fetch_codex_official_limits().await)
@@ -170,6 +228,41 @@ pub(super) async fn fetch_selected_official_limits(
         async {
             if antigravity_enabled {
                 Some(fetch_antigravity_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if deepseek_enabled {
+                Some(fetch_deepseek_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if openrouter_enabled {
+                Some(fetch_openrouter_account_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if grok_enabled {
+                Some(fetch_grok_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if kimi_enabled {
+                Some(fetch_kimi_official_limits().await)
+            } else {
+                None
+            }
+        },
+        async {
+            if anthropic_api_enabled {
+                Some(fetch_anthropic_api_limits().await)
             } else {
                 None
             }
@@ -202,7 +295,62 @@ pub(super) async fn fetch_selected_official_limits(
         None => None,
     };
 
-    (codex, claude, antigravity, errors)
+    let deepseek = match deepseek_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch DeepSeek limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    let openrouter = match openrouter_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch OpenRouter limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    let grok = match grok_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch Grok limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    let kimi = match kimi_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch Kimi limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    let anthropic = match anthropic_result {
+        Some(Ok(snapshot)) => Some(snapshot),
+        Some(Err(error)) => {
+            errors.push(format!("official: failed to fetch Anthropic API limits ({error})"));
+            None
+        }
+        None => None,
+    };
+
+    (
+        codex,
+        claude,
+        antigravity,
+        deepseek,
+        openrouter,
+        grok,
+        kimi,
+        anthropic,
+        errors,
+    )
 }
 
 pub(super) async fn run_blocks_live(
@@ -213,6 +361,11 @@ pub(super) async fn run_blocks_live(
     mut official_codex: Option<OfficialCodexSnapshot>,
     mut official_claude: Option<OfficialClaudeSnapshot>,
     mut official_antigravity: Option<OfficialAntigravitySnapshot>,
+    mut official_deepseek: Option<OfficialDeepSeekSnapshot>,
+    mut official_openrouter: Option<OfficialOpenRouterSnapshot>,
+    mut official_grok: Option<OfficialGrokSnapshot>,
+    mut official_kimi: Option<OfficialKimiSnapshot>,
+    mut official_anthropic_api: Option<OfficialAnthropicApiSnapshot>,
 ) -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("--live requires an interactive terminal");
@@ -272,6 +425,31 @@ pub(super) async fn run_blocks_live(
                 official_antigravity = c.official_antigravity.clone();
             }
         }
+        if official_deepseek.is_none() {
+            if let Some(ref c) = cached {
+                official_deepseek = c.official_deepseek.clone();
+            }
+        }
+        if official_openrouter.is_none() {
+            if let Some(ref c) = cached {
+                official_openrouter = c.official_openrouter.clone();
+            }
+        }
+        if official_grok.is_none() {
+            if let Some(ref c) = cached {
+                official_grok = c.official_grok.clone();
+            }
+        }
+        if official_kimi.is_none() {
+            if let Some(ref c) = cached {
+                official_kimi = c.official_kimi.clone();
+            }
+        }
+        if official_anthropic_api.is_none() {
+            if let Some(ref c) = cached {
+                official_anthropic_api = c.official_anthropic_api.clone();
+            }
+        }
         let skeleton = LiveFrameContext::new(
             now,
             tz,
@@ -285,6 +463,11 @@ pub(super) async fn run_blocks_live(
             official_codex.as_ref(),
             official_claude.as_ref(),
             official_antigravity.as_ref(),
+            official_deepseek.as_ref(),
+            official_openrouter.as_ref(),
+            official_grok.as_ref(),
+            official_kimi.as_ref(),
+            official_anthropic_api.as_ref(),
             None,
             cached_today,
             cached_30d,
@@ -324,6 +507,11 @@ pub(super) async fn run_blocks_live(
             Option<OfficialCodexSnapshot>,
             Option<OfficialClaudeSnapshot>,
             Option<OfficialAntigravitySnapshot>,
+            Option<OfficialDeepSeekSnapshot>,
+            Option<OfficialOpenRouterSnapshot>,
+            Option<OfficialGrokSnapshot>,
+            Option<OfficialKimiSnapshot>,
+            Option<OfficialAnthropicApiSnapshot>,
             Vec<String>,
         )>,
     > = None;
@@ -412,6 +600,11 @@ pub(super) async fn run_blocks_live(
             && (official_codex.is_none()
                 || official_claude.is_none()
                 || official_antigravity.is_none()
+                || official_deepseek.is_none()
+                || official_openrouter.is_none()
+                || official_grok.is_none()
+                || official_kimi.is_none()
+                || official_anthropic_api.is_none()
                 || last_official_refresh.elapsed() >= official_refresh_interval);
         if should_refresh_official {
             let common = args.common.clone();
@@ -424,8 +617,26 @@ pub(super) async fn run_blocks_live(
         if let Some(ref task) = pending_official_task {
             if task.is_finished() {
                 if let Some(task) = pending_official_task.take() {
-                    if let Ok((codex, claude, antigravity, errors)) = task.await {
-                        let any_new = codex.is_some() || claude.is_some() || antigravity.is_some();
+                    if let Ok((
+                        codex,
+                        claude,
+                        antigravity,
+                        deepseek,
+                        openrouter,
+                        grok,
+                        kimi,
+                        anthropic,
+                        errors,
+                    )) = task.await
+                    {
+                        let any_new = codex.is_some()
+                            || claude.is_some()
+                            || antigravity.is_some()
+                            || deepseek.is_some()
+                            || openrouter.is_some()
+                            || grok.is_some()
+                            || kimi.is_some()
+                            || anthropic.is_some();
                         if codex.is_some() {
                             official_codex = codex;
                         }
@@ -434,6 +645,21 @@ pub(super) async fn run_blocks_live(
                         }
                         if antigravity.is_some() {
                             official_antigravity = antigravity;
+                        }
+                        if deepseek.is_some() {
+                            official_deepseek = deepseek;
+                        }
+                        if openrouter.is_some() {
+                            official_openrouter = openrouter;
+                        }
+                        if grok.is_some() {
+                            official_grok = grok;
+                        }
+                        if kimi.is_some() {
+                            official_kimi = kimi;
+                        }
+                        if anthropic.is_some() {
+                            official_anthropic_api = anthropic;
                         }
                         last_official_refresh = Instant::now();
 
@@ -497,6 +723,11 @@ pub(super) async fn run_blocks_live(
             official_codex.as_ref(),
             official_claude.as_ref(),
             official_antigravity.as_ref(),
+            official_deepseek.as_ref(),
+            official_openrouter.as_ref(),
+            official_grok.as_ref(),
+            official_kimi.as_ref(),
+            official_anthropic_api.as_ref(),
             selected_source,
             today_totals,
             last_30d_totals,
@@ -524,6 +755,11 @@ pub(super) async fn run_blocks_live(
             official_codex: official_codex.clone(),
             official_claude: official_claude.clone(),
             official_antigravity: official_antigravity.clone(),
+            official_deepseek: official_deepseek.clone(),
+            official_openrouter: official_openrouter.clone(),
+            official_grok: official_grok.clone(),
+            official_kimi: official_kimi.clone(),
+            official_anthropic_api: official_anthropic_api.clone(),
         });
 
         // Fast inner loop: poll input at ~50ms intervals, re-render on tab switch
@@ -555,10 +791,26 @@ pub(super) async fn run_blocks_live(
                     if let Some(ref task) = pending_official_task {
                         if task.is_finished() {
                             if let Some(task) = pending_official_task.take() {
-                                if let Ok((codex, claude, antigravity, errors)) = task.await {
+                                if let Ok((
+                                    codex,
+                                    claude,
+                                    antigravity,
+                                    deepseek,
+                                    openrouter,
+                                    grok,
+                                    kimi,
+                                    anthropic,
+                                    errors,
+                                )) = task.await
+                                {
                                     let any_new = codex.is_some()
                                         || claude.is_some()
-                                        || antigravity.is_some();
+                                        || antigravity.is_some()
+                                        || deepseek.is_some()
+                                        || openrouter.is_some()
+                                        || grok.is_some()
+                                        || kimi.is_some()
+                                        || anthropic.is_some();
                                     if codex.is_some() {
                                         official_codex = codex;
                                     }
@@ -567,6 +819,21 @@ pub(super) async fn run_blocks_live(
                                     }
                                     if antigravity.is_some() {
                                         official_antigravity = antigravity;
+                                    }
+                                    if deepseek.is_some() {
+                                        official_deepseek = deepseek;
+                                    }
+                                    if openrouter.is_some() {
+                                        official_openrouter = openrouter;
+                                    }
+                                    if grok.is_some() {
+                                        official_grok = grok;
+                                    }
+                                    if kimi.is_some() {
+                                        official_kimi = kimi;
+                                    }
+                                    if anthropic.is_some() {
+                                        official_anthropic_api = anthropic;
                                     }
                                     last_official_refresh = Instant::now();
                                     if any_new || errors.is_empty() {
@@ -812,7 +1079,12 @@ pub(super) fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &Liv
             }
         }
         LiveTab::Gemini | LiveTab::OpenCode => 4,
-        LiveTab::Antigravity => 0,
+        LiveTab::Antigravity
+        | LiveTab::DeepSeek
+        | LiveTab::OpenRouter
+        | LiveTab::Grok
+        | LiveTab::Kimi
+        | LiveTab::AnthropicApi => 0,
     };
     let tab_bar_height = 1u16;
     let info_height = 1u16;
@@ -902,6 +1174,21 @@ pub(super) fn draw_blocks_live_tui(frame: &mut ratatui::Frame<'_>, context: &Liv
         }
         LiveTab::Antigravity => {
             render_live_antigravity_tab(frame, body_area, context);
+        }
+        LiveTab::DeepSeek => {
+            render_live_deepseek_tab(frame, body_area, context);
+        }
+        LiveTab::OpenRouter => {
+            render_live_openrouter_tab(frame, body_area, context);
+        }
+        LiveTab::Grok => {
+            render_live_grok_tab(frame, body_area, context);
+        }
+        LiveTab::Kimi => {
+            render_live_kimi_tab(frame, body_area, context);
+        }
+        LiveTab::AnthropicApi => {
+            render_live_anthropic_api_tab(frame, body_area, context);
         }
     }
 }
@@ -2544,4 +2831,163 @@ pub(super) fn poll_live_input(timeout: Duration, current_tab: LiveTab) -> Result
     }
 
     Ok(LiveInputEvent::Tick)
+}
+
+pub(super) fn render_live_deepseek_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "DeepSeek API Balance",
+            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+    if let Some(ds) = context.official_deepseek {
+        if !ds.is_available {
+            lines.push(Line::from("  Service reported as unavailable."));
+        } else {
+            let currency = ds.currency.as_deref().unwrap_or("USD");
+            if let Some(total) = ds.total_balance {
+                lines.push(Line::from(format!("  Total Balance:     {total:.4} {currency}")));
+            }
+            if let Some(granted) = ds.granted_balance {
+                lines.push(Line::from(format!("  Granted Credits:   {granted:.4} {currency}")));
+            }
+            if let Some(topped) = ds.topped_up_balance {
+                lines.push(Line::from(format!("  Topped Up Balance: {topped:.4} {currency}")));
+            }
+        }
+    } else {
+        lines.push(Line::from("  No data available. DEEPSEEK_API_KEY env var may not be set."));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(super) fn render_live_openrouter_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "OpenRouter Key Usage / Limits",
+            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+    if let Some(or) = context.official_openrouter {
+        if let Some(ref label) = or.label {
+            lines.push(Line::from(format!("  Key Label:    {label}")));
+        }
+        lines.push(Line::from(format!("  Free Tier:    {}", if or.is_free_tier { "Yes" } else { "No" })));
+        if let Some(used) = or.credits_used {
+            lines.push(Line::from(format!("  Credits Used: ${used:.4}")));
+        }
+        if let Some(limit) = or.credits_limit {
+            lines.push(Line::from(format!("  Credit Limit: ${limit:.4}")));
+        }
+        if let Some(pct) = or.used_percent {
+            lines.push(Line::from(format!("  Used Percent: {pct:.2}%")));
+        }
+    } else {
+        lines.push(Line::from("  No data available. OPENROUTER_API_KEY env var may not be set."));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(super) fn render_live_grok_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Grok (xAI) Billing Quotas",
+            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+    if let Some(grok) = context.official_grok {
+        let currency = grok.currency.as_deref().unwrap_or("USD");
+        if let Some(granted) = grok.total_granted {
+            lines.push(Line::from(format!("  Total Granted Credits:   {granted:.4} {currency}")));
+        }
+        if let Some(used) = grok.total_used {
+            lines.push(Line::from(format!("  Total Used Credits:      {used:.4} {currency}")));
+        }
+        if let Some(rem) = grok.total_remaining {
+            lines.push(Line::from(format!("  Total Remaining Credits: {rem:.4} {currency}")));
+        }
+        if let Some(pct) = grok.used_percent {
+            lines.push(Line::from(format!("  Used Percent:            {pct:.2}%")));
+        }
+    } else {
+        lines.push(Line::from("  No data available. XAI_API_KEY env var may not be set."));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(super) fn render_live_kimi_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Kimi (Moonshot AI) Balance",
+            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+    if let Some(kimi) = context.official_kimi {
+        let currency = kimi.currency.as_deref().unwrap_or("CNY");
+        if let Some(avail) = kimi.available_balance {
+            lines.push(Line::from(format!("  Available Balance: {avail:.4} {currency}")));
+        }
+        if let Some(cash) = kimi.cash_balance {
+            lines.push(Line::from(format!("  Cash Balance:      {cash:.4} {currency}")));
+        }
+        if let Some(voucher) = kimi.voucher_balance {
+            lines.push(Line::from(format!("  Voucher Balance:   {voucher:.4} {currency}")));
+        }
+    } else {
+        lines.push(Line::from("  No data available. MOONSHOT_API_KEY env var may not be set."));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(super) fn render_live_anthropic_api_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    context: &LiveFrameContext<'_>,
+) {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Anthropic Developer API Usage (Today)",
+            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+    if let Some(anth) = context.official_anthropic_api {
+        if let Some(cost) = anth.cost_usd_today {
+            lines.push(Line::from(format!("  Usage Cost today:  ${cost:.4}")));
+        } else {
+            lines.push(Line::from("  Usage Cost today:  $0.00"));
+        }
+        if let Some(input) = anth.input_tokens_today {
+            lines.push(Line::from(format!("  Input Tokens:      {input}")));
+        }
+        if let Some(output) = anth.output_tokens_today {
+            lines.push(Line::from(format!("  Output Tokens:     {output}")));
+        }
+        if let Some(cached) = anth.cache_read_tokens_today {
+            lines.push(Line::from(format!("  Cache Read Tokens: {cached}")));
+        }
+    } else {
+        lines.push(Line::from("  No data available. ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY env var may not be set."));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
