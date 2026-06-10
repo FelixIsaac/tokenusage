@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-06-11
+
+### Fixed
+- **Parse cache thrash.** The cache was nearly useless: entry count oscillated
+  (e.g. 19k→1.9k) and warm runs hit periodic full-reparse storms. Two causes:
+  (1) the cache-invalidation key embedded the entire pricing table, so every 6h
+  OpenRouter refresh (or online/offline flip) wiped the cache — fixed by making
+  the key pricing-independent and **re-pricing cached events at hydration** from
+  their stored token counts (costs stay correct without tying cache validity to
+  volatile pricing); (2) the eviction pass was global, so a scoped run (e.g.
+  `tu codex daily`, or `doctor`'s opencode-only probe) evicted every other
+  source's entries — fixed by **scoping eviction to roots actually scanned**.
+  Result: cache stabilizes at ~all files, `doctor` no longer wipes it, warm
+  `tu today` is a consistent ~1s. One-time rebuild on first run after upgrade.
+- `doctor` cache entry-count now reads WAL-resident rows correctly.
+
 ## [1.6.0] - 2026-06-11
 
 Performance and UX release. The headline is a SQLite-backed parse cache that
