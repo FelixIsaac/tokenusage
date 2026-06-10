@@ -205,6 +205,31 @@ fn print_report_insights(insights: &ReportInsights) {
     if let Some(tokens_per_usd) = insights.tokens_per_usd {
         parts.push(format!("{} tok/$", format_u64(tokens_per_usd)));
     }
+    // Cache savings: only surface when the counterfactual is material (>= $1).
+    if let Some(savings) = insights.cache_savings_usd
+        && savings.abs() >= 1.0
+    {
+        if savings >= 0.0 {
+            parts.push(format!("cache saved ~{}", format_usd(savings)));
+        } else {
+            parts.push(format!("cache cost ~{} extra", format_usd(-savings)));
+        }
+    }
+    // Cache reuse: only warn when writes outrun reads (churn).
+    if let Some(reuse) = insights.cache_reuse_ratio
+        && reuse < 1.0
+    {
+        parts.push(format!("low cache reuse {reuse:.1}×"));
+    }
+    // Cost concentration: only when cost share outruns token share by >= 15pp.
+    if let Some(conc) = insights.cost_concentration.as_ref()
+        && conc.cost_pct - conc.token_pct >= 15.0
+    {
+        parts.push(format!(
+            "{} {:.0}% tok→{:.0}% cost",
+            conc.label, conc.token_pct, conc.cost_pct
+        ));
+    }
     if let Some(top_source) = insights.top_source.as_deref() {
         if let Some(share) = insights.top_source_share_pct {
             parts.push(format!("top source {top_source} ({share:.1}%)"));
