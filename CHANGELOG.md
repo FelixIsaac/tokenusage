@@ -4,17 +4,62 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-11
+
+Performance and UX release. The headline is a SQLite-backed parse cache that
+replaces the monolithic JSON cache (rewritten wholesale on every run), plus a
+parallelized file scan and a categorized help menu.
+
 ### Added
+- **Cost-centric insights**: `cache saved ~$X` (counterfactual net savings from
+  prompt caching vs. paying full input price for cached reads, using canonical
+  per-model rates, suppressed below 60% priced-token coverage), cache reuse-ratio
+  warning on churn (<1×), and cost-concentration callout when a source's cost
+  share outruns its token share by ≥15pp. All surfaced conditionally to keep the
+  `Insights:` line signal-dense.
+- **`tu doctor` cache health**: parse-cache path, size, and entry count, plus a
+  `warnings:` section that flags only real problems (oversized cache, stale
+  pricing cache, a source that discovered files but retained zero events).
+- Every subcommand now has a one-line description; `--help` groups commands by
+  category (Reporting / Live / Integration / Diagnostics / Balances).
+
+### Changed
+- **Parse cache is now SQLite** (`parse-cache-v3.db`) instead of
+  `parse-cache-v2.json`. Saves are incremental — only changed rows are upserted
+  and evicted rows deleted — so the per-run write cost drops from ~60 MB to a few
+  KB while actively coding. WAL mode lets a `statusline` run alongside an
+  interactive run without blocking. Existing users are migrated automatically:
+  the first run imports `parse-cache-v2.json` into SQLite, then deletes it.
+- The per-file fingerprint + cache-hydration scan over all discovered files is
+  now parallelized with rayon (warm `tu today` ~2.5 s → ~1.65 s on a 19.6k-file
+  install).
+- Tables size columns to content instead of stretching to fill the terminal, and
+  pick the richest layout that actually fits — cache columns now appear at ≥130
+  cols instead of >160.
+
+### Fixed
+- `tu gui` no longer panics when the window is **closed**: iced now runs on the
+  main thread outside the tokio runtime, so iced's internal runtime is no longer
+  dropped inside an outer async context (upstream issue #2).
+
+### Notes
+- Deliberately did not add directory-mtime subtree skipping to discovery: a
+  directory's mtime does not change when an existing append-only `.jsonl` grows,
+  so it would silently miss new tokens. Per-file stat is required for correctness.
+
+### Earlier (pre-1.6.0, previously unreleased)
+
+#### Added
 - Report insights pipeline for daily/weekly/monthly outputs, including cache/output share, efficiency metrics, peak periods, streaks, spikes, anomalies, and provider mix.
 - GUI report caching for faster switching between `daily`, `weekly`, and `monthly` views.
 - GUI insights summary cards for top source, top model, peak period, and anomaly.
 - `today` supports explicit `--since` / `--until` ranges.
 
-### Changed
+#### Changed
 - CLI `Insights:` summary now includes spike/anomaly attribution with top source/model.
 - Spike/anomaly attribution now includes top project/session per period when event context is available.
 - TOTAL-row model summary now reports provider-aware model counts.
 
-### Fixed
+#### Fixed
 - OpenCode ingestion improved for DB + legacy merge behavior and session id stability.
 - `tu gui` startup panic on Windows async runtime teardown.
