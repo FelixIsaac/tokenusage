@@ -52,54 +52,70 @@ pub(super) fn parse_files_with_cache(
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
     let mut cache_dirty = false;
-    let mut seen_cache_keys = HashSet::with_capacity(files.len());
-    let mut parse_jobs = Vec::new();
-    let mut events = Vec::new();
+    let seen_cache_keys: HashSet<String> =
+        files.iter().map(|file| cache_file_key(&file.path)).collect();
 
-    for file in files {
-        let key = cache_file_key(&file.path);
-        seen_cache_keys.insert(key.clone());
+    // The fingerprint(stat) + cache-hydration pass is the per-file floor over all
+    // ~N discovered files. It only reads the cache (immutable) and bumps atomic
+    // stats, so it parallelizes cleanly across cores. Each file resolves to either
+    // already-cached events or a parse job; partition afterwards.
+    enum PassResult {
+        Hit(Vec<UsageEvent>),
+        Job(Box<FileParseJob>),
+    }
 
-        let Some(fingerprint) = read_file_fingerprint(&file.path) else {
-            parse_jobs.push(FileParseJob {
-                file: file.clone(),
-                cache_key: key,
-                fingerprint: FileFingerprint {
-                    size: 0,
-                    modified_unix_secs: 0,
-                    modified_unix_nanos: 0,
-                },
-                strategy: ParseStrategy::Full,
-            });
-            continue;
-        };
-
-        if cache_enabled && let Some(cached) = cache_store.files.get(&key) {
-            if cached.fingerprint == fingerprint {
-                events.extend(hydrate_cached_events(
-                    file, cached, filter, timezone, &stats,
-                ));
-                continue;
-            }
-            if can_incremental_parse(cached, fingerprint) {
-                parse_jobs.push(FileParseJob {
+    let cache_files = &cache_store.files;
+    let pass: Vec<PassResult> = files
+        .par_iter()
+        .map(|file| {
+            let key = cache_file_key(&file.path);
+            let Some(fingerprint) = read_file_fingerprint(&file.path) else {
+                return PassResult::Job(Box::new(FileParseJob {
                     file: file.clone(),
                     cache_key: key,
-                    fingerprint,
-                    strategy: ParseStrategy::Incremental {
-                        base_cache: cached.clone(),
+                    fingerprint: FileFingerprint {
+                        size: 0,
+                        modified_unix_secs: 0,
+                        modified_unix_nanos: 0,
                     },
-                });
-                continue;
-            }
-        }
+                    strategy: ParseStrategy::Full,
+                }));
+            };
 
-        parse_jobs.push(FileParseJob {
-            file: file.clone(),
-            cache_key: key,
-            fingerprint,
-            strategy: ParseStrategy::Full,
-        });
+            if cache_enabled && let Some(cached) = cache_files.get(&key) {
+                if cached.fingerprint == fingerprint {
+                    return PassResult::Hit(hydrate_cached_events(
+                        file, cached, filter, timezone, &stats,
+                    ));
+                }
+                if can_incremental_parse(cached, fingerprint) {
+                    return PassResult::Job(Box::new(FileParseJob {
+                        file: file.clone(),
+                        cache_key: key,
+                        fingerprint,
+                        strategy: ParseStrategy::Incremental {
+                            base_cache: cached.clone(),
+                        },
+                    }));
+                }
+            }
+
+            PassResult::Job(Box::new(FileParseJob {
+                file: file.clone(),
+                cache_key: key,
+                fingerprint,
+                strategy: ParseStrategy::Full,
+            }))
+        })
+        .collect();
+
+    let mut parse_jobs = Vec::new();
+    let mut events = Vec::new();
+    for result in pass {
+        match result {
+            PassResult::Hit(hit) => events.extend(hit),
+            PassResult::Job(job) => parse_jobs.push(*job),
+        }
     }
 
     let parsed = parse_files_concurrently(
@@ -2162,6 +2178,38 @@ pub(super) fn incremental_cache_path() -> Option<PathBuf> {
 fn legacy_json_cache_path() -> Option<PathBuf> {
     let base = dirs::cache_dir()?;
     Some(base.join("tokenusage").join("parse-cache-v2.json"))
+}
+
+/// Health snapshot of the parse cache for `tu doctor`.
+pub(super) struct IncrementalCacheStats {
+    pub path: PathBuf,
+    pub exists: bool,
+    pub size_bytes: u64,
+    pub entries: Option<usize>,
+}
+
+/// Inspect the parse cache without mutating it (no schema creation).
+pub(super) fn incremental_cache_stats() -> Option<IncrementalCacheStats> {
+    let path = incremental_cache_path()?;
+    let exists = path.is_file();
+    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let entries = if exists {
+        Connection::open(&path)
+            .ok()
+            .and_then(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))
+                    .ok()
+            })
+            .map(|n| n.max(0) as usize)
+    } else {
+        None
+    };
+    Some(IncrementalCacheStats {
+        path,
+        exists,
+        size_bytes,
+        entries,
+    })
 }
 
 fn open_cache_db(path: &Path) -> rusqlite::Result<Connection> {

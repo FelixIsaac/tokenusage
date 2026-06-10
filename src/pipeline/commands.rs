@@ -23,7 +23,9 @@ use super::official::{
     fetch_grok_official_limits, fetch_kimi_official_limits, fetch_openrouter_account_limits,
     select_antigravity_models,
 };
-use super::parsing::{build_sources, discover_files, load_pricing, load_usage};
+use super::parsing::{
+    build_sources, discover_files, incremental_cache_stats, load_pricing, load_usage,
+};
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
 use super::*;
@@ -46,8 +48,20 @@ struct DoctorReport {
     timezone: String,
     selected_sources: Vec<String>,
     pricing: DoctorPricingReport,
+    cache: DoctorCacheReport,
     sources: Vec<DoctorSourceReport>,
     opencode_debug: Option<DoctorOpencodeDebugReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorCacheReport {
+    path: Option<String>,
+    exists: bool,
+    size_bytes: u64,
+    size_human: String,
+    entries: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,6 +212,42 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
         });
     }
 
+    let cache_stats = incremental_cache_stats();
+    let cache = DoctorCacheReport {
+        path: cache_stats
+            .as_ref()
+            .map(|c| c.path.to_string_lossy().to_string()),
+        exists: cache_stats.as_ref().is_some_and(|c| c.exists),
+        size_bytes: cache_stats.as_ref().map(|c| c.size_bytes).unwrap_or(0),
+        size_human: human_bytes(cache_stats.as_ref().map(|c| c.size_bytes).unwrap_or(0)),
+        entries: cache_stats.as_ref().and_then(|c| c.entries),
+    };
+
+    // Surface actionable health problems, not just raw numbers.
+    let mut warnings = Vec::new();
+    if cache.size_bytes > 100 * 1024 * 1024 {
+        warnings.push(format!(
+            "parse cache is {} ({} entries) — large; run `tu --rebuild-cache` to compact",
+            cache.size_human,
+            cache.entries.unwrap_or(0)
+        ));
+    }
+    if let Some(age) = openrouter_cache_age_secs
+        && age > OPENROUTER_PRICING_CACHE_TTL_SECS
+    {
+        warnings.push(format!(
+            "openrouter pricing cache is stale (age {age}s > ttl {OPENROUTER_PRICING_CACHE_TTL_SECS}s); refreshes on next online run"
+        ));
+    }
+    for source in &sources {
+        if source.discovered_files > 0 && source.retained_events == 0 {
+            warnings.push(format!(
+                "source {} discovered {} files but retained 0 events (parse/format issue?)",
+                source.source, source.discovered_files
+            ));
+        }
+    }
+
     let report = DoctorReport {
         timezone: format!("{tz:?}"),
         selected_sources: args
@@ -214,8 +264,10 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             openrouter_cache_ttl_secs: OPENROUTER_PRICING_CACHE_TTL_SECS,
             openrouter_cached_models,
         },
+        cache,
         sources,
         opencode_debug,
+        warnings,
     };
 
     if should_emit_json(&args.common) {
@@ -242,6 +294,19 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
         }
         if let Some(models) = report.pricing.openrouter_cached_models {
             println!("  openrouter-cache-models: {models}");
+        }
+        println!();
+        println!("parse-cache:");
+        if let Some(path) = &report.cache.path {
+            println!("  path: {path}");
+        }
+        println!("  exists: {}", report.cache.exists);
+        println!(
+            "  size: {} ({} bytes)",
+            report.cache.size_human, report.cache.size_bytes
+        );
+        if let Some(entries) = report.cache.entries {
+            println!("  entries: {entries}");
         }
         if args.common.pricing_debug {
             println!(
@@ -321,7 +386,28 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             );
             println!();
         }
+        if !report.warnings.is_empty() {
+            println!("warnings:");
+            for warning in &report.warnings {
+                println!("  ! {warning}");
+            }
+        }
         Ok(())
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
