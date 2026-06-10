@@ -1,6 +1,5 @@
 use anyhow::Result;
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
-    tokenusage::run().await
+fn main() -> Result<()> {
+    tokenusage::run_blocking()
 }

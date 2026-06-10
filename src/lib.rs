@@ -173,6 +173,36 @@ pub async fn run() -> Result<()> {
     }
 }
 
+/// Synchronous binary entry point.
+///
+/// The GUI must own the main thread and run **outside** a tokio runtime: iced
+/// spins up its own runtime, and dropping that runtime from inside an outer
+/// runtime (the old `#[tokio::main]`) panics on window close
+/// (`Cannot drop a runtime in a context where blocking is not allowed`).
+/// So we parse first, run the GUI directly on the main thread, and only build a
+/// tokio runtime for the async (non-GUI) commands.
+#[cfg(feature = "cli")]
+pub fn run_blocking() -> Result<()> {
+    let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));
+
+    let command = cli.command.unwrap_or(Commands::Daily(DailyArgs::default()));
+    let command = config::apply_config(command)?;
+
+    let throttle_ms = extract_throttle(&command);
+    if throttle_ms > 0 && std::env::var("_TU_THROTTLE_ACTIVE").is_err() {
+        return run_with_throttle(throttle_ms);
+    }
+
+    if let Commands::Gui(args) = command {
+        return gui::run_gui(args);
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(dispatch(command))
+}
+
 #[cfg(feature = "cli")]
 fn extract_throttle(cmd: &Commands) -> u64 {
     match cmd {
