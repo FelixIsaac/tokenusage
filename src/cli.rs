@@ -275,7 +275,14 @@ impl CommonArgs {
     name = "tokenusage",
     version,
     about = "Multi-source token usage analyzer (Rust)",
-    after_help = "Examples:\n\
+    after_help = "Commands by category:\n\
+                  \x20 Reporting     today daily weekly monthly activity blocks session\n\
+                  \x20 Live          live top gui\n\
+                  \x20 Integration   statusline img heartbeat\n\
+                  \x20 Diagnostics   doctor parity\n\
+                  \x20 Balances      antigravity deepseek openrouter grok kimi anthropic-api\n\
+                  \n\
+                  Examples:\n\
                   tu\n\
                   tu --since 2026-04-01 --until 2026-04-30\n\
                   tu codex daily\n\
@@ -300,41 +307,75 @@ pub(crate) struct Cli {
 #[cfg(feature = "cli")]
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
+    // --- Reporting (display_order 1-7) ---
+    #[command(about = "Per-day token usage and cost", display_order = 2)]
     Daily(DailyArgs),
-    #[command(about = "Coding activity summary (defaults to today; supports --since/--until)")]
+    #[command(about = "Today's token usage and coding activity", display_order = 1)]
     Today(TodayArgs),
-    #[command(about = "Coding activity view with per-day breakdowns")]
+    #[command(about = "Coding-activity view with per-day breakdowns", display_order = 5)]
     Activity(ActivityArgs),
-    #[command(about = "Native local heartbeat collector and stats")]
+    #[command(about = "Per-month token usage", display_order = 4)]
+    Monthly(MonthlyArgs),
+    #[command(about = "Per-week token usage", alias = "week", display_order = 3)]
+    Weekly(WeeklyArgs),
+    #[command(about = "Usage grouped by 5-hour billing blocks", display_order = 6)]
+    Blocks(BlocksArgs),
+    #[command(about = "Per-session token usage", display_order = 7)]
+    Session(SessionArgs),
+
+    // --- Live / interactive (display_order 10-12) ---
+    #[command(about = "Live-updating usage view", display_order = 10)]
+    Live(LiveArgs),
+    #[command(
+        about = "Real-time per-session token viewer (htop for tokens)",
+        display_order = 11
+    )]
+    Top(TopArgs),
+    #[command(about = "Desktop GUI (Iced)", display_order = 12)]
+    Gui(GuiArgs),
+
+    // --- Integration (display_order 20-22) ---
+    #[command(
+        about = "One-line status for the Claude Code statusLine hook",
+        display_order = 20
+    )]
+    Statusline(StatuslineArgs),
+    #[command(about = "Render a usage report as a PNG", display_order = 21)]
+    Img(ImgArgs),
+    #[command(about = "Local editor-activity heartbeat collector and stats", display_order = 22)]
     Heartbeat(HeartbeatArgs),
-    #[command(about = "Inspect provider roots, files, and parser mode")]
+
+    // --- Diagnostics (display_order 30-31) ---
+    #[command(about = "Inspect roots, files, cache and pricing health", display_order = 30)]
     Doctor(DailyArgs),
-    #[command(about = "Compare tu totals against ccusage provider output")]
+    #[command(about = "Compare tu totals against ccusage", display_order = 31)]
     Parity(ParityArgs),
+
+    // --- Balances / quota (display_order 40-45) ---
+    #[command(about = "Show Antigravity plan and usage limits", display_order = 40)]
     Antigravity(AntigravityArgs),
-    #[command(about = "Show DeepSeek API credit balance (requires DEEPSEEK_API_KEY)")]
+    #[command(
+        about = "Show DeepSeek API credit balance (DEEPSEEK_API_KEY)",
+        display_order = 41
+    )]
     Deepseek(DeepseekArgs),
-    #[command(about = "Show OpenRouter API credit balance (requires OPENROUTER_API_KEY)")]
+    #[command(
+        about = "Show OpenRouter API credit balance (OPENROUTER_API_KEY)",
+        display_order = 42
+    )]
     Openrouter(OpenrouterArgs),
-    #[command(about = "Show Grok (xAI) credit balance (requires XAI_API_KEY)")]
+    #[command(about = "Show Grok (xAI) credit balance (XAI_API_KEY)", display_order = 43)]
     Grok(GrokArgs),
-    #[command(about = "Show Kimi (Moonshot) credit balance (requires MOONSHOT_API_KEY)")]
+    #[command(
+        about = "Show Kimi (Moonshot) credit balance (MOONSHOT_API_KEY)",
+        display_order = 44
+    )]
     Kimi(KimiArgs),
     #[command(
-        about = "Show Anthropic API usage today (requires ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY)"
+        about = "Show Anthropic API usage today (ANTHROPIC_API_KEY / ANTHROPIC_ADMIN_KEY)",
+        display_order = 45
     )]
     AnthropicApi(AnthropicApiArgs),
-    Monthly(MonthlyArgs),
-    #[command(alias = "week")]
-    Weekly(WeeklyArgs),
-    Img(ImgArgs),
-    Session(SessionArgs),
-    Blocks(BlocksArgs),
-    Live(LiveArgs),
-    #[command(about = "Real-time per-session token viewer (htop for tokens)")]
-    Top(TopArgs),
-    Statusline(StatuslineArgs),
-    Gui(GuiArgs),
 }
 
 #[cfg(feature = "cli")]
