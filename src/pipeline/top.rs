@@ -282,7 +282,7 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
             // Flush cache periodically
             if rt.cache_dirty && rt.last_cache_flush_at.elapsed() > Duration::from_secs(30) {
                 if let Some(ref path) = rt.cache_path {
-                    save_incremental_cache(path, &rt.cache_store);
+                    save_incremental_cache(path, &mut rt.cache_store);
                     rt.cache_dirty = false;
                     rt.last_cache_flush_at = Instant::now();
                 }

@@ -12,7 +12,7 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use crossbeam_channel::{Receiver, bounded};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
 use tokio::fs;
 
@@ -114,15 +114,23 @@ pub(super) fn parse_files_with_cache(
 
     if cache_enabled {
         for (key, entry) in parsed.cache_updates {
+            cache_store.changed.insert(key.clone());
             cache_store.files.insert(key, entry);
             cache_dirty = true;
         }
 
-        let before = cache_store.files.len();
-        cache_store
+        // Evict entries for files no longer present, recording removals so the
+        // backing store can delete exactly those rows (no full rewrite).
+        let removed_keys: Vec<String> = cache_store
             .files
-            .retain(|path, _| seen_cache_keys.contains(path));
-        if cache_store.files.len() != before {
+            .keys()
+            .filter(|path| !seen_cache_keys.contains(path.as_str()))
+            .cloned()
+            .collect();
+        for key in removed_keys {
+            cache_store.files.remove(&key);
+            cache_store.changed.remove(&key);
+            cache_store.removed.insert(key);
             cache_dirty = true;
         }
     }
@@ -307,7 +315,7 @@ impl LiveUsageRuntime {
             return;
         }
         if let Some(path) = self.cache_path.as_ref() {
-            save_incremental_cache(path, &self.cache_store);
+            save_incremental_cache(path, &mut self.cache_store);
             self.cache_dirty = false;
             self.last_cache_flush_at = Instant::now();
         }
@@ -362,7 +370,7 @@ pub(super) async fn load_usage(
         && (parsed.cache_dirty || common.rebuild_cache)
         && let Some(path) = cache_path.as_ref()
     {
-        save_incremental_cache(path, &cache_store);
+        save_incremental_cache(path, &mut cache_store);
     }
 
     Ok(parsed.loaded)
@@ -2147,34 +2155,202 @@ pub(super) async fn fetch_openrouter_pricing() -> Result<HashMap<String, Pricing
 
 pub(super) fn incremental_cache_path() -> Option<PathBuf> {
     let base = dirs::cache_dir()?;
+    Some(base.join("tokenusage").join("parse-cache-v3.db"))
+}
+
+/// Pre-v3 monolithic JSON cache, migrated into SQLite on first run then removed.
+fn legacy_json_cache_path() -> Option<PathBuf> {
+    let base = dirs::cache_dir()?;
     Some(base.join("tokenusage").join("parse-cache-v2.json"))
 }
 
-pub(super) fn load_incremental_cache(path: &Path, pricing_key: &str) -> IncrementalCacheStore {
-    let body = match std::fs::read(path) {
-        Ok(data) => data,
-        Err(_) => return IncrementalCacheStore::new(pricing_key.to_string()),
-    };
-
-    let store: IncrementalCacheStore = match serde_json::from_slice(&body) {
-        Ok(store) => store,
-        Err(_) => return IncrementalCacheStore::new(pricing_key.to_string()),
-    };
-
-    if store.version != INCREMENTAL_CACHE_VERSION || store.pricing_key != pricing_key {
-        return IncrementalCacheStore::new(pricing_key.to_string());
-    }
-
-    store
+fn open_cache_db(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    // WAL keeps concurrent readers (e.g. statusline alongside an interactive run)
+    // from blocking; NORMAL sync is durable enough for a rebuildable cache.
+    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS files (cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL);",
+    )?;
+    Ok(conn)
 }
 
-pub(super) fn save_incremental_cache(path: &Path, store: &IncrementalCacheStore) {
+fn cache_meta_get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+        r.get::<_, String>(0)
+    })
+    .optional()
+}
+
+fn cache_meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// One-time import of the legacy JSON cache into an empty SQLite DB. The JSON
+/// file is removed afterwards (whether imported or stale) so it's never retried.
+fn migrate_legacy_json_if_present(conn: &Connection, pricing_key: &str) {
+    let existing: i64 = conn
+        .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+        .unwrap_or(0);
+    if existing > 0 {
+        return;
+    }
+    let Some(json_path) = legacy_json_cache_path() else {
+        return;
+    };
+    let _ = import_legacy_json(conn, pricing_key, &json_path);
+    // Remove the legacy file whether imported or stale, so it's never retried.
+    let _ = std::fs::remove_file(&json_path);
+}
+
+/// Import a legacy JSON cache file into the (empty) SQLite `files` table when its
+/// version + pricing key match. Returns Ok(true) when rows were imported.
+fn import_legacy_json(
+    conn: &Connection,
+    pricing_key: &str,
+    json_path: &Path,
+) -> rusqlite::Result<bool> {
+    let Ok(body) = std::fs::read(json_path) else {
+        return Ok(false);
+    };
+    let Ok(store) = serde_json::from_slice::<IncrementalCacheStore>(&body) else {
+        return Ok(false);
+    };
+    if store.version != INCREMENTAL_CACHE_VERSION || store.pricing_key != pricing_key {
+        return Ok(false);
+    }
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt =
+            tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+        for (key, entry) in &store.files {
+            if let Ok(json) = serde_json::to_string(entry) {
+                stmt.execute(params![key, json])?;
+            }
+        }
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?1)",
+        params![INCREMENTAL_CACHE_VERSION.to_string()],
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('pricing_key', ?1)",
+        params![pricing_key],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+pub(super) fn load_incremental_cache(path: &Path, pricing_key: &str) -> IncrementalCacheStore {
+    load_incremental_cache_inner(path, pricing_key)
+        .unwrap_or_else(|_| IncrementalCacheStore::new(pricing_key.to_string()))
+}
+
+fn load_incremental_cache_inner(
+    path: &Path,
+    pricing_key: &str,
+) -> rusqlite::Result<IncrementalCacheStore> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(bytes) = serde_json::to_vec(store) {
-        let _ = std::fs::write(path, bytes);
+    let conn = open_cache_db(path)?;
+    migrate_legacy_json_if_present(&conn, pricing_key);
+
+    let version_ok =
+        cache_meta_get(&conn, "version")?.as_deref() == Some(&INCREMENTAL_CACHE_VERSION.to_string());
+    let pricing_ok = cache_meta_get(&conn, "pricing_key")?.as_deref() == Some(pricing_key);
+    if !version_ok || !pricing_ok {
+        // Stale or first-time cache: clear and start fresh (DB now empty).
+        conn.execute("DELETE FROM files", [])?;
+        cache_meta_set(&conn, "version", &INCREMENTAL_CACHE_VERSION.to_string())?;
+        cache_meta_set(&conn, "pricing_key", pricing_key)?;
+        return Ok(IncrementalCacheStore::new(pricing_key.to_string()));
     }
+
+    let mut files = HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT cache_key, entry FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, entry_json) = row?;
+            if let Ok(entry) = serde_json::from_str::<CachedFileEntry>(&entry_json) {
+                files.insert(key, entry);
+            }
+        }
+    }
+
+    Ok(IncrementalCacheStore {
+        version: INCREMENTAL_CACHE_VERSION,
+        pricing_key: pricing_key.to_string(),
+        files,
+        changed: HashSet::new(),
+        removed: HashSet::new(),
+        full_rewrite: false,
+    })
+}
+
+pub(super) fn save_incremental_cache(path: &Path, store: &mut IncrementalCacheStore) {
+    if save_incremental_cache_inner(path, store).is_ok() {
+        store.changed.clear();
+        store.removed.clear();
+        store.full_rewrite = false;
+    }
+}
+
+fn save_incremental_cache_inner(
+    path: &Path,
+    store: &IncrementalCacheStore,
+) -> rusqlite::Result<()> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut conn = open_cache_db(path)?;
+    let tx = conn.transaction()?;
+    if store.full_rewrite {
+        tx.execute("DELETE FROM files", [])?;
+        let mut stmt =
+            tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+        for (key, entry) in &store.files {
+            if let Ok(json) = serde_json::to_string(entry) {
+                stmt.execute(params![key, json])?;
+            }
+        }
+    } else {
+        {
+            let mut up =
+                tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+            for key in &store.changed {
+                if let Some(entry) = store.files.get(key)
+                    && let Ok(json) = serde_json::to_string(entry)
+                {
+                    up.execute(params![key, json])?;
+                }
+            }
+        }
+        {
+            let mut del = tx.prepare("DELETE FROM files WHERE cache_key = ?1")?;
+            for key in &store.removed {
+                del.execute(params![key])?;
+            }
+        }
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?1)",
+        params![INCREMENTAL_CACHE_VERSION.to_string()],
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('pricing_key', ?1)",
+        params![store.pricing_key],
+    )?;
+    tx.commit()
 }
 
 pub(super) fn cache_file_key(path: &Path) -> String {
@@ -2341,5 +2517,120 @@ pub(super) fn normalized_discovered_path(path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         normalize_path(path)
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn tmp_db(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tu-cache-test-{}-{tag}.db", std::process::id()))
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    fn sample_entry(size: u64) -> CachedFileEntry {
+        CachedFileEntry {
+            fingerprint: FileFingerprint {
+                size,
+                modified_unix_secs: 1,
+                modified_unix_nanos: 0,
+            },
+            stats: CachedFileStats::default(),
+            events: Vec::new(),
+            parsed_offset: size,
+            codex_last_model: None,
+            codex_last_totals: None,
+            claude_recent_keys: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_rewrite_round_trips_and_clears_changesets() {
+        let path = tmp_db("roundtrip");
+        cleanup(&path);
+        let mut store = IncrementalCacheStore::new("pk1".to_string());
+        store.files.insert("a.jsonl".into(), sample_entry(10));
+        store.changed.insert("a.jsonl".into());
+        save_incremental_cache(&path, &mut store);
+        assert!(store.changed.is_empty(), "changed cleared after save");
+        assert!(!store.full_rewrite, "full_rewrite reset after save");
+
+        let loaded = load_incremental_cache(&path, "pk1");
+        assert_eq!(loaded.files.len(), 1);
+        assert_eq!(loaded.files.get("a.jsonl").unwrap().fingerprint.size, 10);
+        assert!(!loaded.full_rewrite, "loaded store is incremental");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn incremental_upsert_and_delete() {
+        let path = tmp_db("incr");
+        cleanup(&path);
+        let mut store = IncrementalCacheStore::new("pk".to_string());
+        store.files.insert("a".into(), sample_entry(1));
+        store.files.insert("b".into(), sample_entry(2));
+        save_incremental_cache(&path, &mut store);
+
+        let mut store = load_incremental_cache(&path, "pk");
+        assert_eq!(store.files.len(), 2);
+        store.files.insert("a".into(), sample_entry(99));
+        store.changed.insert("a".into());
+        store.files.remove("b");
+        store.removed.insert("b".into());
+        save_incremental_cache(&path, &mut store);
+
+        let loaded = load_incremental_cache(&path, "pk");
+        assert_eq!(loaded.files.len(), 1);
+        assert_eq!(loaded.files.get("a").unwrap().fingerprint.size, 99);
+        assert!(loaded.files.get("b").is_none());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn pricing_key_change_invalidates_cache() {
+        let path = tmp_db("pricing");
+        cleanup(&path);
+        let mut store = IncrementalCacheStore::new("old".to_string());
+        store.files.insert("a".into(), sample_entry(1));
+        save_incremental_cache(&path, &mut store);
+
+        let loaded = load_incremental_cache(&path, "new");
+        assert!(loaded.files.is_empty(), "different pricing key => empty");
+        assert!(loaded.full_rewrite);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn legacy_json_imports_when_compatible() {
+        let path = tmp_db("legacy");
+        cleanup(&path);
+        let json_path =
+            std::env::temp_dir().join(format!("tu-legacy-{}.json", std::process::id()));
+        let mut legacy = IncrementalCacheStore::new("pk".to_string());
+        legacy.files.insert("x".into(), sample_entry(5));
+        std::fs::write(&json_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let conn = open_cache_db(&path).unwrap();
+        assert!(import_legacy_json(&conn, "pk", &json_path).unwrap());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Wrong pricing key must not import.
+        let path2 = tmp_db("legacy2");
+        cleanup(&path2);
+        let conn2 = open_cache_db(&path2).unwrap();
+        assert!(!import_legacy_json(&conn2, "different", &json_path).unwrap());
+
+        let _ = std::fs::remove_file(&json_path);
+        cleanup(&path);
+        cleanup(&path2);
     }
 }

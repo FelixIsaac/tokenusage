@@ -723,6 +723,16 @@ struct IncrementalCacheStore {
     version: u32,
     pricing_key: String,
     files: HashMap<String, CachedFileEntry>,
+    /// Keys touched since load — upserted incrementally on save. Not persisted.
+    #[serde(skip)]
+    changed: HashSet<String>,
+    /// Keys evicted since load — deleted incrementally on save. Not persisted.
+    #[serde(skip)]
+    removed: HashSet<String>,
+    /// True for fresh/rebuilt/stale stores: the in-memory `files` map is the
+    /// authoritative full set and the backing DB should be replaced wholesale.
+    #[serde(skip)]
+    full_rewrite: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -768,6 +778,9 @@ impl IncrementalCacheStore {
             version: INCREMENTAL_CACHE_VERSION,
             pricing_key,
             files: HashMap::new(),
+            changed: HashSet::new(),
+            removed: HashSet::new(),
+            full_rewrite: true,
         }
     }
 }
