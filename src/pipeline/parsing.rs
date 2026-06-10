@@ -85,7 +85,7 @@ pub(super) fn parse_files_with_cache(
             if cache_enabled && let Some(cached) = cache_files.get(&key) {
                 if cached.fingerprint == fingerprint {
                     return PassResult::Hit(hydrate_cached_events(
-                        file, cached, filter, timezone, &stats,
+                        file, cached, filter, timezone, &pricing, &stats,
                     ));
                 }
                 if can_incremental_parse(cached, fingerprint) {
@@ -135,12 +135,22 @@ pub(super) fn parse_files_with_cache(
             cache_dirty = true;
         }
 
-        // Evict entries for files no longer present, recording removals so the
-        // backing store can delete exactly those rows (no full rewrite).
+        // Evict entries for files no longer present — but ONLY under roots this
+        // run actually scanned. A scoped (single-source) run, e.g. `tu codex ...`
+        // or doctor's opencode-only probe, must not wipe other sources' entries
+        // (which it never discovered). Record removals so the backing store can
+        // delete exactly those rows (no full rewrite).
+        let scanned_root_keys: HashSet<String> =
+            files.iter().map(|file| cache_file_key(&file.root)).collect();
         let removed_keys: Vec<String> = cache_store
             .files
             .keys()
-            .filter(|path| !seen_cache_keys.contains(path.as_str()))
+            .filter(|key| {
+                !seen_cache_keys.contains(key.as_str())
+                    && scanned_root_keys
+                        .iter()
+                        .any(|root| key.starts_with(root.as_str()))
+            })
             .cloned()
             .collect();
         for key in removed_keys {
@@ -877,6 +887,7 @@ pub(super) fn parse_single_file(
                 &base_cache,
                 filter,
                 timezone,
+                pricing,
                 stats,
             ));
             match job.file.source {
@@ -2193,8 +2204,10 @@ pub(super) fn incremental_cache_stats() -> Option<IncrementalCacheStats> {
     let path = incremental_cache_path()?;
     let exists = path.is_file();
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    // Use the same opener as the real cache (WAL + busy_timeout); a bare
+    // Connection::open can miss rows still living in the -wal file.
     let entries = if exists {
-        Connection::open(&path)
+        open_cache_db(&path)
             .ok()
             .and_then(|conn| {
                 conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))
@@ -2429,6 +2442,7 @@ pub(super) fn hydrate_cached_events(
     cached: &CachedFileEntry,
     filter: DateFilter,
     timezone: &TimeZoneMode,
+    pricing: &PricingTable,
     stats: &ParseStatsAtomic,
 ) -> Vec<UsageEvent> {
     stats
@@ -2457,6 +2471,13 @@ pub(super) fn hydrate_cached_events(
             continue;
         }
         parsed += 1;
+        // Re-price against the CURRENT table: cached cost was computed with
+        // whatever pricing was live when the file was parsed. Keep the cached
+        // cost only when the model is unknown to the current table.
+        let mut usage = cached_event.usage;
+        if let Some(cost) = pricing.estimate_cost(&cached_event.model, usage) {
+            usage.cost_usd = cost;
+        }
         events.push(UsageEvent {
             timestamp: cached_event.timestamp,
             source: file.source,
@@ -2470,7 +2491,7 @@ pub(super) fn hydrate_cached_events(
                 .file_path
                 .clone()
                 .unwrap_or_else(|| file_path.clone()),
-            usage: cached_event.usage,
+            usage,
         });
     }
 
@@ -2491,58 +2512,16 @@ fn cached_usage_event(event: &UsageEvent) -> CachedUsageEvent {
     }
 }
 
-pub(super) fn pricing_cache_key(pricing: &PricingTable) -> String {
-    let mut out = String::new();
-    out.push_str("estimate-v2");
-    out.push('|');
-
-    let mut exact = pricing.exact.iter().collect::<Vec<_>>();
-    exact.sort_by(|(a, _), (b, _)| a.cmp(b));
-    for (model, rate) in exact {
-        out.push_str(model);
-        out.push(':');
-        out.push_str(&pricing_rate_key(rate));
-        out.push('|');
-    }
-
-    out.push('#');
-    for (prefix, rate) in &pricing.prefixes {
-        out.push_str(prefix);
-        out.push(':');
-        out.push_str(&pricing_rate_key(rate));
-        out.push('|');
-    }
-
-    out
-}
-
-pub(super) fn pricing_rate_key(rate: &PricingRate) -> String {
-    format!(
-        "{:.8},{:.8},{:.8},{:.8},{:.8},{},{},{},{},{},{}",
-        rate.input_per_million,
-        rate.output_per_million,
-        rate.cache_creation_per_million,
-        rate.cache_read_per_million,
-        rate.reasoning_output_per_million,
-        rate.tier_threshold_tokens
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        rate.input_above_per_million
-            .map(|v| format!("{v:.8}"))
-            .unwrap_or_else(|| "-".to_string()),
-        rate.output_above_per_million
-            .map(|v| format!("{v:.8}"))
-            .unwrap_or_else(|| "-".to_string()),
-        rate.cache_creation_above_per_million
-            .map(|v| format!("{v:.8}"))
-            .unwrap_or_else(|| "-".to_string()),
-        rate.cache_read_above_per_million
-            .map(|v| format!("{v:.8}"))
-            .unwrap_or_else(|| "-".to_string()),
-        rate.reasoning_output_above_per_million
-            .map(|v| format!("{v:.8}"))
-            .unwrap_or_else(|| "-".to_string()),
-    )
+/// Cache invalidation key — deliberately **independent of pricing**.
+///
+/// Cached events store token counts and are re-priced at hydration
+/// (see [`hydrate_cached_events`]), so a pricing refresh no longer wipes the
+/// cache. Previously this embedded the entire pricing table (800+ models), so
+/// every 6h OpenRouter refresh — or any online/offline flip — changed the key
+/// and forced a full reparse, making the cache nearly useless. Bump the marker
+/// only when the parse/cache-entry *semantics* change. `v3` = re-price-on-hydrate.
+pub(super) fn pricing_cache_key(_pricing: &PricingTable) -> String {
+    "estimate-v3-reprice".to_string()
 }
 
 pub(super) fn normalize_path(path: &Path) -> PathBuf {

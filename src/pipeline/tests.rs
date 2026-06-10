@@ -412,6 +412,7 @@ fn hydrate_cached_events_prefers_cached_metadata_over_file_fallback() {
             until: None,
         },
         &TimeZoneMode::Utc,
+        &crate::types::PricingTable::default_table(),
         &stats,
     );
 
@@ -420,6 +421,61 @@ fn hydrate_cached_events_prefers_cached_metadata_over_file_fallback() {
     assert_eq!(event.session, "cached-session");
     assert_eq!(event.project.as_deref(), Some("cached-project"));
     assert_eq!(event.file_path, "opencode.db#msg_abc");
+}
+
+#[test]
+fn hydrate_cached_events_reprices_against_current_table() {
+    let ts = utc_dt(2026, 4, 10, 9, 30, 0);
+    let file = DiscoveredFile {
+        source: SourceKind::Claude,
+        root: PathBuf::from("C:/Users/me/.claude/projects"),
+        path: PathBuf::from("C:/Users/me/.claude/projects/p/s.jsonl"),
+    };
+    let cached = CachedFileEntry {
+        fingerprint: FileFingerprint {
+            size: 100,
+            modified_unix_secs: 1,
+            modified_unix_nanos: 0,
+        },
+        stats: CachedFileStats::default(),
+        events: vec![CachedUsageEvent {
+            timestamp: ts,
+            model: "claude-sonnet-4-6".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: 1_000_000,
+                cost_usd: 999.0, // stale cost from when the file was first parsed
+                ..UsageAccumulator::default()
+            },
+            session: None,
+            project: None,
+            file_path: None,
+        }],
+        parsed_offset: 100,
+        codex_last_model: None,
+        codex_last_totals: None,
+        claude_recent_keys: Vec::new(),
+    };
+
+    let stats = ParseStatsAtomic::default();
+    let events = hydrate_cached_events(
+        &file,
+        &cached,
+        DateFilter {
+            since: None,
+            until: None,
+        },
+        &TimeZoneMode::Utc,
+        &crate::types::PricingTable::default_table(),
+        &stats,
+    );
+
+    assert_eq!(events.len(), 1);
+    // sonnet input is $3.0/Mtok -> 1M tokens = $3.00, replacing the stale $999.
+    assert!(
+        (events[0].usage.cost_usd - 3.0).abs() < 1e-6,
+        "expected re-priced $3.00, got {}",
+        events[0].usage.cost_usd
+    );
 }
 
 #[test]
