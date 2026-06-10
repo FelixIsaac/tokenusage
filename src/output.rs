@@ -35,77 +35,10 @@ pub(crate) fn print_report_table_with_options(
     let layout = if force_compact {
         TableLayout::Compact
     } else {
-        TableLayout::from_terminal_width(terminal_width)
+        choose_layout(report, show_activity, show_breakdown, terminal_width)
     };
     let mut daily_table = create_table(terminal_width);
-    match layout {
-        TableLayout::Compact => {
-            if show_activity {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Coding", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            } else {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            }
-        }
-        TableLayout::Standard => {
-            if show_activity {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Coding", Color::Cyan),
-                    header_cell("Tok/hr", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            } else {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Input", Color::Cyan),
-                    header_cell("Output", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            }
-        }
-        TableLayout::Full => {
-            if show_activity {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Coding", Color::Cyan),
-                    header_cell("Tok/hr", Color::Cyan),
-                    header_cell("Input", Color::Cyan),
-                    header_cell("Output", Color::Cyan),
-                    header_cell("Cache Create", Color::Cyan),
-                    header_cell("Cache Read", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            } else {
-                daily_table.set_header(vec![
-                    header_cell("Date", Color::Cyan),
-                    header_cell("Models", Color::Cyan),
-                    header_cell("Input", Color::Cyan),
-                    header_cell("Output", Color::Cyan),
-                    header_cell("Cache Create", Color::Cyan),
-                    header_cell("Cache Read", Color::Cyan),
-                    header_cell("Total Tokens", Color::Cyan),
-                    header_cell("Cost (USD)", Color::Cyan),
-                ]);
-            }
-        }
-    }
+    set_layout_header(&mut daily_table, layout, show_activity);
 
     for row in &report.daily {
         daily_table.add_row(primary_row(row, layout, show_activity));
@@ -114,163 +47,148 @@ pub(crate) fn print_report_table_with_options(
         }
     }
 
-    match layout {
-        TableLayout::Compact => {
-            if show_activity {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell.clone())
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_activity_text(report.activity_totals.as_ref()))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            } else {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell.clone())
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            }
-        }
-        TableLayout::Standard => {
-            if show_activity {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell.clone())
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_activity_text(report.activity_totals.as_ref()))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_tokens_per_hour(
-                        report.activity_totals.as_ref(),
-                        report.totals.total_tokens,
-                    ))
-                    .add_attribute(Attribute::Bold)
-                    .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            } else {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell.clone())
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.output_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            }
-        }
-        TableLayout::Full => {
-            if show_activity {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell.clone())
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_activity_text(report.activity_totals.as_ref()))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_tokens_per_hour(
-                        report.activity_totals.as_ref(),
-                        report.totals.total_tokens,
-                    ))
-                    .add_attribute(Attribute::Bold)
-                    .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.output_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.cache_creation_input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.cache_read_input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            } else {
-                daily_table.add_row(Row::from(vec![
-                    Cell::new("TOTAL")
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(total_models_cell)
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.output_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.cache_creation_input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.cache_read_input_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_u64(report.totals.total_tokens))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                    Cell::new(format_usd(report.totals.cost_usd))
-                        .add_attribute(Attribute::Bold)
-                        .fg(Color::Yellow),
-                ]));
-            }
-        }
-    }
+    daily_table.add_row(layout_total_row(
+        report,
+        layout,
+        show_activity,
+        &total_models_cell,
+    ));
     println!("{daily_table}");
 
     if let Some(insights) = report.insights.as_ref() {
         print_report_insights(insights);
     }
+}
+
+/// Column header titles for a layout, in render order. The matching value cells
+/// are produced by `primary_row` / `layout_total_row` in the same order.
+fn layout_columns(layout: TableLayout, show_activity: bool) -> Vec<&'static str> {
+    let mut cols = vec!["Date", "Models"];
+    if show_activity {
+        cols.push("Coding");
+    }
+    match layout {
+        TableLayout::Compact => {}
+        TableLayout::Standard => {
+            if show_activity {
+                cols.push("Tok/hr");
+            } else {
+                cols.push("Input");
+                cols.push("Output");
+            }
+        }
+        TableLayout::Full => {
+            if show_activity {
+                cols.push("Tok/hr");
+            }
+            cols.push("Input");
+            cols.push("Output");
+            cols.push("Cache Create");
+            cols.push("Cache Read");
+        }
+    }
+    cols.push("Total Tokens");
+    cols.push("Cost (USD)");
+    cols
+}
+
+fn set_layout_header(table: &mut Table, layout: TableLayout, show_activity: bool) {
+    table.set_header(
+        layout_columns(layout, show_activity)
+            .into_iter()
+            .map(|title| header_cell(title, Color::Cyan))
+            .collect::<Vec<_>>(),
+    );
+}
+
+fn layout_total_row(
+    report: &DailyReport,
+    layout: TableLayout,
+    show_activity: bool,
+    total_models_cell: &str,
+) -> Row {
+    let bold = |text: String| {
+        Cell::new(text)
+            .add_attribute(Attribute::Bold)
+            .fg(Color::Yellow)
+    };
+    let t = &report.totals;
+    let mut cells = vec![bold("TOTAL".to_string()), bold(total_models_cell.to_string())];
+    if show_activity {
+        cells.push(bold(format_activity_text(report.activity_totals.as_ref())));
+    }
+    match layout {
+        TableLayout::Compact => {}
+        TableLayout::Standard => {
+            if show_activity {
+                cells.push(bold(format_tokens_per_hour(
+                    report.activity_totals.as_ref(),
+                    t.total_tokens,
+                )));
+            } else {
+                cells.push(bold(format_u64(t.input_tokens)));
+                cells.push(bold(format_u64(t.output_tokens)));
+            }
+        }
+        TableLayout::Full => {
+            if show_activity {
+                cells.push(bold(format_tokens_per_hour(
+                    report.activity_totals.as_ref(),
+                    t.total_tokens,
+                )));
+            }
+            cells.push(bold(format_u64(t.input_tokens)));
+            cells.push(bold(format_u64(t.output_tokens)));
+            cells.push(bold(format_u64(t.cache_creation_input_tokens)));
+            cells.push(bold(format_u64(t.cache_read_input_tokens)));
+        }
+    }
+    cells.push(bold(format_u64(t.total_tokens)));
+    cells.push(bold(format_usd(t.cost_usd)));
+    Row::from(cells)
+}
+
+/// Natural rendered width of a layout (content + padding + borders), with no
+/// wrapping, so layout selection can pick the richest layout that actually fits.
+fn measure_layout_width(
+    report: &DailyReport,
+    layout: TableLayout,
+    show_activity: bool,
+    show_breakdown: bool,
+) -> usize {
+    let mut probe = Table::new();
+    // Default arrangement (Disabled) => columns take full content width, no wrap.
+    probe.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    set_layout_header(&mut probe, layout, show_activity);
+    for row in &report.daily {
+        probe.add_row(primary_row(row, layout, show_activity));
+        if show_breakdown {
+            add_breakdown_rows(&mut probe, row, layout, show_activity);
+        }
+    }
+    let total_models_cell = report_unique_model_count_by_source_multiline(report);
+    probe.add_row(layout_total_row(report, layout, show_activity, &total_models_cell));
+
+    let widths = probe.column_max_content_widths();
+    let n = widths.len();
+    let content: usize = widths.iter().map(|w| *w as usize).sum();
+    // comfy-table default per-column padding (1,1) = 2; UTF8_FULL borders = n + 1.
+    content + 2 * n + (n + 1)
+}
+
+/// Pick the richest layout whose natural width fits the terminal; Compact is the floor.
+fn choose_layout(
+    report: &DailyReport,
+    show_activity: bool,
+    show_breakdown: bool,
+    terminal_width: usize,
+) -> TableLayout {
+    for layout in [TableLayout::Full, TableLayout::Standard] {
+        if measure_layout_width(report, layout, show_activity, show_breakdown) <= terminal_width {
+            return layout;
+        }
+    }
+    TableLayout::Compact
 }
 
 fn print_report_insights(insights: &ReportInsights) {
@@ -1050,7 +968,7 @@ fn create_table(width: usize) -> Table {
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_width(table_width)
-        .set_content_arrangement(ContentArrangement::DynamicFullWidth);
+        .set_content_arrangement(ContentArrangement::Dynamic);
     if !io::stdout().is_terminal() && std::env::var("CLICOLOR_FORCE").is_ok() {
         table.enforce_styling();
     }
