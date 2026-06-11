@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-06-12
+
+### Changed
+- The interactive menu's **Balances** section now lists only providers whose API
+  key is actually configured (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`,
+  `XAI_API_KEY`, `MOONSHOT_API_KEY`, `ANTHROPIC_API_KEY`/`ANTHROPIC_ADMIN_KEY` —
+  each provider's documented convention), instead of always showing all six.
+  Antigravity (a local probe, no key) is always shown.
+
 ## [1.8.2] - 2026-06-11
 
 ### Fixed

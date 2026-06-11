@@ -571,7 +571,7 @@ enum MenuRow {
 
 fn menu_rows() -> Vec<MenuRow> {
     use MenuRow::{Cmd, Header};
-    vec![
+    let mut rows = vec![
         Header("Reporting"),
         Cmd { name: "today", desc: "Today's usage + coding activity" },
         Cmd { name: "daily", desc: "Per-day token usage and cost" },
@@ -591,14 +591,36 @@ fn menu_rows() -> Vec<MenuRow> {
         Header("Diagnostics"),
         Cmd { name: "doctor", desc: "Inspect roots, files, cache and pricing health" },
         Cmd { name: "parity", desc: "Compare tu totals against ccusage" },
-        Header("Balances"),
-        Cmd { name: "antigravity", desc: "Show Antigravity plan and usage limits" },
-        Cmd { name: "deepseek", desc: "Show DeepSeek API credit balance" },
-        Cmd { name: "openrouter", desc: "Show OpenRouter API credit balance" },
-        Cmd { name: "grok", desc: "Show Grok (xAI) credit balance" },
-        Cmd { name: "kimi", desc: "Show Kimi (Moonshot) credit balance" },
-        Cmd { name: "anthropic-api", desc: "Show Anthropic API usage today" },
-    ]
+    ];
+
+    // Balances: only surface providers whose API key is actually configured, so
+    // the menu shows what you can use, not 6 commands that just error. The env
+    // var names match each provider's documented convention. Antigravity is a
+    // local language-server probe (no key) so it's always shown.
+    let has = |key: &str| std::env::var_os(key).is_some();
+    let mut balances = vec![Cmd {
+        name: "antigravity",
+        desc: "Show Antigravity plan and usage limits",
+    }];
+    if has("DEEPSEEK_API_KEY") {
+        balances.push(Cmd { name: "deepseek", desc: "Show DeepSeek API credit balance" });
+    }
+    if has("OPENROUTER_API_KEY") {
+        balances.push(Cmd { name: "openrouter", desc: "Show OpenRouter API credit balance" });
+    }
+    if has("XAI_API_KEY") {
+        balances.push(Cmd { name: "grok", desc: "Show Grok (xAI) credit balance" });
+    }
+    if has("MOONSHOT_API_KEY") {
+        balances.push(Cmd { name: "kimi", desc: "Show Kimi (Moonshot) credit balance" });
+    }
+    if has("ANTHROPIC_API_KEY") || has("ANTHROPIC_ADMIN_KEY") {
+        balances.push(Cmd { name: "anthropic-api", desc: "Show Anthropic API usage today" });
+    }
+    rows.push(Header("Balances"));
+    rows.extend(balances);
+
+    rows
 }
 
 fn menu_visible(rows: &[MenuRow], filter: &str) -> Vec<usize> {
