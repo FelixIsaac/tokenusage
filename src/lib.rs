@@ -183,7 +183,27 @@ pub async fn run() -> Result<()> {
 /// tokio runtime for the async (non-GUI) commands.
 #[cfg(feature = "cli")]
 pub fn run_blocking() -> Result<()> {
+    use std::io::IsTerminal;
+
     let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));
+
+    // Bare `tu` (no subcommand, no flags) on an interactive terminal opens the
+    // command menu. Anything with args (e.g. `tu --json`) keeps the daily
+    // default; a pipe/non-TTY also keeps it so automation isn't broken.
+    if cli.command.is_none()
+        && std::env::args().nth(1).is_none()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+    {
+        match output::run_command_menu()? {
+            Some(name) => {
+                let exe = std::env::current_exe()?;
+                let status = std::process::Command::new(exe).arg(&name).status()?;
+                std::process::exit(status.code().unwrap_or(0));
+            }
+            None => return Ok(()),
+        }
+    }
 
     let command = cli.command.unwrap_or(Commands::Daily(DailyArgs::default()));
     let command = config::apply_config(command)?;

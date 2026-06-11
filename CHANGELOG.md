@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-06-11
+
+### Added
+- **Interactive command menu.** Running bare `tu` on an interactive terminal now
+  opens a category-grouped picker (arrow keys to move, type to filter, Enter to
+  run, Esc to quit) instead of dumping all 22 commands. Power users are
+  unaffected: `tu today`, `tu monthly`, etc. still run directly, and `tu` with
+  any args (e.g. `tu --json`) or in a pipe/non-TTY keeps the daily-report
+  default so scripts don't break.
+
 ## [1.7.0] - 2026-06-11
 
 ### Added

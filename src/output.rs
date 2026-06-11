@@ -16,8 +16,10 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color as TuiColor, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph, Row as TuiRow, Table as TuiTable, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Paragraph, Row as TuiRow, Table as TuiTable, Wrap,
+};
 use terminal_size::{Width, terminal_size};
 
 use crate::ReportInsights;
@@ -552,6 +554,201 @@ pub(crate) fn run_report_tui(report: &DailyReport) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Interactive command menu (bare `tu` on a TTY) — category-grouped picker.
+// Keep in sync with the Commands enum / help legend in cli.rs.
+// ---------------------------------------------------------------------------
+
+enum MenuRow {
+    Header(&'static str),
+    Cmd {
+        name: &'static str,
+        desc: &'static str,
+    },
+}
+
+fn menu_rows() -> Vec<MenuRow> {
+    use MenuRow::{Cmd, Header};
+    vec![
+        Header("Reporting"),
+        Cmd { name: "today", desc: "Today's usage + coding activity" },
+        Cmd { name: "daily", desc: "Per-day token usage and cost" },
+        Cmd { name: "weekly", desc: "Per-week token usage" },
+        Cmd { name: "monthly", desc: "Per-month token usage" },
+        Cmd { name: "activity", desc: "Coding-activity view with per-day breakdowns" },
+        Cmd { name: "blocks", desc: "Usage grouped by 5-hour billing blocks" },
+        Cmd { name: "session", desc: "Per-session token usage" },
+        Header("Live"),
+        Cmd { name: "live", desc: "Live-updating usage view" },
+        Cmd { name: "top", desc: "Real-time per-session viewer (htop for tokens)" },
+        Cmd { name: "gui", desc: "Desktop GUI (Iced)" },
+        Header("Integration"),
+        Cmd { name: "statusline", desc: "One-line status for the Claude Code statusLine hook" },
+        Cmd { name: "img", desc: "Render a usage report as a PNG" },
+        Cmd { name: "heartbeat", desc: "Editor-activity heartbeat collector and stats" },
+        Header("Diagnostics"),
+        Cmd { name: "doctor", desc: "Inspect roots, files, cache and pricing health" },
+        Cmd { name: "parity", desc: "Compare tu totals against ccusage" },
+        Header("Balances"),
+        Cmd { name: "antigravity", desc: "Show Antigravity plan and usage limits" },
+        Cmd { name: "deepseek", desc: "Show DeepSeek API credit balance" },
+        Cmd { name: "openrouter", desc: "Show OpenRouter API credit balance" },
+        Cmd { name: "grok", desc: "Show Grok (xAI) credit balance" },
+        Cmd { name: "kimi", desc: "Show Kimi (Moonshot) credit balance" },
+        Cmd { name: "anthropic-api", desc: "Show Anthropic API usage today" },
+    ]
+}
+
+fn menu_visible(rows: &[MenuRow], filter: &str) -> Vec<usize> {
+    if filter.is_empty() {
+        return (0..rows.len()).collect();
+    }
+    let needle = filter.to_ascii_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter_map(|(i, row)| match row {
+            MenuRow::Cmd { name, desc }
+                if name.to_ascii_lowercase().contains(&needle)
+                    || desc.to_ascii_lowercase().contains(&needle) =>
+            {
+                Some(i)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn first_cmd_pos(rows: &[MenuRow], visible: &[usize]) -> usize {
+    visible
+        .iter()
+        .position(|&ri| matches!(rows[ri], MenuRow::Cmd { .. }))
+        .unwrap_or(0)
+}
+
+fn step_cmd_pos(rows: &[MenuRow], visible: &[usize], pos: usize, forward: bool) -> usize {
+    let mut p = pos;
+    loop {
+        let next = if forward {
+            if p + 1 >= visible.len() {
+                return pos;
+            }
+            p + 1
+        } else {
+            if p == 0 {
+                return pos;
+            }
+            p - 1
+        };
+        p = next;
+        if matches!(rows[visible[p]], MenuRow::Cmd { .. }) {
+            return p;
+        }
+    }
+}
+
+/// Bare `tu` on an interactive terminal opens this picker. Returns the chosen
+/// command name, or None if the user quit.
+pub(crate) fn run_command_menu() -> Result<Option<String>> {
+    if !io::stdout().is_terminal() {
+        return Ok(None);
+    }
+    let rows = menu_rows();
+    let mut filter = String::new();
+    let mut visible = menu_visible(&rows, &filter);
+    let mut pos = first_cmd_pos(&rows, &visible);
+
+    let mut session = TuiSession::enter()?;
+    let chosen = loop {
+        session
+            .terminal
+            .draw(|frame| draw_menu(frame, &rows, &visible, pos, &filter))?;
+
+        if !event::poll(Duration::from_millis(150))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Esc => break None,
+            KeyCode::Enter => {
+                if let Some(&ri) = visible.get(pos)
+                    && let MenuRow::Cmd { name, .. } = rows[ri]
+                {
+                    break Some(name.to_string());
+                }
+            }
+            KeyCode::Down => pos = step_cmd_pos(&rows, &visible, pos, true),
+            KeyCode::Up => pos = step_cmd_pos(&rows, &visible, pos, false),
+            KeyCode::Backspace => {
+                filter.pop();
+                visible = menu_visible(&rows, &filter);
+                pos = first_cmd_pos(&rows, &visible);
+            }
+            KeyCode::Char(c) => {
+                filter.push(c);
+                visible = menu_visible(&rows, &filter);
+                pos = first_cmd_pos(&rows, &visible);
+            }
+            _ => {}
+        }
+    };
+    drop(session);
+    Ok(chosen)
+}
+
+fn draw_menu(
+    frame: &mut ratatui::Frame<'_>,
+    rows: &[MenuRow],
+    visible: &[usize],
+    pos: usize,
+    filter: &str,
+) {
+    let [list_area, footer] =
+        Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
+
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|&ri| match &rows[ri] {
+            MenuRow::Header(title) => ListItem::new(Line::from(Span::styled(
+                (*title).to_string(),
+                Style::default()
+                    .fg(TuiColor::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            MenuRow::Cmd { name, desc } => ListItem::new(Line::from(vec![
+                Span::styled(format!("{name:<14}"), Style::default().fg(TuiColor::White)),
+                Span::styled((*desc).to_string(), Style::default().fg(TuiColor::DarkGray)),
+            ])),
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(pos.min(visible.len().saturating_sub(1))));
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" tu — pick a command "),
+        )
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("❯ ");
+    frame.render_stateful_widget(list, list_area, &mut state);
+
+    let hint = if filter.is_empty() {
+        "↑/↓ move · enter run · type to filter · esc quit".to_string()
+    } else {
+        format!("/{filter}    enter run · esc quit")
+    };
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(TuiColor::DarkGray)),
+        footer,
+    );
 }
 
 fn draw_report_tui(frame: &mut ratatui::Frame<'_>, report: &DailyReport, offset: usize) {
