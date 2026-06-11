@@ -30,6 +30,13 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
         .and_then(|h| h.session_id.as_deref())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+
+    // Structured modes (--json / --field / --format) render from a shared fields
+    // cache so N widget calls trigger at most one parse per refresh interval.
+    if args.common.json || args.field.is_some() || args.format.is_some() {
+        return run_statusline_structured(&args, hook.as_ref(), session_id, &tz).await;
+    }
+
     let cache_path = statusline_cache_path(session_id);
 
     if args.cache
@@ -90,6 +97,137 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_statusline_structured(
+    args: &StatuslineArgs,
+    hook: Option<&StatuslineHookInput>,
+    session_id: Option<&str>,
+    tz: &TimeZoneMode,
+) -> Result<()> {
+    let cache_path = statusline_fields_cache_path(session_id);
+    let transcript = hook.and_then(|h| h.transcript_path.as_deref());
+
+    let fields = match args
+        .cache
+        .then(|| read_statusline_fields_cache(&cache_path, args.refresh_interval, transcript))
+        .flatten()
+    {
+        Some(fields) => fields,
+        None => {
+            let fields = compute_statusline_fields(args, hook, session_id, tz).await?;
+            if args.cache {
+                write_statusline_fields_cache(&cache_path, &fields, transcript);
+            }
+            fields
+        }
+    };
+
+    if let Some(name) = &args.field {
+        match statusline_field_value(&fields, name) {
+            Some(value) => println!("{value}"),
+            None => bail!(
+                "unknown --field '{name}'. Available: {}",
+                STATUSLINE_FIELD_NAMES.join(", ")
+            ),
+        }
+    } else if let Some(template) = &args.format {
+        println!("{}", render_statusline_format(&fields, template));
+    } else {
+        println!("{}", serde_json::to_string(&fields)?);
+    }
+    Ok(())
+}
+
+async fn compute_statusline_fields(
+    args: &StatuslineArgs,
+    hook: Option<&StatuslineHookInput>,
+    session_id: Option<&str>,
+    tz: &TimeZoneMode,
+) -> Result<StatuslineFields> {
+    let loaded = load_usage(&args.common, tz).await?;
+    let today = local_date(Utc::now(), tz);
+    let today_totals = loaded
+        .events
+        .iter()
+        .filter(|e| local_date(e.timestamp, tz) == today)
+        .fold(TokenCounts::default(), |mut acc, e| {
+            acc.add_assign(e.usage.to_counts());
+            acc
+        });
+    let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
+    let block = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
+
+    let model = hook
+        .and_then(|h| h.model.as_ref())
+        .and_then(|m| m.display_name.as_deref().or(m.id.as_deref()))
+        .unwrap_or("unknown")
+        .to_string();
+
+    let cc_cost = hook
+        .and_then(|h| h.cost.as_ref())
+        .and_then(|c| c.total_cost_usd);
+    let derived_cost = session_totals.as_ref().map(|t| t.cost_usd);
+    let session_cost_usd = match args.cost_source {
+        CostSource::Auto | CostSource::Both => cc_cost.or(derived_cost).unwrap_or(0.0),
+        CostSource::Derived => derived_cost.unwrap_or(0.0),
+        CostSource::Cc => cc_cost.unwrap_or(0.0),
+    };
+
+    let (block_cost_usd, block_remaining_min) = match &block {
+        Some(b) => (Some(b.totals.cost_usd), Some(b.remaining_minutes)),
+        None => (None, None),
+    };
+    let (burn_cost_per_hour, burn_tokens_per_min, burn_status) =
+        match block.as_ref().and_then(|b| b.burn.as_ref()) {
+            Some(burn) => (
+                Some(burn.cost_per_hour),
+                Some(burn.tokens_per_minute),
+                Some(
+                    match burn.status {
+                        BurnStatus::Normal => "normal",
+                        BurnStatus::Moderate => "moderate",
+                        BurnStatus::High => "high",
+                    }
+                    .to_string(),
+                ),
+            ),
+            None => (None, None, None),
+        };
+
+    let (context_pct, context_level) = match hook.and_then(|h| h.context_window.as_ref()) {
+        Some(ctx) => {
+            let input = ctx.total_input_tokens.unwrap_or(0);
+            let limit = ctx.context_window_size.unwrap_or(0);
+            if limit > 0 {
+                let pct = (input as f64 / limit as f64) * 100.0;
+                let level = if pct < f64::from(args.context_low_threshold) {
+                    "low"
+                } else if pct < f64::from(args.context_medium_threshold) {
+                    "medium"
+                } else {
+                    "high"
+                };
+                (Some(pct), Some(level.to_string()))
+            } else {
+                (None, None)
+            }
+        }
+        None => (None, None),
+    };
+
+    Ok(StatuslineFields {
+        model,
+        session_cost_usd,
+        today_cost_usd: today_totals.cost_usd,
+        block_cost_usd,
+        block_remaining_min,
+        burn_cost_per_hour,
+        burn_tokens_per_min,
+        burn_status,
+        context_pct,
+        context_level,
+    })
 }
 
 pub(super) fn read_statusline_hook_input() -> Result<Option<StatuslineHookInput>> {
@@ -174,6 +312,128 @@ pub(super) fn write_statusline_cache(cache_path: &Path, line: &str, transcript_p
     if let Ok(serialized) = serde_json::to_string(&entry) {
         let _ = std::fs::write(cache_path, serialized);
     }
+}
+
+/// Structured statusline values — the source of truth that `--json`, `--field`
+/// and `--format` all render from. Cached once per refresh interval (shared by
+/// every mode/widget), so N widget calls trigger at most one parse.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct StatuslineFields {
+    pub model: String,
+    pub session_cost_usd: f64,
+    pub today_cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_remaining_min: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn_cost_per_hour: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn_tokens_per_min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_level: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StatuslineFieldsCacheEntry {
+    updated_unix: u64,
+    #[serde(default)]
+    transcript_path: Option<String>,
+    #[serde(default)]
+    transcript_mtime_unix: Option<u64>,
+    fields: StatuslineFields,
+}
+
+pub(super) fn statusline_fields_cache_path(session_id: Option<&str>) -> PathBuf {
+    let suffix = session_id
+        .map(sanitize_cache_key)
+        .unwrap_or_else(|| "global".to_string());
+    std::env::temp_dir().join(format!("tu_statusline_fields_{suffix}.json"))
+}
+
+pub(super) fn read_statusline_fields_cache(
+    cache_path: &Path,
+    refresh_interval: u64,
+    transcript_path: Option<&str>,
+) -> Option<StatuslineFields> {
+    let raw = std::fs::read_to_string(cache_path).ok()?;
+    let entry = serde_json::from_str::<StatuslineFieldsCacheEntry>(&raw).ok()?;
+    if unix_now_secs().saturating_sub(entry.updated_unix) >= refresh_interval {
+        return None;
+    }
+    if let Some(path) = transcript_path
+        && (entry.transcript_path.as_deref() != Some(path)
+            || entry.transcript_mtime_unix != file_mtime_unix(path))
+    {
+        return None;
+    }
+    Some(entry.fields)
+}
+
+pub(super) fn write_statusline_fields_cache(
+    cache_path: &Path,
+    fields: &StatuslineFields,
+    transcript_path: Option<&str>,
+) {
+    let entry = StatuslineFieldsCacheEntry {
+        updated_unix: unix_now_secs(),
+        transcript_path: transcript_path.map(ToString::to_string),
+        transcript_mtime_unix: transcript_path.and_then(file_mtime_unix),
+        fields: fields.clone(),
+    };
+    if let Ok(serialized) = serde_json::to_string(&entry) {
+        let _ = std::fs::write(cache_path, serialized);
+    }
+}
+
+/// Formatted value for a single field name (kebab-case), for `--field`/`--format`.
+pub(super) fn statusline_field_value(fields: &StatuslineFields, name: &str) -> Option<String> {
+    let v = match name {
+        "model" => fields.model.clone(),
+        "session-cost" => format_usd(fields.session_cost_usd),
+        "today-cost" => format_usd(fields.today_cost_usd),
+        "block-cost" => fields.block_cost_usd.map(format_usd)?,
+        "block-left" => fields.block_remaining_min.map(format_remaining_minutes)?,
+        "burn-hourly" => fields.burn_cost_per_hour.map(format_usd)?,
+        "burn-per-min" => fields
+            .burn_tokens_per_min
+            .map(|t| format_u64(t.round() as u64))?,
+        "burn-status" => fields.burn_status.clone()?,
+        "ctx-pct" => fields.context_pct.map(|p| format!("{p:.0}%"))?,
+        "ctx-level" => fields.context_level.clone()?,
+        _ => return None,
+    };
+    Some(v)
+}
+
+pub(super) const STATUSLINE_FIELD_NAMES: &[&str] = &[
+    "model",
+    "session-cost",
+    "today-cost",
+    "block-cost",
+    "block-left",
+    "burn-hourly",
+    "burn-per-min",
+    "burn-status",
+    "ctx-pct",
+    "ctx-level",
+];
+
+/// Substitute every `{field-name}` in `template` with its value (empty if absent).
+pub(super) fn render_statusline_format(fields: &StatuslineFields, template: &str) -> String {
+    let mut out = template.to_string();
+    for name in STATUSLINE_FIELD_NAMES {
+        let token = format!("{{{name}}}");
+        if out.contains(&token) {
+            let value = statusline_field_value(fields, name).unwrap_or_default();
+            out = out.replace(&token, &value);
+        }
+    }
+    out
 }
 
 pub(super) fn file_mtime_unix(path: &str) -> Option<u64> {
@@ -572,5 +832,46 @@ pub(super) fn format_time_until_reset_short(resets_at: i64, now: DateTime<Utc>) 
         }
     } else {
         format_hours_minutes(minutes)
+    }
+}
+
+#[cfg(test)]
+mod statusline_field_tests {
+    use super::*;
+
+    fn sample() -> StatuslineFields {
+        StatuslineFields {
+            model: "claude-opus-4-8".to_string(),
+            session_cost_usd: 12.34,
+            today_cost_usd: 22.18,
+            block_cost_usd: Some(6.71),
+            block_remaining_min: Some(70),
+            burn_cost_per_hour: Some(134.18),
+            burn_tokens_per_min: Some(1_611_590.0),
+            burn_status: Some("moderate".to_string()),
+            context_pct: Some(45.0),
+            context_level: Some("low".to_string()),
+        }
+    }
+
+    #[test]
+    fn field_values_are_formatted() {
+        let f = sample();
+        assert_eq!(statusline_field_value(&f, "model").unwrap(), "claude-opus-4-8");
+        assert_eq!(statusline_field_value(&f, "today-cost").unwrap(), "$22.18");
+        assert_eq!(statusline_field_value(&f, "burn-status").unwrap(), "moderate");
+        assert!(statusline_field_value(&f, "block-left").unwrap().contains("1h 10m"));
+        assert!(statusline_field_value(&f, "bogus").is_none());
+    }
+
+    #[test]
+    fn format_substitutes_known_tokens_only() {
+        let f = sample();
+        assert_eq!(
+            render_statusline_format(&f, "{model} {today-cost}"),
+            "claude-opus-4-8 $22.18"
+        );
+        // Unknown tokens are left untouched.
+        assert_eq!(render_statusline_format(&f, "{model} {bogus}"), "claude-opus-4-8 {bogus}");
     }
 }

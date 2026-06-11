@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-06-12
+
+### Added
+- **Modular `tu statusline` output** for status-bar integrations (e.g. ccstatusline):
+  - `--json` emits all values structured (model, session/today/block cost,
+    block-remaining, burn rate/status, context %).
+  - `--field <name>` emits a single formatted value (e.g. `today-cost` -> `$22.18`;
+    names: model, session-cost, today-cost, block-cost, block-left, burn-hourly,
+    burn-per-min, burn-status, ctx-pct, ctx-level).
+  - `--format "<template>"` substitutes `{field}` placeholders into a custom line.
+  - All three render from one shared per-session fields cache, so N widgets trigger
+    at most one parse per `--refresh-interval`. The default full-line output is
+    unchanged. See docs/statusline.md.
+
 ## [1.8.3] - 2026-06-12
 
 ### Changed

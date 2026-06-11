@@ -732,6 +732,18 @@ pub(crate) struct StatuslineArgs {
         help = "Context medium threshold percentage (0-100)"
     )]
     pub(crate) context_medium_threshold: u8,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Emit a single field (e.g. today-cost, block-left) instead of the full line"
+    )]
+    pub(crate) field: Option<String>,
+    #[arg(
+        long,
+        value_name = "TEMPLATE",
+        help = "Emit a custom line, substituting {field} placeholders (e.g. \"{today-cost} {block-left}\")"
+    )]
+    pub(crate) format: Option<String>,
 }
 
 #[cfg(feature = "cli")]
