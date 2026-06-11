@@ -163,7 +163,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             insights,
         };
 
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
+        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
         print_membership_estimate(
             &json_report.membership_estimate,
             resolved_limit,

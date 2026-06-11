@@ -669,7 +669,7 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
     } else if args.tui {
         run_report_tui(&report)
     } else {
-        print_report_table_with_options(&report, args.common.compact, args.common.breakdown);
+        print_report_table_with_options(&report, args.common.compact, args.common.breakdown, args.common.brief);
         print_debug(&report.stats, &args.common);
         Ok(())
     }
@@ -733,7 +733,7 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
             stats: report.stats,
             insights: report.insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
+        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
         print_debug(&show.stats, &args.common);
         Ok(())
     }
@@ -799,7 +799,7 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
             stats: report.stats,
             insights: report.insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
+        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
         print_debug(&show.stats, &args.common);
         Ok(())
     }
@@ -863,6 +863,15 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
             stats,
         };
         emit_json(&out, args.common.jq.as_deref())
+    } else if args.common.brief {
+        let top_model = breakdowns.models.first().map(|m| m.name()).unwrap_or("-");
+        println!(
+            "{}  {} tok  {}  top {top_model}",
+            end,
+            crate::output::format_u64(day_totals.total_tokens),
+            crate::output::format_usd(day_totals.cost_usd),
+        );
+        Ok(())
     } else {
         print_today_view(
             &end.to_string(),
@@ -942,7 +951,7 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
     } else {
         print_activity_overview("Activity", &overview);
         println!();
-        print_report_table_with_options(&report, args.common.compact, false);
+        print_report_table_with_options(&report, args.common.compact, false, args.common.brief);
         print_activity_breakdown_section("Projects", &breakdowns.projects);
         print_activity_breakdown_section("Languages", &breakdowns.languages);
         print_source_model_breakdown_section(&breakdowns.sources, &breakdowns.models);
@@ -1141,7 +1150,7 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             stats: json_report.stats,
             insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown);
+        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
         print_debug(&show.stats, &args.common);
         Ok(())
     }

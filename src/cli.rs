@@ -157,6 +157,11 @@ pub struct CommonArgs {
     pub compact: bool,
     #[cfg_attr(
         feature = "cli",
+        arg(long, help = "One-line headline summary instead of the full table")
+    )]
+    pub brief: bool,
+    #[cfg_attr(
+        feature = "cli",
         arg(long, help = "Worker thread count (default: CPU cores)")
     )]
     pub workers: Option<usize>,

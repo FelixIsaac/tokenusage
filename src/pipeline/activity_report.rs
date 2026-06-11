@@ -76,6 +76,12 @@ pub(super) struct TokenBreakdownStat {
     percent: f64,
 }
 
+impl TokenBreakdownStat {
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct TodayOut {
     pub(super) date: String,

@@ -24,11 +24,38 @@ use crate::ReportInsights;
 use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
 use std::collections::BTreeSet;
 
+/// Headline-first one-liner for muscle-memory checks (`--brief`): range, tokens,
+/// cost, top model — no table.
+fn print_report_brief(report: &DailyReport) {
+    let range = match (report.daily.first(), report.daily.last()) {
+        (Some(first), Some(last)) if first.date != last.date => {
+            format!("{} -> {}", first.date, last.date)
+        }
+        (Some(first), _) => first.date.clone(),
+        _ => "-".to_string(),
+    };
+    let top_model = report
+        .insights
+        .as_ref()
+        .and_then(|i| i.top_model.as_deref())
+        .unwrap_or("-");
+    println!(
+        "{range}  {} tok  {}  top {top_model}",
+        format_u64(report.totals.total_tokens),
+        format_usd(report.totals.cost_usd),
+    );
+}
+
 pub(crate) fn print_report_table_with_options(
     report: &DailyReport,
     force_compact: bool,
     show_breakdown: bool,
+    brief: bool,
 ) {
+    if brief {
+        print_report_brief(report);
+        return;
+    }
     let terminal_width = detect_terminal_width();
     let show_activity = report_has_activity(report);
     let total_models_cell = report_unique_model_count_by_source_multiline(report);
@@ -1004,7 +1031,7 @@ fn header_cell(text: &str, color: Color) -> Cell {
     Cell::new(text).fg(color).add_attribute(Attribute::Bold)
 }
 
-fn format_u64(value: u64) -> String {
+pub(crate) fn format_u64(value: u64) -> String {
     let raw = value.to_string();
     let mut out = String::with_capacity(raw.len() + (raw.len() / 3));
     let total = raw.len();
@@ -1018,7 +1045,7 @@ fn format_u64(value: u64) -> String {
     out
 }
 
-fn format_usd(value: f64) -> String {
+pub(crate) fn format_usd(value: f64) -> String {
     format!("${value:.2}")
 }
 

@@ -393,6 +393,7 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         locale: None,
         config: None,
         compact: false,
+        brief: false,
         workers: config.workers,
         no_claude: config.no_claude,
         no_codex: config.no_codex,

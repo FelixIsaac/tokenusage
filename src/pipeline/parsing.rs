@@ -2454,31 +2454,37 @@ pub(super) fn hydrate_cached_events(
     stats
         .lines_missing_usage
         .fetch_add(cached.stats.lines_missing_usage, Ordering::Relaxed);
-    stats
-        .lines_unknown_pricing
-        .fetch_add(cached.stats.lines_unknown_pricing, Ordering::Relaxed);
+    // NB: lines_unknown_pricing is NOT taken from the cached stats — it depends
+    // on the CURRENT pricing table, so we recompute it live below (pre-filter,
+    // matching the parser, which counts unknown pricing before the date filter).
 
     let (session, project) = derive_session_meta(file);
     let file_path = file.path.display().to_string();
     let mut filtered = 0usize;
     let mut parsed = 0usize;
+    let mut unknown_pricing = 0usize;
     let mut events = Vec::with_capacity(cached.events.len());
 
     for cached_event in &cached.events {
+        // Re-price against the CURRENT table, mirroring the parser EXACTLY so a
+        // cached event never drifts from a freshly-parsed one: the parser uses
+        // `estimate_cost(...).map(..).unwrap_or((0.0, unknown))`, i.e. an unknown
+        // model is $0 (not the stale cached cost). Count unknowns pre-filter.
+        let mut usage = cached_event.usage;
+        match pricing.estimate_cost(&cached_event.model, usage) {
+            Some(cost) => usage.cost_usd = cost,
+            None => {
+                usage.cost_usd = 0.0;
+                unknown_pricing += 1;
+            }
+        }
+
         let day = local_date(cached_event.timestamp, timezone);
         if !filter.allows(day) {
             filtered += 1;
             continue;
         }
         parsed += 1;
-        // Re-price against the CURRENT table, mirroring the parser EXACTLY so a
-        // cached event never drifts from a freshly-parsed one: the parser uses
-        // `estimate_cost(...).map(..).unwrap_or((0.0, unknown))`, i.e. an unknown
-        // model is $0 (not the stale cached cost).
-        let mut usage = cached_event.usage;
-        usage.cost_usd = pricing
-            .estimate_cost(&cached_event.model, usage)
-            .unwrap_or(0.0);
         events.push(UsageEvent {
             timestamp: cached_event.timestamp,
             source: file.source,
@@ -2498,6 +2504,9 @@ pub(super) fn hydrate_cached_events(
 
     stats.lines_filtered.fetch_add(filtered, Ordering::Relaxed);
     stats.lines_parsed.fetch_add(parsed, Ordering::Relaxed);
+    stats
+        .lines_unknown_pricing
+        .fetch_add(unknown_pricing, Ordering::Relaxed);
 
     events
 }

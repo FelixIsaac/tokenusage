@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-06-11
+
+### Added
+- `--brief`: a one-line headline (range · tokens · cost · top model) instead of
+  the full table, for quick muscle-memory checks. Works across `today`, `daily`,
+  `weekly`, `monthly`, `blocks`, `session`.
+
+### Fixed
+- The `unknown-pricing` stat (`--debug` / `doctor --pricing-debug`) is now
+  recomputed against the *current* pricing table when serving cache hits
+  (pre-filter, matching the parser) instead of replaying the cached count, so it
+  no longer lags after a model becomes known/unknown.
+
 ## [1.6.2] - 2026-06-11
 
 ### Fixed
