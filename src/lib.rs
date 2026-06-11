@@ -190,9 +190,11 @@ pub fn run_blocking() -> Result<()> {
     // Bare `tu` (no subcommand, no flags) on an interactive terminal opens the
     // command menu. Anything with args (e.g. `tu --json`) keeps the daily
     // default; a pipe/non-TTY also keeps it so automation isn't broken.
+    // Only gate on stdout (matching `tu top`/`live`): crossterm reads key input
+    // via the console API, not std stdin, so `stdin().is_terminal()` is false in
+    // Git Bash even when the TUI works. A piped stdout still falls back to daily.
     if cli.command.is_none()
         && std::env::args().nth(1).is_none()
-        && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
     {
         match output::run_command_menu()? {

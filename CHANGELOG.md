@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-06-11
+
+### Fixed
+- Interactive menu (bare `tu`) now opens in Git Bash / MINGW64. It was gated on
+  `stdin().is_terminal()`, which returns false under MSYS pipe ptys even when the
+  TUI works; now gated on `stdout().is_terminal()` only, matching `tu top`/`live`
+  (crossterm reads key input via the console API, not std stdin).
+
 ## [1.8.0] - 2026-06-11
 
 ### Added
