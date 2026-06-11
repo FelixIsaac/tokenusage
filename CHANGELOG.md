@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-06-11
+
+### Fixed
+- Re-price-on-hydrate now mirrors the parser exactly for **unknown models**:
+  an unknown model re-prices to $0 (matching the parser's `None => 0.0`) instead
+  of keeping the stale cached cost, so cached and freshly-parsed events can't
+  drift. Pinned by a test.
+
 ## [1.6.1] - 2026-06-11
 
 ### Fixed

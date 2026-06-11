@@ -2471,13 +2471,14 @@ pub(super) fn hydrate_cached_events(
             continue;
         }
         parsed += 1;
-        // Re-price against the CURRENT table: cached cost was computed with
-        // whatever pricing was live when the file was parsed. Keep the cached
-        // cost only when the model is unknown to the current table.
+        // Re-price against the CURRENT table, mirroring the parser EXACTLY so a
+        // cached event never drifts from a freshly-parsed one: the parser uses
+        // `estimate_cost(...).map(..).unwrap_or((0.0, unknown))`, i.e. an unknown
+        // model is $0 (not the stale cached cost).
         let mut usage = cached_event.usage;
-        if let Some(cost) = pricing.estimate_cost(&cached_event.model, usage) {
-            usage.cost_usd = cost;
-        }
+        usage.cost_usd = pricing
+            .estimate_cost(&cached_event.model, usage)
+            .unwrap_or(0.0);
         events.push(UsageEvent {
             timestamp: cached_event.timestamp,
             source: file.source,

@@ -479,6 +479,61 @@ fn hydrate_cached_events_reprices_against_current_table() {
 }
 
 #[test]
+fn hydrate_reprices_unknown_model_to_zero_like_parser() {
+    // Parser maps an unknown model to $0 (None => (0.0, true)); hydration must
+    // match, NOT retain the stale cached cost, or cached vs fresh events drift.
+    let ts = utc_dt(2026, 4, 10, 9, 30, 0);
+    let file = DiscoveredFile {
+        source: SourceKind::Claude,
+        root: PathBuf::from("C:/Users/me/.claude/projects"),
+        path: PathBuf::from("C:/Users/me/.claude/projects/p/s.jsonl"),
+    };
+    let cached = CachedFileEntry {
+        fingerprint: FileFingerprint {
+            size: 100,
+            modified_unix_secs: 1,
+            modified_unix_nanos: 0,
+        },
+        stats: CachedFileStats::default(),
+        events: vec![CachedUsageEvent {
+            timestamp: ts,
+            model: "totally-unlisted-model-xyz".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: 1_000_000,
+                cost_usd: 42.0, // stale non-zero cost
+                ..UsageAccumulator::default()
+            },
+            session: None,
+            project: None,
+            file_path: None,
+        }],
+        parsed_offset: 100,
+        codex_last_model: None,
+        codex_last_totals: None,
+        claude_recent_keys: Vec::new(),
+    };
+
+    let stats = ParseStatsAtomic::default();
+    let events = hydrate_cached_events(
+        &file,
+        &cached,
+        DateFilter {
+            since: None,
+            until: None,
+        },
+        &TimeZoneMode::Utc,
+        &crate::types::PricingTable::default_table(),
+        &stats,
+    );
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].usage.cost_usd, 0.0,
+        "unknown model must re-price to $0 to match the parser, not keep stale cost"
+    );
+}
+
+#[test]
 fn test_deepseek_parse() {
     let mock = r#"{
         "is_available": true,
