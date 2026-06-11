@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-06-11
+
+### Fixed
+- Bare `tu` now actually opens the interactive menu. `normalize_cli_args` injects
+  `daily` for a bare invocation, so the menu's `cli.command.is_none()` check was
+  always false; gate on raw args (`env::args().nth(1).is_none()`) instead.
+
 ## [1.8.1] - 2026-06-11
 
 ### Fixed

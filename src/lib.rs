@@ -187,16 +187,14 @@ pub fn run_blocking() -> Result<()> {
 
     let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));
 
-    // Bare `tu` (no subcommand, no flags) on an interactive terminal opens the
-    // command menu. Anything with args (e.g. `tu --json`) keeps the daily
-    // default; a pipe/non-TTY also keeps it so automation isn't broken.
-    // Only gate on stdout (matching `tu top`/`live`): crossterm reads key input
-    // via the console API, not std stdin, so `stdin().is_terminal()` is false in
-    // Git Bash even when the TUI works. A piped stdout still falls back to daily.
-    if cli.command.is_none()
-        && std::env::args().nth(1).is_none()
-        && std::io::stdout().is_terminal()
-    {
+    // Bare `tu` (no args at all) on an interactive terminal opens the command
+    // menu. We test the RAW args, not `cli.command`, because `normalize_cli_args`
+    // injects `daily` for a bare invocation (so `cli.command` is never None here).
+    // Anything with args (e.g. `tu --json`) keeps the daily default; a piped/
+    // non-TTY stdout also keeps it so automation isn't broken. Gate on stdout
+    // only (matching `tu top`/`live`): crossterm reads keys via the console API,
+    // so `stdin().is_terminal()` is false in Git Bash even when the TUI works.
+    if std::env::args().nth(1).is_none() && std::io::stdout().is_terminal() {
         match output::run_command_menu()? {
             Some(name) => {
                 let exe = std::env::current_exe()?;
