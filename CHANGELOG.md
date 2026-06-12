@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-06-12
+
+### Fixed
+- `tu antigravity` on Windows now fails with a clear message (detection uses
+  ps/lsof, macOS/Linux only) instead of a cryptic `/bin/ps` "path not found"
+  error, and the interactive menu hides the `antigravity` entry on Windows.
+  A real Windows port needs the `agy`-process + flagless-port discovery (see
+  usage-tray-windows).
+
 ## [1.9.0] - 2026-06-12
 
 ### Added

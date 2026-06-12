@@ -1656,6 +1656,13 @@ pub(super) struct AntigravityRequestContext {
 }
 
 pub(super) async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
+    if cfg!(windows) {
+        bail!(
+            "Antigravity detection isn't supported on Windows yet — tu uses ps/lsof (macOS/Linux). \
+             On Windows the language server runs as `agy` with a different port discovery; \
+             see usage-tray-windows for a working implementation."
+        );
+    }
     let output = tokio::task::spawn_blocking(|| {
         Command::new("/bin/ps")
             .args(["-ax", "-o", "pid=,command="])

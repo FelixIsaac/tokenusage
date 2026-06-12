@@ -598,10 +598,14 @@ fn menu_rows() -> Vec<MenuRow> {
     // var names match each provider's documented convention. Antigravity is a
     // local language-server probe (no key) so it's always shown.
     let has = |key: &str| std::env::var_os(key).is_some();
-    let mut balances = vec![Cmd {
-        name: "antigravity",
-        desc: "Show Antigravity plan and usage limits",
-    }];
+    let mut balances: Vec<MenuRow> = Vec::new();
+    // Antigravity detection is macOS/Linux-only in tu (ps/lsof) — hide on Windows.
+    if !cfg!(windows) {
+        balances.push(Cmd {
+            name: "antigravity",
+            desc: "Show Antigravity plan and usage limits",
+        });
+    }
     if has("DEEPSEEK_API_KEY") {
         balances.push(Cmd { name: "deepseek", desc: "Show DeepSeek API credit balance" });
     }
@@ -617,8 +621,10 @@ fn menu_rows() -> Vec<MenuRow> {
     if has("ANTHROPIC_API_KEY") || has("ANTHROPIC_ADMIN_KEY") {
         balances.push(Cmd { name: "anthropic-api", desc: "Show Anthropic API usage today" });
     }
-    rows.push(Header("Balances"));
-    rows.extend(balances);
+    if !balances.is_empty() {
+        rows.push(Header("Balances"));
+        rows.extend(balances);
+    }
 
     rows
 }
