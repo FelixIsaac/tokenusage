@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-06-12
+
+### Changed
+- Bare-`tu` menu now has a dedicated **`statusline init`** entry (setup) separate
+  from `statusline` (which just prints the rendered line) — picking it from the
+  menu no longer dumps a raw status line. The menu dispatcher handles multi-token
+  commands.
+
+### Added
+- Hidden `--settings-path <FILE>` on `tu statusline init` (testing seam) so the
+  write/backup/merge path has real unit tests — on Windows `dirs::home_dir()`
+  ignores `HOME`/`USERPROFILE`, so env redirection can't sandbox it.
+
 ## [1.10.0] - 2026-06-12
 
 ### Added

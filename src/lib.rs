@@ -197,8 +197,12 @@ pub fn run_blocking() -> Result<()> {
     if std::env::args().nth(1).is_none() && std::io::stdout().is_terminal() {
         match output::run_command_menu()? {
             Some(name) => {
+                // A menu entry may be a multi-token command (e.g. "statusline init"),
+                // so split into separate args rather than passing one arg with a space.
                 let exe = std::env::current_exe()?;
-                let status = std::process::Command::new(exe).arg(&name).status()?;
+                let status = std::process::Command::new(exe)
+                    .args(name.split_whitespace())
+                    .status()?;
                 std::process::exit(status.code().unwrap_or(0));
             }
             None => return Ok(()),

@@ -148,10 +148,13 @@ fn run_statusline_init(init: &StatuslineInitArgs) -> Result<()> {
         return Ok(());
     }
 
-    let settings_path = dirs::home_dir()
-        .context("Failed to resolve home directory")?
-        .join(".claude")
-        .join("settings.json");
+    let settings_path = match &init.settings_path {
+        Some(p) => PathBuf::from(p),
+        None => dirs::home_dir()
+            .context("Failed to resolve home directory")?
+            .join(".claude")
+            .join("settings.json"),
+    };
 
     let block = serde_json::json!({ "type": "command", "command": command });
 
@@ -1168,5 +1171,72 @@ mod statusline_init_tests {
         assert_eq!(root["permissions"]["allow"], json!(["Bash"]));
         assert_eq!(root["statusLine"]["command"], json!(CMD));
         assert_eq!(root["statusLine"]["type"], json!("command"));
+    }
+
+    fn seam(path: &std::path::Path) -> StatuslineInitArgs {
+        StatuslineInitArgs {
+            yes: true,
+            settings_path: Some(path.to_string_lossy().into_owned()),
+            ..Default::default()
+        }
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("tu_init_test_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn init_writes_backs_up_and_preserves_keys() {
+        let dir = temp_dir("write");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"model":"opus","statusLine":{"command":"ccstatusline"}}"#).unwrap();
+
+        run_statusline_init(&seam(&path)).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["model"], json!("opus")); // unrelated key preserved
+        assert_eq!(written["statusLine"]["command"], json!(CMD)); // statusLine replaced
+        // Original was backed up verbatim before the overwrite.
+        let bak = path.with_extension("json.bak");
+        assert!(bak.exists(), "backup should exist");
+        assert!(std::fs::read_to_string(&bak).unwrap().contains("ccstatusline"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_clean_insert_creates_file_without_backup() {
+        let dir = temp_dir("insert");
+        let path = dir.join("settings.json"); // does not exist yet
+
+        run_statusline_init(&seam(&path)).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["statusLine"]["command"], json!(CMD));
+        assert!(
+            !path.with_extension("json.bak").exists(),
+            "no backup for a fresh file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_refuses_malformed_settings() {
+        let dir = temp_dir("malformed");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ this is not json").unwrap();
+
+        let err = run_statusline_init(&seam(&path)).unwrap_err();
+        assert!(err.to_string().contains("valid JSON"));
+        // File left untouched.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not json");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

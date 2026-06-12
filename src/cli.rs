@@ -780,6 +780,9 @@ pub(crate) struct StatuslineInitArgs {
         help = "Flags to bake into the standalone command (default: \"--cache --refresh-interval 30\")"
     )]
     pub(crate) flags: Option<String>,
+    #[arg(long, hide = true, value_name = "FILE")]
+    /// Override the settings.json path (testing only).
+    pub(crate) settings_path: Option<String>,
 }
 
 #[cfg(feature = "cli")]
