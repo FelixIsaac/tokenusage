@@ -5,12 +5,36 @@ Code status-line **hook JSON** on stdin (session id, model, transcript path,
 cost, context window) and prints cost/quota info that the editor's built-in
 status widgets can't show.
 
-There are two ways to use it — pick one.
+## Quick setup: `tu statusline init`
+
+Don't hand-edit JSON — run:
+
+```bash
+tu statusline init
+```
+
+It finds `~/.claude/settings.json`, backs it up, adds the `statusLine` block
+(standalone mode), and asks you to confirm — **merging** so every other setting
+is preserved. If a `statusLine` is already set by another tool (ccstatusline, a
+custom script), it **won't overwrite it**; it stops and tells you how to compose
+instead. Flags:
+
+| Flag | What it does |
+|---|---|
+| *(none)* | Wire in standalone mode, with a confirm prompt |
+| `--print` | Show the settings block, write nothing (safe preview — good for AI agents) |
+| `--ccstatusline` | Print a copy-paste **prompt** to hand your AI assistant to integrate tu into your *existing* ccstatusline / custom line |
+| `--yes` | Skip the confirm (non-interactive / agent use) |
+| `--flags "<...>"` | Override the baked-in `--cache --refresh-interval 30` |
+
+The two modes below are what `init` wires up — read on if you want the details
+or prefer to edit by hand.
 
 ## 1. Standalone (simplest)
 
 Point Claude Code's `statusLine.command` at `tu` and you're done — one line, zero
-extra tooling. In `~/.claude/settings.json`:
+extra tooling. `tu statusline init` writes this for you; or in
+`~/.claude/settings.json`:
 
 ```json
 {
@@ -34,8 +58,10 @@ once every `N` seconds; in between, repaints read the cache.
 ## 2. With [ccstatusline](https://github.com/sirmalloc/ccstatusline) (composable)
 
 If you want styled, composable widgets, let `tu` *feed data* into your status
-line instead of owning the whole line. `tu statusline` has three structured
-output modes:
+line instead of owning the whole line. The fastest way to wire this is to run
+`tu statusline init --ccstatusline` and paste the prompt it prints to your AI
+assistant — it'll edit your ccstatusline config for you. Under the hood,
+`tu statusline` has three structured output modes:
 
 | Mode | Example | Output |
 |---|---|---|

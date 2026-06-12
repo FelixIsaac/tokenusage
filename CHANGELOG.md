@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-06-12
+
+### Added
+- **`tu statusline init`** — one command to wire tu into Claude Code's status
+  line instead of hand-editing `~/.claude/settings.json`:
+  - Safe by default: backs up the file, merges only the `statusLine` key
+    (every other setting preserved), shows the change and asks to confirm.
+  - **Never clobbers another tool's line.** If `statusLine` already belongs to
+    ccstatusline / a custom script, it stops and points you at `--ccstatusline`
+    (or `--yes` to force-replace).
+  - `--print` — pure preview, writes nothing (predictable for AI agents to read
+    and apply).
+  - `--ccstatusline` — emits a copy-paste **prompt** to hand your AI assistant
+    that integrates tu as a data source into your existing ccstatusline / custom
+    line (using `--json`/`--field`), with the caching guidance baked in.
+  - `--yes` skips the prompt (agent/non-interactive use); `--flags` overrides the
+    baked-in `--cache --refresh-interval 30`.
+  - A malformed `settings.json` is a hard stop — tu refuses to overwrite a file
+    it couldn't parse.
+
 ## [1.9.1] - 2026-06-12
 
 ### Fixed

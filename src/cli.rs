@@ -744,6 +744,42 @@ pub(crate) struct StatuslineArgs {
         help = "Emit a custom line, substituting {field} placeholders (e.g. \"{today-cost} {block-left}\")"
     )]
     pub(crate) format: Option<String>,
+    #[command(subcommand)]
+    pub(crate) action: Option<StatuslineAction>,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum StatuslineAction {
+    /// Wire tu into your Claude Code status line (or print the config/integration prompt)
+    Init(StatuslineInitArgs),
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct StatuslineInitArgs {
+    #[arg(
+        long,
+        help = "Print the settings block (or integration prompt) without writing any files"
+    )]
+    pub(crate) print: bool,
+    #[arg(
+        long,
+        help = "Emit a copy-paste prompt to hand your AI assistant for integrating tu into an existing ccstatusline / custom statusline"
+    )]
+    pub(crate) ccstatusline: bool,
+    #[arg(
+        long,
+        short = 'y',
+        help = "Skip the confirmation prompt (non-interactive / agent use)"
+    )]
+    pub(crate) yes: bool,
+    #[arg(
+        long,
+        value_name = "FLAGS",
+        help = "Flags to bake into the standalone command (default: \"--cache --refresh-interval 30\")"
+    )]
+    pub(crate) flags: Option<String>,
 }
 
 #[cfg(feature = "cli")]

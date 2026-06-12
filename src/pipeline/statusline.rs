@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
-use crate::cli::{CostSource, StatuslineArgs, VisualBurnRate};
+use crate::cli::{CostSource, StatuslineAction, StatuslineArgs, StatuslineInitArgs, VisualBurnRate};
 use crate::types::{SourceKind, TokenCounts, UsageEvent};
 
 use super::live::fetch_selected_official_limits;
@@ -12,6 +12,10 @@ use super::parsing::load_usage;
 use super::*;
 
 pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
+    if let Some(StatuslineAction::Init(init)) = &args.action {
+        return run_statusline_init(init);
+    }
+
     if args.context_low_threshold >= args.context_medium_threshold {
         bail!(
             "--context-low-threshold ({}) must be less than --context-medium-threshold ({})",
@@ -97,6 +101,226 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+const DEFAULT_INIT_FLAGS: &str = "--cache --refresh-interval 30";
+
+/// What `tu statusline init` would do to an existing `settings.json`.
+enum StatuslinePlan {
+    /// No statusLine present — clean insert.
+    Insert,
+    /// statusLine already equals our target command.
+    Noop,
+    /// statusLine is a tu line with different flags — safe to update.
+    Update(String),
+    /// statusLine belongs to another tool — never overwrite without --yes.
+    Conflict(String),
+}
+
+/// Classify the current `statusLine.command` against our target command.
+fn classify_statusline_plan(root: &serde_json::Value, command: &str) -> StatuslinePlan {
+    let current = root
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(|c| c.as_str());
+    match current {
+        None => StatuslinePlan::Insert,
+        Some(cur) if cur == command => StatuslinePlan::Noop,
+        Some(cur) if is_tu_statusline(cur) => StatuslinePlan::Update(cur.to_string()),
+        Some(cur) => StatuslinePlan::Conflict(cur.to_string()),
+    }
+}
+
+/// `tu statusline init` — wire tu into Claude Code's status line, or print the
+/// config / an integration prompt for an existing ccstatusline / custom line.
+fn run_statusline_init(init: &StatuslineInitArgs) -> Result<()> {
+    let flags = init.flags.as_deref().unwrap_or(DEFAULT_INIT_FLAGS).trim();
+    let command = if flags.is_empty() {
+        "tu statusline".to_string()
+    } else {
+        format!("tu statusline {flags}")
+    };
+
+    // Integration prompt path: never touches settings.json — emits text the user
+    // hands to their assistant to wire tu into whatever they already run.
+    if init.ccstatusline {
+        print!("{}", ccstatusline_integration_prompt(&command, flags));
+        return Ok(());
+    }
+
+    let settings_path = dirs::home_dir()
+        .context("Failed to resolve home directory")?
+        .join(".claude")
+        .join("settings.json");
+
+    let block = serde_json::json!({ "type": "command", "command": command });
+
+    // Load existing settings (empty object if absent). A malformed file is a hard
+    // stop — we never overwrite a file we couldn't parse.
+    let existing_raw = std::fs::read_to_string(&settings_path).ok();
+    let mut root: serde_json::Value = match existing_raw.as_deref().map(str::trim) {
+        None | Some("") => serde_json::json!({}),
+        Some(raw) => serde_json::from_str(raw).with_context(|| {
+            format!(
+                "{} isn't valid JSON — refusing to overwrite. Fix or move it, then re-run.",
+                settings_path.display()
+            )
+        })?,
+    };
+    if !root.is_object() {
+        bail!(
+            "{} doesn't contain a JSON object — refusing to overwrite.",
+            settings_path.display()
+        );
+    }
+
+    // Classify the current statusLine so we know whether this is a clean insert,
+    // an update of our own line, a no-op, or a conflict with someone else's.
+    let plan = classify_statusline_plan(&root, &command);
+
+    let pretty_block = serde_json::to_string_pretty(&serde_json::json!({ "statusLine": block }))
+        .unwrap_or_default();
+
+    if let StatuslinePlan::Noop = plan {
+        println!(
+            "Already set — {} statusLine is\n  {command}\nNothing to do.",
+            settings_path.display()
+        );
+        return Ok(());
+    }
+
+    // --print: pure preview, write nothing — predictable for agents regardless of
+    // what's already there.
+    if init.print {
+        println!("// {}", settings_path.display());
+        println!("{pretty_block}");
+        return Ok(());
+    }
+
+    // Conflict: another tool owns the line. Never clobber silently — explain and
+    // point at the ccstatusline prompt, unless the user forces it with --yes.
+    if let StatuslinePlan::Conflict(cur) = &plan
+        && !init.yes
+    {
+        println!("{} already has a statusLine that isn't tu:", settings_path.display());
+        println!("  current : {cur}");
+        println!("  tu would : {command}");
+        println!();
+        println!("Not overwriting. Pick one:");
+        println!("  • Keep both / compose — run `tu statusline init --ccstatusline` for a prompt to");
+        println!("    hand your assistant that integrates tu into the line above.");
+        println!("  • Replace it with tu — re-run `tu statusline init --yes`.");
+        return Ok(());
+    }
+
+    // Interactive confirm (skipped with --yes). If we can't prompt and weren't
+    // told --yes, bail rather than guess.
+    if !init.yes {
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "Refusing to edit {} non-interactively. Re-run with --yes to apply, or --print to preview.",
+                settings_path.display()
+            );
+        }
+        match &plan {
+            StatuslinePlan::Update(cur) => println!("Update tu statusline in {}:\n  from : {cur}\n  to   : {command}", settings_path.display()),
+            _ => println!("Add this to {}:\n{pretty_block}", settings_path.display()),
+        }
+        print!("Apply? [y/N] ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Cancelled — no changes made.");
+            return Ok(());
+        }
+    }
+
+    // Back up an existing file before mutating it.
+    if existing_raw.is_some() {
+        let backup = backup_path(&settings_path);
+        std::fs::copy(&settings_path, &backup)
+            .with_context(|| format!("Failed to back up {}", settings_path.display()))?;
+        println!("Backed up → {}", backup.display());
+    } else if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    // Merge: set only statusLine, preserve every other key.
+    root["statusLine"] = block;
+    let serialized = serde_json::to_string_pretty(&root)?;
+    std::fs::write(&settings_path, format!("{serialized}\n"))
+        .with_context(|| format!("Failed to write {}", settings_path.display()))?;
+
+    println!("Done — {} statusLine is now\n  {command}", settings_path.display());
+    println!("Restart Claude Code (or start a new session) to see it.");
+    Ok(())
+}
+
+/// True if a status-line command already runs tu/tokenusage's statusline.
+fn is_tu_statusline(cmd: &str) -> bool {
+    let c = cmd.to_lowercase();
+    if !c.contains("statusline") {
+        return false;
+    }
+    c.contains("tokenusage")
+        || c.split_whitespace().next() == Some("tu")
+        || c.contains("/tu ")
+        || c.contains("\\tu ")
+        || c.contains(" tu ")
+}
+
+/// `settings.json.bak`, or a numbered variant if that already exists.
+fn backup_path(settings_path: &Path) -> PathBuf {
+    let base = settings_path.with_extension("json.bak");
+    if !base.exists() {
+        return base;
+    }
+    for n in 1..1000 {
+        let candidate = settings_path.with_extension(format!("json.bak{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    base
+}
+
+/// Copy-paste prompt the user hands to an AI assistant to integrate tu into an
+/// existing ccstatusline config or custom status-line script.
+fn ccstatusline_integration_prompt(command: &str, flags: &str) -> String {
+    let fields = STATUSLINE_FIELD_NAMES.join(", ");
+    format!(
+        "Copy everything below this line and paste it to your AI coding assistant \
+(Claude Code, etc.). It will wire `tu` into your existing status line.\n\
+─────────────────────────────────────────────────────────────────────────────\n\
+I use a custom status line (ccstatusline or my own script). Please integrate the \
+`tu` CLI as a *data source* into it — don't replace what I have, feed values into it.\n\
+\n\
+`tu statusline` reads the Claude Code status-line hook JSON on stdin and can emit \
+structured output instead of its default line:\n\
+  • `tu statusline --json {flags}`        → one JSON object of all values\n\
+  • `tu statusline --field <name> {flags}`  → a single formatted value\n\
+  • `tu statusline --format \"<tmpl>\" {flags}` → a line with {{field}} placeholders\n\
+\n\
+Available field names: {fields}.\n\
+`--json` keys are snake_case raw numbers (e.g. today_cost_usd) so a widget can \
+style them itself.\n\
+\n\
+PERFORMANCE — important: don't spawn `tu` once per widget per repaint. All modes \
+share one per-session cache when given `{flags}`, so the expensive parse runs at \
+most once per interval. Prefer ONE call that reads `--json` (then style its fields \
+in my existing widgets), or at most one `--field` call per widget.\n\
+\n\
+For ccstatusline specifically: add a Custom Command widget that runs \
+`tu statusline --field today-cost {flags}` (and/or block-left, burn-status, \
+ctx-pct), or a pre-render step that runs `tu statusline --json {flags}` once and \
+have widgets read the cached JSON.\n\
+\n\
+The standalone equivalent (if I just want tu to own the whole line) would be: \
+`{command}`. Please show me the exact edit for MY current setup and explain what \
+you changed.\n\
+─────────────────────────────────────────────────────────────────────────────\n"
+    )
 }
 
 async fn run_statusline_structured(
@@ -873,5 +1097,76 @@ mod statusline_field_tests {
         );
         // Unknown tokens are left untouched.
         assert_eq!(render_statusline_format(&f, "{model} {bogus}"), "claude-opus-4-8 {bogus}");
+    }
+}
+
+#[cfg(test)]
+mod statusline_init_tests {
+    use super::*;
+    use serde_json::json;
+
+    const CMD: &str = "tu statusline --cache --refresh-interval 30";
+
+    fn plan(root: serde_json::Value) -> StatuslinePlan {
+        classify_statusline_plan(&root, CMD)
+    }
+
+    #[test]
+    fn no_statusline_is_insert() {
+        assert!(matches!(plan(json!({})), StatuslinePlan::Insert));
+        assert!(matches!(
+            plan(json!({ "model": "opus" })),
+            StatuslinePlan::Insert
+        ));
+    }
+
+    #[test]
+    fn identical_command_is_noop() {
+        let root = json!({ "statusLine": { "type": "command", "command": CMD } });
+        assert!(matches!(plan(root), StatuslinePlan::Noop));
+    }
+
+    #[test]
+    fn other_tu_flags_is_update() {
+        let root = json!({ "statusLine": { "command": "tu statusline -B emoji" } });
+        match plan(root) {
+            StatuslinePlan::Update(cur) => assert_eq!(cur, "tu statusline -B emoji"),
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn foreign_command_is_conflict() {
+        for foreign in ["ccstatusline", "starship prompt", "my-script.sh"] {
+            let root = json!({ "statusLine": { "command": foreign } });
+            match plan(root) {
+                StatuslinePlan::Conflict(cur) => assert_eq!(cur, foreign),
+                _ => panic!("expected Conflict for {foreign}"),
+            }
+        }
+    }
+
+    #[test]
+    fn is_tu_statusline_detects_ours_only() {
+        assert!(is_tu_statusline("tu statusline --cache"));
+        assert!(is_tu_statusline("/usr/local/bin/tu statusline"));
+        assert!(is_tu_statusline("tokenusage statusline --json"));
+        assert!(!is_tu_statusline("ccstatusline"));
+        assert!(!is_tu_statusline("tu daily")); // tu, but not statusline
+        assert!(!is_tu_statusline("status-line.sh"));
+    }
+
+    #[test]
+    fn merge_preserves_other_keys() {
+        let mut root = json!({
+            "model": "opus",
+            "permissions": { "allow": ["Bash"] },
+            "statusLine": { "command": "old-tool" }
+        });
+        root["statusLine"] = json!({ "type": "command", "command": CMD });
+        assert_eq!(root["model"], json!("opus"));
+        assert_eq!(root["permissions"]["allow"], json!(["Bash"]));
+        assert_eq!(root["statusLine"]["command"], json!(CMD));
+        assert_eq!(root["statusLine"]["type"], json!("command"));
     }
 }
