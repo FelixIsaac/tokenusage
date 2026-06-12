@@ -100,6 +100,54 @@ tu                          # daily cost report in 0.08s
 | Want coding-time context, not just raw tokens | `tu` keeps the classic token table by default; `--with-activity` opt-in adds coding time and tokens/hour |
 | Want to share usage stats | `tu img` generates shareable image cards |
 
+## This fork
+
+This is **[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)**, a fork of
+[hanbu97/tokenusage](https://github.com/hanbu97/tokenusage). All credit for the original
+tool goes upstream — this fork extends it with the following (see
+[CHANGELOG.md](CHANGELOG.md) for detail):
+
+**Performance & correctness**
+- **SQLite parse cache** (`parse-cache-v3.db`) replacing the rewrite-everything JSON
+  cache — incremental upserts, WAL mode (a `statusline` run can read while an
+  interactive run writes), and a rayon-parallel file scan. Auto-migrates from the old
+  JSON cache on first run.
+- **Cache-thrash fix**: the cache key is pricing-independent and cached events are
+  **re-priced at hydration**, so the 6-hourly OpenRouter pricing refresh no longer wipes
+  the cache; eviction is scoped to the roots actually scanned, so a single-source run
+  (e.g. `tu codex daily`) no longer evicts the others.
+- `tu gui` no longer panics on window **close** (iced runs outside the tokio runtime —
+  upstream issue #2).
+
+**UX**
+- **Interactive menu** on bare `tu` (category-grouped, type-to-filter, arrow-keys);
+  `tu <cmd>`, piped, and non-TTY invocations are unaffected.
+- **`tu statusline init`** — wires tu into Claude Code's status line with a safe JSON
+  merge + backup + conflict guard (won't clobber another tool's line); `--print`
+  (no-write preview), `--ccstatusline` (integration prompt for an existing status line),
+  `--yes`. Plus modular `tu statusline --json` / `--field` / `--format` for ccstatusline
+  widgets, sharing one per-session cache. See [docs/statusline.md](docs/statusline.md).
+- **`--brief`** — one-line headline (range · tokens · cost · top model) across
+  today/daily/weekly/monthly/blocks/session.
+- **Cost-centric insights** (cache `$` saved, reuse ratio, cost-concentration) and
+  **`tu doctor` cache/pricing health** with a real-problems-only warnings section.
+- Menu **Balances** lists only providers whose API key is configured.
+
+**Platform**
+- `tu antigravity` on Windows fails with a clear, actionable message instead of a cryptic
+  `ps`/`lsof` error (a real Windows port is tracked separately).
+
+### Install this fork
+
+The published `tokenusage` packages (npm / cargo / pip) are **upstream**. To run this
+fork, build from source:
+
+```bash
+git clone https://github.com/FelixIsaac/tokenusage
+cd tokenusage
+cargo install --path . --bin tu
+```
+
 ## Install
 
 ### npm (recommended)
