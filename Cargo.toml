@@ -86,3 +86,8 @@ tokio = { version = "1.48", features = ["fs", "macros", "rt-multi-thread"] }
 terminal_size = { version = "0.4", optional = true }
 cfg-if = "1.0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
