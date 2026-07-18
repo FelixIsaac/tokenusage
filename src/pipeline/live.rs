@@ -921,7 +921,9 @@ pub(super) fn resolve_live_block_bounds(
                 .unwrap_or(default_window_secs);
             (reset, window)
         }
-        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) => return fallback,
+        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) | Some(SourceKind::Grok) => {
+            return fallback;
+        }
         None => return fallback,
     };
 
@@ -1622,7 +1624,7 @@ pub(super) fn render_live_source_detail(
                     "Run `tu live {lower}` after using {label} to fetch limits.",
                 )));
             }
-            SourceKind::Gemini | SourceKind::OpenCode => {
+            SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => {
                 lines.push(Line::from(
                     "Official limits not implemented for this source.",
                 ));
@@ -1960,9 +1962,10 @@ pub(super) fn preferred_official_for_live<'a>(
             match context.active.and_then(|active| active.dominant_source) {
                 Some(SourceKind::Claude) => Some(LiveOfficialRef::Claude(claude)),
                 Some(SourceKind::Codex) => Some(LiveOfficialRef::Codex(codex)),
-                Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) | None => {
-                    Some(LiveOfficialRef::Codex(codex))
-                }
+                Some(SourceKind::Gemini)
+                | Some(SourceKind::OpenCode)
+                | Some(SourceKind::Grok)
+                | None => Some(LiveOfficialRef::Codex(codex)),
             }
         }
         (None, None) => None,
@@ -1976,7 +1979,7 @@ fn official_for_source<'a>(
     match source {
         SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
         SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
-        SourceKind::Gemini | SourceKind::OpenCode => None,
+        SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => None,
     }
 }
 

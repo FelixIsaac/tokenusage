@@ -134,6 +134,8 @@ pub struct Config {
     pub no_gemini: bool,
     /// Disable the OpenCode log source.
     pub no_opencode: bool,
+    /// Disable the Grok Build log source.
+    pub no_grok: bool,
 
     /// Custom Claude projects directory paths.
     ///
@@ -150,6 +152,8 @@ pub struct Config {
     pub gemini_data_dir: Vec<String>,
     /// Custom OpenCode data directory paths.
     pub opencode_data_dir: Vec<String>,
+    /// Custom Grok Build log directory paths.
+    pub grok_log_dir: Vec<String>,
 
     /// Path substring ignore rules.
     ///
@@ -399,6 +403,7 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         no_codex: config.no_codex,
         no_gemini: config.no_gemini,
         no_opencode: config.no_opencode,
+        no_grok: config.no_grok,
         no_antigravity: true,
         only: Vec::new(),
         sources: Vec::new(),
@@ -406,6 +411,7 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         codex_sessions_dir: config.codex_sessions_dir.clone(),
         gemini_data_dir: config.gemini_data_dir.clone(),
         opencode_data_dir: config.opencode_data_dir.clone(),
+        grok_log_dir: config.grok_log_dir.clone(),
         ignore_path: config.ignore_path.clone(),
         no_default_ignores: config.no_default_ignores,
         no_incremental_cache: config.no_incremental_cache,

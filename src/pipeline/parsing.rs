@@ -432,7 +432,7 @@ struct ProviderSpec {
     roots: fn(&CommonArgs, &Path) -> Vec<PathBuf>,
 }
 
-fn provider_registry() -> [ProviderSpec; 4] {
+fn provider_registry() -> [ProviderSpec; 5] {
     [
         ProviderSpec {
             kind: SourceKind::Claude,
@@ -457,6 +457,12 @@ fn provider_registry() -> [ProviderSpec; 4] {
             accepted_exts: &["json", "db"],
             enabled: |common| !common.no_opencode,
             roots: opencode_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::Grok,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_grok,
+            roots: grok_source_roots,
         },
     ]
 }
@@ -507,6 +513,17 @@ fn gemini_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
     }
     common
         .gemini_data_dir
+        .iter()
+        .map(|p| expand_user_path(p))
+        .collect()
+}
+
+fn grok_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if common.grok_log_dir.is_empty() {
+        return vec![home.join(".grok").join("logs")];
+    }
+    common
+        .grok_log_dir
         .iter()
         .map(|p| expand_user_path(p))
         .collect()
@@ -899,7 +916,7 @@ pub(super) fn parse_single_file(
                     claude_state =
                         ClaudeDedupeState::with_seed(base_cache.claude_recent_keys.clone());
                 }
-                SourceKind::Gemini | SourceKind::OpenCode => {}
+                SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => {}
             }
         } else {
             let _ = reader.seek(SeekFrom::Start(0));
@@ -953,6 +970,7 @@ pub(super) fn parse_single_file(
             SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
             SourceKind::Gemini => parse_gemini_usage_line(&line, pricing),
             SourceKind::OpenCode => unreachable!("OpenCode is parsed as whole-file JSON"),
+            SourceKind::Grok => parse_grok_usage_line(&line, pricing),
         };
 
         let mut parsed = match parsed {
@@ -971,8 +989,13 @@ pub(super) fn parse_single_file(
             lines_unknown_pricing += 1;
         }
 
-        parsed.event.session = session.clone();
-        parsed.event.project = project.clone();
+        // Grok's unified.jsonl mixes every session/project into one file, so
+        // its per-line parser sets `session` directly from the `sid` field
+        // instead of deriving one session per file like the other sources.
+        if job.file.source != SourceKind::Grok {
+            parsed.event.session = session.clone();
+            parsed.event.project = project.clone();
+        }
         parsed.event.file_path = file_path.clone();
 
         cached_events.push(cached_usage_event(&parsed.event));
@@ -1046,6 +1069,10 @@ fn provider_fast_line_markers(source: SourceKind) -> &'static [&'static str] {
             "\"tokens\": ",
         ],
         SourceKind::OpenCode => &[],
+        SourceKind::Grok => &[
+            "\"msg\":\"shell.turn.inference_done\"",
+            "\"msg\": \"shell.turn.inference_done\"",
+        ],
     }
 }
 
@@ -1084,6 +1111,7 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
         SourceKind::Codex => extract_codex_project_from_file(&file.path).or(raw_project),
         SourceKind::Gemini => None,
         SourceKind::OpenCode => None,
+        SourceKind::Grok => None,
     };
 
     (session, project)
@@ -1210,6 +1238,9 @@ pub(super) fn extract_session_title(source: SourceKind, path: &Path) -> String {
                 }
             }
             SourceKind::OpenCode => {}
+            // Grok has no per-session file to preview from (unified.jsonl is
+            // shared across every session/project).
+            SourceKind::Grok => {}
         }
     }
     String::new()
@@ -1447,6 +1478,74 @@ pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> Par
             source: SourceKind::Gemini,
             model,
             session: String::new(),
+            project: None,
+            file_path: String::new(),
+            usage: UsageAccumulator { cost_usd, ..usage },
+        },
+        used_unknown_pricing,
+    })
+}
+
+/// Parse one line of `~/.grok/logs/unified.jsonl`.
+///
+/// Only `"msg":"shell.turn.inference_done"` lines carry token accounting;
+/// everything else (phase transitions, auth, tool exec logs, etc.) is
+/// filtered out by [`provider_fast_line_markers`] before this is even called.
+///
+/// The log has no per-turn model field, so every event is labelled with
+/// [`crate::types::GROK_DEFAULT_MODEL_FALLBACK`]. `prompt_tokens` already
+/// includes `cached_prompt_tokens`, so fresh input tokens are the
+/// difference between the two.
+pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return ParseLineResult::InvalidJson,
+    };
+
+    if get_value(&value, "msg").and_then(Value::as_str) != Some("shell.turn.inference_done") {
+        return ParseLineResult::MissingUsage;
+    }
+
+    let Some(timestamp) = get_value(&value, "ts").and_then(parse_timestamp_value) else {
+        return ParseLineResult::MissingUsage;
+    };
+
+    let Some(session) = extract_string(&value, &["sid"]) else {
+        return ParseLineResult::MissingUsage;
+    };
+
+    let prompt_tokens = extract_u64(&value, &["ctx.prompt_tokens"]).unwrap_or(0);
+    let cached_prompt_tokens =
+        extract_u64(&value, &["ctx.cached_prompt_tokens"]).unwrap_or(0);
+    let completion_tokens = extract_u64(&value, &["ctx.completion_tokens"]).unwrap_or(0);
+    let reasoning_tokens = extract_u64(&value, &["ctx.reasoning_tokens"]).unwrap_or(0);
+
+    let usage = UsageAccumulator {
+        input_tokens: prompt_tokens.saturating_sub(cached_prompt_tokens),
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cached_prompt_tokens,
+        output_tokens: completion_tokens,
+        reasoning_output_tokens: reasoning_tokens,
+        cost_usd: 0.0,
+    };
+
+    let total_tokens = usage.total_tokens();
+    if total_tokens == 0 {
+        return ParseLineResult::MissingUsage;
+    }
+
+    let model = crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string();
+    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
+        Some(v) => (v, false),
+        None => (0.0, true),
+    };
+
+    ParseLineResult::Parsed(ParsedLine {
+        event: UsageEvent {
+            timestamp,
+            source: SourceKind::Grok,
+            model,
+            session,
             project: None,
             file_path: String::new(),
             usage: UsageAccumulator { cost_usd, ..usage },
@@ -1967,6 +2066,9 @@ fn provider_model_paths(source: SourceKind) -> &'static [&'static str] {
         ],
         SourceKind::Gemini => &["model"],
         SourceKind::OpenCode => &["model.modelID", "modelID", "model"],
+        // Grok's unified.jsonl never records a per-turn model name; the
+        // fallback in `parse_grok_usage_line` is used unconditionally instead.
+        SourceKind::Grok => &[],
     }
 }
 

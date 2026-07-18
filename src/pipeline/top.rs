@@ -425,6 +425,7 @@ pub(super) fn render_top_frame(
                     SourceKind::Codex => TuiColor::Blue,
                     SourceKind::Gemini => TuiColor::Green,
                     SourceKind::OpenCode => TuiColor::Magenta,
+                    SourceKind::Grok => TuiColor::Red,
                 };
                 let project = s.project.as_deref().unwrap_or("-");
                 let project_short = if project.len() > 20 {

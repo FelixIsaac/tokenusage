@@ -473,6 +473,7 @@ fn display_source_label(source: SourceKind) -> &'static str {
         SourceKind::Codex => "Codex",
         SourceKind::Gemini => "Gemini",
         SourceKind::OpenCode => "OpenCode",
+        SourceKind::Grok => "Grok",
     }
 }
 

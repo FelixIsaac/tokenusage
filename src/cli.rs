@@ -72,6 +72,7 @@ pub enum ProviderArg {
     Codex,
     Gemini,
     Opencode,
+    Grok,
 }
 
 impl ProviderArg {
@@ -81,6 +82,7 @@ impl ProviderArg {
             ProviderArg::Codex => SourceKind::Codex,
             ProviderArg::Gemini => SourceKind::Gemini,
             ProviderArg::Opencode => SourceKind::OpenCode,
+            ProviderArg::Grok => SourceKind::Grok,
         }
     }
 }
@@ -173,6 +175,8 @@ pub struct CommonArgs {
     pub no_gemini: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable OpenCode source"))]
     pub no_opencode: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Grok Build source"))]
+    pub no_grok: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Antigravity quota probe"))]
     pub no_antigravity: bool,
     #[cfg_attr(
@@ -223,6 +227,14 @@ pub struct CommonArgs {
         )
     )]
     pub opencode_data_dir: Vec<String>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "grok-log-dir",
+            help = "Grok Build log dir (defaults to ~/.grok/logs), repeatable"
+        )
+    )]
+    pub grok_log_dir: Vec<String>,
     #[cfg_attr(
         feature = "cli",
         arg(

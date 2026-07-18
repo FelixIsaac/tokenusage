@@ -25,15 +25,23 @@ pub enum SourceKind {
     Gemini,
     /// OpenCode (`~/.local/share/opencode/storage/message/**/*.json`).
     OpenCode,
+    /// Grok Build CLI (`~/.grok/logs/unified.jsonl`).
+    ///
+    /// Unlike the other sources, Grok's unified log does not record which
+    /// model served each turn, so events are labelled with
+    /// [`GROK_DEFAULT_MODEL_FALLBACK`] (the `[models].default` in
+    /// `~/.grok/config.toml`) rather than a per-event model read from the log.
+    Grok,
 }
 
 impl SourceKind {
-    pub const fn all() -> [SourceKind; 4] {
+    pub const fn all() -> [SourceKind; 5] {
         [
             SourceKind::Claude,
             SourceKind::Codex,
             SourceKind::Gemini,
             SourceKind::OpenCode,
+            SourceKind::Grok,
         ]
     }
 
@@ -44,6 +52,7 @@ impl SourceKind {
             SourceKind::Codex => "codex",
             SourceKind::Gemini => "gemini",
             SourceKind::OpenCode => "opencode",
+            SourceKind::Grok => "grok",
         }
     }
 
@@ -53,6 +62,7 @@ impl SourceKind {
             SourceKind::Codex => "Codex",
             SourceKind::Gemini => "Gemini",
             SourceKind::OpenCode => "OpenCode",
+            SourceKind::Grok => "Grok",
         }
     }
 
@@ -481,6 +491,26 @@ impl PricingTable {
             },
         ));
 
+        // xAI Grok 4.5: $2/M input, $0.50/M cached input, $6/M output under
+        // 200K prompt tokens; all three double above that threshold.
+        // Verified at https://x.ai/api (July 2026 pricing page).
+        table.prefixes.push((
+            "grok-4.5".to_string(),
+            PricingRate {
+                input_per_million: 2.0,
+                output_per_million: 6.0,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.5,
+                reasoning_output_per_million: 0.0,
+                tier_threshold_tokens: Some(200_000),
+                input_above_per_million: Some(4.0),
+                output_above_per_million: Some(12.0),
+                cache_creation_above_per_million: None,
+                cache_read_above_per_million: Some(1.0),
+                reasoning_output_above_per_million: None,
+            },
+        ));
+
         table
             .prefixes
             .sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
@@ -640,6 +670,14 @@ pub struct CodexParseState {
 }
 
 pub const LEGACY_CODEX_FALLBACK_MODEL: &str = "gpt-5";
+
+/// Model label used for every Grok usage event.
+///
+/// `~/.grok/logs/unified.jsonl` records per-turn token counts but never the
+/// model that served the turn, so all Grok events are attributed to this
+/// fallback (xAI's current flagship default, matching `~/.grok/config.toml`'s
+/// `[models].default`) rather than a value read from the log.
+pub const GROK_DEFAULT_MODEL_FALLBACK: &str = "grok-4.5";
 
 /// A single row in a daily/weekly/monthly usage report.
 ///

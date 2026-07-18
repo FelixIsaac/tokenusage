@@ -255,7 +255,9 @@ pub(super) fn classify_estimated_plan(
                 "codex_pro_with_credits"
             }
         }
-        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) => "unknown",
+        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) | Some(SourceKind::Grok) => {
+            "unknown"
+        }
         None => {
             if estimated_window_tokens < 240_000_000 {
                 "mixed_standard"

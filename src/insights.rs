@@ -307,6 +307,7 @@ fn parse_source_kind(raw: &str) -> Option<SourceKind> {
         "codex" => Some(SourceKind::Codex),
         "gemini" => Some(SourceKind::Gemini),
         "opencode" => Some(SourceKind::OpenCode),
+        "grok" => Some(SourceKind::Grok),
         _ => None,
     }
 }
