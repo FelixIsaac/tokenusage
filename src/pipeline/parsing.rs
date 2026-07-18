@@ -52,8 +52,10 @@ pub(super) fn parse_files_with_cache(
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
     let mut cache_dirty = false;
-    let seen_cache_keys: HashSet<String> =
-        files.iter().map(|file| cache_file_key(&file.path)).collect();
+    let seen_cache_keys: HashSet<String> = files
+        .iter()
+        .map(|file| cache_file_key(&file.path))
+        .collect();
 
     // The fingerprint(stat) + cache-hydration pass is the per-file floor over all
     // ~N discovered files. It only reads the cache (immutable) and bumps atomic
@@ -140,8 +142,10 @@ pub(super) fn parse_files_with_cache(
         // or doctor's opencode-only probe, must not wipe other sources' entries
         // (which it never discovered). Record removals so the backing store can
         // delete exactly those rows (no full rewrite).
-        let scanned_root_keys: HashSet<String> =
-            files.iter().map(|file| cache_file_key(&file.root)).collect();
+        let scanned_root_keys: HashSet<String> = files
+            .iter()
+            .map(|file| cache_file_key(&file.root))
+            .collect();
         let removed_keys: Vec<String> = cache_store
             .files
             .keys()
@@ -1515,8 +1519,7 @@ pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> Parse
     };
 
     let prompt_tokens = extract_u64(&value, &["ctx.prompt_tokens"]).unwrap_or(0);
-    let cached_prompt_tokens =
-        extract_u64(&value, &["ctx.cached_prompt_tokens"]).unwrap_or(0);
+    let cached_prompt_tokens = extract_u64(&value, &["ctx.cached_prompt_tokens"]).unwrap_or(0);
     let completion_tokens = extract_u64(&value, &["ctx.completion_tokens"]).unwrap_or(0);
     let reasoning_tokens = extract_u64(&value, &["ctx.reasoning_tokens"]).unwrap_or(0);
 
@@ -2425,8 +2428,8 @@ fn load_incremental_cache_inner(
     let conn = open_cache_db(path)?;
     migrate_legacy_json_if_present(&conn, pricing_key);
 
-    let version_ok =
-        cache_meta_get(&conn, "version")?.as_deref() == Some(&INCREMENTAL_CACHE_VERSION.to_string());
+    let version_ok = cache_meta_get(&conn, "version")?.as_deref()
+        == Some(&INCREMENTAL_CACHE_VERSION.to_string());
     let pricing_ok = cache_meta_get(&conn, "pricing_key")?.as_deref() == Some(pricing_key);
     if !version_ok || !pricing_ok {
         // Stale or first-time cache: clear and start fresh (DB now empty).
@@ -2749,8 +2752,7 @@ mod cache_tests {
     fn legacy_json_imports_when_compatible() {
         let path = tmp_db("legacy");
         cleanup(&path);
-        let json_path =
-            std::env::temp_dir().join(format!("tu-legacy-{}.json", std::process::id()));
+        let json_path = std::env::temp_dir().join(format!("tu-legacy-{}.json", std::process::id()));
         let mut legacy = IncrementalCacheStore::new("pk".to_string());
         legacy.files.insert("x".into(), sample_entry(5));
         std::fs::write(&json_path, serde_json::to_vec(&legacy).unwrap()).unwrap();

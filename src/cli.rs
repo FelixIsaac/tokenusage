@@ -329,7 +329,10 @@ pub(crate) enum Commands {
     Daily(DailyArgs),
     #[command(about = "Today's token usage and coding activity", display_order = 1)]
     Today(TodayArgs),
-    #[command(about = "Coding-activity view with per-day breakdowns", display_order = 5)]
+    #[command(
+        about = "Coding-activity view with per-day breakdowns",
+        display_order = 5
+    )]
     Activity(ActivityArgs),
     #[command(about = "Per-month token usage", display_order = 4)]
     Monthly(MonthlyArgs),
@@ -359,11 +362,17 @@ pub(crate) enum Commands {
     Statusline(StatuslineArgs),
     #[command(about = "Render a usage report as a PNG", display_order = 21)]
     Img(ImgArgs),
-    #[command(about = "Local editor-activity heartbeat collector and stats", display_order = 22)]
+    #[command(
+        about = "Local editor-activity heartbeat collector and stats",
+        display_order = 22
+    )]
     Heartbeat(HeartbeatArgs),
 
     // --- Diagnostics (display_order 30-31) ---
-    #[command(about = "Inspect roots, files, cache and pricing health", display_order = 30)]
+    #[command(
+        about = "Inspect roots, files, cache and pricing health",
+        display_order = 30
+    )]
     Doctor(DailyArgs),
     #[command(about = "Compare tu totals against ccusage", display_order = 31)]
     Parity(ParityArgs),
@@ -381,7 +390,10 @@ pub(crate) enum Commands {
         display_order = 42
     )]
     Openrouter(OpenrouterArgs),
-    #[command(about = "Show Grok (xAI) credit balance (XAI_API_KEY)", display_order = 43)]
+    #[command(
+        about = "Show Grok (xAI) credit balance (XAI_API_KEY)",
+        display_order = 43
+    )]
     Grok(GrokArgs),
     #[command(
         about = "Show Kimi (Moonshot) credit balance (MOONSHOT_API_KEY)",

@@ -163,7 +163,12 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             insights,
         };
 
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
+        print_report_table_with_options(
+            &show,
+            args.common.compact,
+            args.common.breakdown,
+            args.common.brief,
+        );
         print_membership_estimate(
             &json_report.membership_estimate,
             resolved_limit,
@@ -298,7 +303,9 @@ pub(super) async fn fetch_selected_official_limits(
     let deepseek = match deepseek_result {
         Some(Ok(snapshot)) => Some(snapshot),
         Some(Err(error)) => {
-            errors.push(format!("official: failed to fetch DeepSeek limits ({error})"));
+            errors.push(format!(
+                "official: failed to fetch DeepSeek limits ({error})"
+            ));
             None
         }
         None => None,
@@ -307,7 +314,9 @@ pub(super) async fn fetch_selected_official_limits(
     let openrouter = match openrouter_result {
         Some(Ok(snapshot)) => Some(snapshot),
         Some(Err(error)) => {
-            errors.push(format!("official: failed to fetch OpenRouter limits ({error})"));
+            errors.push(format!(
+                "official: failed to fetch OpenRouter limits ({error})"
+            ));
             None
         }
         None => None,
@@ -334,7 +343,9 @@ pub(super) async fn fetch_selected_official_limits(
     let anthropic = match anthropic_result {
         Some(Ok(snapshot)) => Some(snapshot),
         Some(Err(error)) => {
-            errors.push(format!("official: failed to fetch Anthropic API limits ({error})"));
+            errors.push(format!(
+                "official: failed to fetch Anthropic API limits ({error})"
+            ));
             None
         }
         None => None,
@@ -2844,7 +2855,9 @@ pub(super) fn render_live_deepseek_tab(
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "DeepSeek API Balance",
-            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
     ];
@@ -2854,17 +2867,25 @@ pub(super) fn render_live_deepseek_tab(
         } else {
             let currency = ds.currency.as_deref().unwrap_or("USD");
             if let Some(total) = ds.total_balance {
-                lines.push(Line::from(format!("  Total Balance:     {total:.4} {currency}")));
+                lines.push(Line::from(format!(
+                    "  Total Balance:     {total:.4} {currency}"
+                )));
             }
             if let Some(granted) = ds.granted_balance {
-                lines.push(Line::from(format!("  Granted Credits:   {granted:.4} {currency}")));
+                lines.push(Line::from(format!(
+                    "  Granted Credits:   {granted:.4} {currency}"
+                )));
             }
             if let Some(topped) = ds.topped_up_balance {
-                lines.push(Line::from(format!("  Topped Up Balance: {topped:.4} {currency}")));
+                lines.push(Line::from(format!(
+                    "  Topped Up Balance: {topped:.4} {currency}"
+                )));
             }
         }
     } else {
-        lines.push(Line::from("  No data available. DEEPSEEK_API_KEY env var may not be set."));
+        lines.push(Line::from(
+            "  No data available. DEEPSEEK_API_KEY env var may not be set.",
+        ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -2877,7 +2898,9 @@ pub(super) fn render_live_openrouter_tab(
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "OpenRouter Key Usage / Limits",
-            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
     ];
@@ -2885,7 +2908,10 @@ pub(super) fn render_live_openrouter_tab(
         if let Some(ref label) = or.label {
             lines.push(Line::from(format!("  Key Label:    {label}")));
         }
-        lines.push(Line::from(format!("  Free Tier:    {}", if or.is_free_tier { "Yes" } else { "No" })));
+        lines.push(Line::from(format!(
+            "  Free Tier:    {}",
+            if or.is_free_tier { "Yes" } else { "No" }
+        )));
         if let Some(used) = or.credits_used {
             lines.push(Line::from(format!("  Credits Used: ${used:.4}")));
         }
@@ -2896,7 +2922,9 @@ pub(super) fn render_live_openrouter_tab(
             lines.push(Line::from(format!("  Used Percent: {pct:.2}%")));
         }
     } else {
-        lines.push(Line::from("  No data available. OPENROUTER_API_KEY env var may not be set."));
+        lines.push(Line::from(
+            "  No data available. OPENROUTER_API_KEY env var may not be set.",
+        ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -2909,26 +2937,36 @@ pub(super) fn render_live_grok_tab(
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "Grok (xAI) Billing Quotas",
-            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
     ];
     if let Some(grok) = context.official_grok {
         let currency = grok.currency.as_deref().unwrap_or("USD");
         if let Some(granted) = grok.total_granted {
-            lines.push(Line::from(format!("  Total Granted Credits:   {granted:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Total Granted Credits:   {granted:.4} {currency}"
+            )));
         }
         if let Some(used) = grok.total_used {
-            lines.push(Line::from(format!("  Total Used Credits:      {used:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Total Used Credits:      {used:.4} {currency}"
+            )));
         }
         if let Some(rem) = grok.total_remaining {
-            lines.push(Line::from(format!("  Total Remaining Credits: {rem:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Total Remaining Credits: {rem:.4} {currency}"
+            )));
         }
         if let Some(pct) = grok.used_percent {
             lines.push(Line::from(format!("  Used Percent:            {pct:.2}%")));
         }
     } else {
-        lines.push(Line::from("  No data available. XAI_API_KEY env var may not be set."));
+        lines.push(Line::from(
+            "  No data available. XAI_API_KEY env var may not be set.",
+        ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -2941,23 +2979,33 @@ pub(super) fn render_live_kimi_tab(
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "Kimi (Moonshot AI) Balance",
-            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
     ];
     if let Some(kimi) = context.official_kimi {
         let currency = kimi.currency.as_deref().unwrap_or("CNY");
         if let Some(avail) = kimi.available_balance {
-            lines.push(Line::from(format!("  Available Balance: {avail:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Available Balance: {avail:.4} {currency}"
+            )));
         }
         if let Some(cash) = kimi.cash_balance {
-            lines.push(Line::from(format!("  Cash Balance:      {cash:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Cash Balance:      {cash:.4} {currency}"
+            )));
         }
         if let Some(voucher) = kimi.voucher_balance {
-            lines.push(Line::from(format!("  Voucher Balance:   {voucher:.4} {currency}")));
+            lines.push(Line::from(format!(
+                "  Voucher Balance:   {voucher:.4} {currency}"
+            )));
         }
     } else {
-        lines.push(Line::from("  No data available. MOONSHOT_API_KEY env var may not be set."));
+        lines.push(Line::from(
+            "  No data available. MOONSHOT_API_KEY env var may not be set.",
+        ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -2970,7 +3018,9 @@ pub(super) fn render_live_anthropic_api_tab(
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "Anthropic Developer API Usage (Today)",
-            Style::default().fg(TuiColor::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TuiColor::Green)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
     ];
@@ -2990,7 +3040,9 @@ pub(super) fn render_live_anthropic_api_tab(
             lines.push(Line::from(format!("  Cache Read Tokens: {cached}")));
         }
     } else {
-        lines.push(Line::from("  No data available. ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY env var may not be set."));
+        lines.push(Line::from(
+            "  No data available. ANTHROPIC_API_KEY or ANTHROPIC_ADMIN_KEY env var may not be set.",
+        ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }

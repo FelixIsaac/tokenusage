@@ -2382,10 +2382,7 @@ pub(super) async fn fetch_openrouter_account_limits() -> Result<OfficialOpenRout
         }
     });
     Ok(OfficialOpenRouterSnapshot {
-        label: data
-            .get("label")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        label: data.get("label").and_then(|v| v.as_str()).map(String::from),
         credits_used: used,
         credits_limit: limit,
         used_percent,
@@ -2411,8 +2408,8 @@ pub(super) struct OfficialGrokSnapshot {
 }
 
 pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot> {
-    let api_key = std::env::var("XAI_API_KEY")
-        .context("XAI_API_KEY environment variable not set")?;
+    let api_key =
+        std::env::var("XAI_API_KEY").context("XAI_API_KEY environment variable not set")?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -2433,13 +2430,9 @@ pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot>
         .json()
         .await
         .context("Invalid Grok response JSON")?;
-    let total_granted = body
-        .get("total_granted_credits")
-        .and_then(|v| v.as_f64());
+    let total_granted = body.get("total_granted_credits").and_then(|v| v.as_f64());
     let total_used = body.get("total_used_credits").and_then(|v| v.as_f64());
-    let total_remaining = body
-        .get("total_remaining_credits")
-        .and_then(|v| v.as_f64());
+    let total_remaining = body.get("total_remaining_credits").and_then(|v| v.as_f64());
     let used_percent = total_used.zip(total_granted).and_then(|(u, g)| {
         if g > 0.0 {
             Some((u / g * 100.0).clamp(0.0, 100.0))
@@ -2495,9 +2488,7 @@ pub(super) async fn fetch_kimi_official_limits() -> Result<OfficialKimiSnapshot>
     // Response: {"data":{"available_balance":100.0,"voucher_balance":20.0,"cash_balance":80.0}}
     let data = body.get("data").unwrap_or(&body);
     Ok(OfficialKimiSnapshot {
-        available_balance: data
-            .get("available_balance")
-            .and_then(|v| v.as_f64()),
+        available_balance: data.get("available_balance").and_then(|v| v.as_f64()),
         voucher_balance: data.get("voucher_balance").and_then(|v| v.as_f64()),
         cash_balance: data.get("cash_balance").and_then(|v| v.as_f64()),
         currency: Some("CNY".to_string()),

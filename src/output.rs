@@ -142,7 +142,10 @@ fn layout_total_row(
             .fg(Color::Yellow)
     };
     let t = &report.totals;
-    let mut cells = vec![bold("TOTAL".to_string()), bold(total_models_cell.to_string())];
+    let mut cells = vec![
+        bold("TOTAL".to_string()),
+        bold(total_models_cell.to_string()),
+    ];
     if show_activity {
         cells.push(bold(format_activity_text(report.activity_totals.as_ref())));
     }
@@ -187,7 +190,9 @@ fn measure_layout_width(
 ) -> usize {
     let mut probe = Table::new();
     // Default arrangement (Disabled) => columns take full content width, no wrap.
-    probe.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    probe
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS);
     set_layout_header(&mut probe, layout, show_activity);
     for row in &report.daily {
         probe.add_row(primary_row(row, layout, show_activity));
@@ -196,7 +201,12 @@ fn measure_layout_width(
         }
     }
     let total_models_cell = report_unique_model_count_by_source_multiline(report);
-    probe.add_row(layout_total_row(report, layout, show_activity, &total_models_cell));
+    probe.add_row(layout_total_row(
+        report,
+        layout,
+        show_activity,
+        &total_models_cell,
+    ));
 
     let widths = probe.column_max_content_widths();
     let n = widths.len();
@@ -573,25 +583,73 @@ fn menu_rows() -> Vec<MenuRow> {
     use MenuRow::{Cmd, Header};
     let mut rows = vec![
         Header("Reporting"),
-        Cmd { name: "today", desc: "Today's usage + coding activity" },
-        Cmd { name: "daily", desc: "Per-day token usage and cost" },
-        Cmd { name: "weekly", desc: "Per-week token usage" },
-        Cmd { name: "monthly", desc: "Per-month token usage" },
-        Cmd { name: "activity", desc: "Coding-activity view with per-day breakdowns" },
-        Cmd { name: "blocks", desc: "Usage grouped by 5-hour billing blocks" },
-        Cmd { name: "session", desc: "Per-session token usage" },
+        Cmd {
+            name: "today",
+            desc: "Today's usage + coding activity",
+        },
+        Cmd {
+            name: "daily",
+            desc: "Per-day token usage and cost",
+        },
+        Cmd {
+            name: "weekly",
+            desc: "Per-week token usage",
+        },
+        Cmd {
+            name: "monthly",
+            desc: "Per-month token usage",
+        },
+        Cmd {
+            name: "activity",
+            desc: "Coding-activity view with per-day breakdowns",
+        },
+        Cmd {
+            name: "blocks",
+            desc: "Usage grouped by 5-hour billing blocks",
+        },
+        Cmd {
+            name: "session",
+            desc: "Per-session token usage",
+        },
         Header("Live"),
-        Cmd { name: "live", desc: "Live-updating usage view" },
-        Cmd { name: "top", desc: "Real-time per-session viewer (htop for tokens)" },
-        Cmd { name: "gui", desc: "Desktop GUI (Iced)" },
+        Cmd {
+            name: "live",
+            desc: "Live-updating usage view",
+        },
+        Cmd {
+            name: "top",
+            desc: "Real-time per-session viewer (htop for tokens)",
+        },
+        Cmd {
+            name: "gui",
+            desc: "Desktop GUI (Iced)",
+        },
         Header("Integration"),
-        Cmd { name: "statusline init", desc: "Set up the Claude Code status line (backs up settings.json, asks first)" },
-        Cmd { name: "statusline", desc: "Print the one-line status (what the statusLine hook renders)" },
-        Cmd { name: "img", desc: "Render a usage report as a PNG" },
-        Cmd { name: "heartbeat", desc: "Editor-activity heartbeat collector and stats" },
+        Cmd {
+            name: "statusline init",
+            desc: "Set up the Claude Code status line (backs up settings.json, asks first)",
+        },
+        Cmd {
+            name: "statusline",
+            desc: "Print the one-line status (what the statusLine hook renders)",
+        },
+        Cmd {
+            name: "img",
+            desc: "Render a usage report as a PNG",
+        },
+        Cmd {
+            name: "heartbeat",
+            desc: "Editor-activity heartbeat collector and stats",
+        },
         Header("Diagnostics"),
-        Cmd { name: "doctor", desc: "Inspect roots, files, cache and pricing health" },
-        Cmd { name: "parity", desc: "Compare tu totals against ccusage" },
+        Cmd {
+            name: "doctor",
+            desc: "Inspect roots, files, cache and pricing health",
+        },
+        Cmd {
+            name: "parity",
+            desc: "Compare tu totals against ccusage",
+        },
     ];
 
     // Balances: only surface providers whose API key is actually configured, so
@@ -608,19 +666,34 @@ fn menu_rows() -> Vec<MenuRow> {
         });
     }
     if has("DEEPSEEK_API_KEY") {
-        balances.push(Cmd { name: "deepseek", desc: "Show DeepSeek API credit balance" });
+        balances.push(Cmd {
+            name: "deepseek",
+            desc: "Show DeepSeek API credit balance",
+        });
     }
     if has("OPENROUTER_API_KEY") {
-        balances.push(Cmd { name: "openrouter", desc: "Show OpenRouter API credit balance" });
+        balances.push(Cmd {
+            name: "openrouter",
+            desc: "Show OpenRouter API credit balance",
+        });
     }
     if has("XAI_API_KEY") {
-        balances.push(Cmd { name: "grok", desc: "Show Grok (xAI) credit balance" });
+        balances.push(Cmd {
+            name: "grok",
+            desc: "Show Grok (xAI) credit balance",
+        });
     }
     if has("MOONSHOT_API_KEY") {
-        balances.push(Cmd { name: "kimi", desc: "Show Kimi (Moonshot) credit balance" });
+        balances.push(Cmd {
+            name: "kimi",
+            desc: "Show Kimi (Moonshot) credit balance",
+        });
     }
     if has("ANTHROPIC_API_KEY") || has("ANTHROPIC_ADMIN_KEY") {
-        balances.push(Cmd { name: "anthropic-api", desc: "Show Anthropic API usage today" });
+        balances.push(Cmd {
+            name: "anthropic-api",
+            desc: "Show Anthropic API usage today",
+        });
     }
     if !balances.is_empty() {
         rows.push(Header("Balances"));

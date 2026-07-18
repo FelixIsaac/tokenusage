@@ -6,8 +6,8 @@ use super::official::{
 use super::parsing::{dedupe_opencode_events, hydrate_cached_events};
 use super::statusline::active_block_summary_for_bounds;
 use super::*;
-use chrono::TimeZone;
 use crate::types::ParseStatsAtomic;
+use chrono::TimeZone;
 use std::path::PathBuf;
 
 fn utc_dt(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
@@ -542,7 +542,13 @@ fn test_deepseek_parse() {
     let body: serde_json::Value = serde_json::from_str(mock).unwrap();
     let infos = body.get("balance_infos").and_then(|v| v.as_array());
     let first = infos.and_then(|arr| arr.first()).unwrap();
-    let total = first.get("total_balance").unwrap().as_str().unwrap().parse::<f64>().unwrap();
+    let total = first
+        .get("total_balance")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .parse::<f64>()
+        .unwrap();
     assert!((total - 24.50).abs() < 0.001);
 }
 
@@ -554,4 +560,3 @@ fn test_openrouter_parse() {
     let pct = data["usage"].as_f64().unwrap() / data["limit"].as_f64().unwrap() * 100.0;
     assert!((pct - 15.0).abs() < 0.001);
 }
-

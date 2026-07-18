@@ -187,7 +187,9 @@ fn fetch_ccusage_totals(
         ProviderArg::Gemini => "@ccusage/gemini@latest",
         ProviderArg::Opencode => "@ccusage/opencode@latest",
         ProviderArg::Grok => {
-            bail!("tu parity does not support Grok — no ccusage-family package exists to compare against");
+            bail!(
+                "tu parity does not support Grok — no ccusage-family package exists to compare against"
+            );
         }
     };
     let report = match period {

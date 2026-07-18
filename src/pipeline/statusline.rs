@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
-use crate::cli::{CostSource, StatuslineAction, StatuslineArgs, StatuslineInitArgs, VisualBurnRate};
+use crate::cli::{
+    CostSource, StatuslineAction, StatuslineArgs, StatuslineInitArgs, VisualBurnRate,
+};
 use crate::types::{SourceKind, TokenCounts, UsageEvent};
 
 use super::live::fetch_selected_official_limits;
@@ -68,16 +70,26 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
 
     let session_totals = session_id.and_then(|id| aggregate_session_totals(&loaded.events, id));
     let block_summary = active_block_summary(&loaded.events, Utc::now(), 5 * 3600);
-    let (official_codex, official_claude, official_antigravity, _, _, _, _, _) = if args.official_limits {
-        let (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic, errors) =
-            fetch_selected_official_limits(&args.common).await;
-        for error in errors {
-            eprintln!("{error}");
-        }
-        (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic)
-    } else {
-        (None, None, None, None, None, None, None, None)
-    };
+    let (official_codex, official_claude, official_antigravity, _, _, _, _, _) =
+        if args.official_limits {
+            let (codex, claude, antigravity, deepseek, openrouter, grok, kimi, anthropic, errors) =
+                fetch_selected_official_limits(&args.common).await;
+            for error in errors {
+                eprintln!("{error}");
+            }
+            (
+                codex,
+                claude,
+                antigravity,
+                deepseek,
+                openrouter,
+                grok,
+                kimi,
+                anthropic,
+            )
+        } else {
+            (None, None, None, None, None, None, None, None)
+        };
     let line = build_statusline_line(
         &args,
         hook.as_ref(),
@@ -205,12 +217,17 @@ fn run_statusline_init(init: &StatuslineInitArgs) -> Result<()> {
     if let StatuslinePlan::Conflict(cur) = &plan
         && !init.yes
     {
-        println!("{} already has a statusLine that isn't tu:", settings_path.display());
+        println!(
+            "{} already has a statusLine that isn't tu:",
+            settings_path.display()
+        );
         println!("  current : {cur}");
         println!("  tu would : {command}");
         println!();
         println!("Not overwriting. Pick one:");
-        println!("  • Keep both / compose — run `tu statusline init --ccstatusline` for a prompt to");
+        println!(
+            "  • Keep both / compose — run `tu statusline init --ccstatusline` for a prompt to"
+        );
         println!("    hand your assistant that integrates tu into the line above.");
         println!("  • Replace it with tu — re-run `tu statusline init --yes`.");
         return Ok(());
@@ -226,7 +243,10 @@ fn run_statusline_init(init: &StatuslineInitArgs) -> Result<()> {
             );
         }
         match &plan {
-            StatuslinePlan::Update(cur) => println!("Update tu statusline in {}:\n  from : {cur}\n  to   : {command}", settings_path.display()),
+            StatuslinePlan::Update(cur) => println!(
+                "Update tu statusline in {}:\n  from : {cur}\n  to   : {command}",
+                settings_path.display()
+            ),
             _ => println!("Add this to {}:\n{pretty_block}", settings_path.display()),
         }
         print!("Apply? [y/N] ");
@@ -255,7 +275,10 @@ fn run_statusline_init(init: &StatuslineInitArgs) -> Result<()> {
     std::fs::write(&settings_path, format!("{serialized}\n"))
         .with_context(|| format!("Failed to write {}", settings_path.display()))?;
 
-    println!("Done — {} statusLine is now\n  {command}", settings_path.display());
+    println!(
+        "Done — {} statusLine is now\n  {command}",
+        settings_path.display()
+    );
     println!("Restart Claude Code (or start a new session) to see it.");
     Ok(())
 }
@@ -1084,10 +1107,20 @@ mod statusline_field_tests {
     #[test]
     fn field_values_are_formatted() {
         let f = sample();
-        assert_eq!(statusline_field_value(&f, "model").unwrap(), "claude-opus-4-8");
+        assert_eq!(
+            statusline_field_value(&f, "model").unwrap(),
+            "claude-opus-4-8"
+        );
         assert_eq!(statusline_field_value(&f, "today-cost").unwrap(), "$22.18");
-        assert_eq!(statusline_field_value(&f, "burn-status").unwrap(), "moderate");
-        assert!(statusline_field_value(&f, "block-left").unwrap().contains("1h 10m"));
+        assert_eq!(
+            statusline_field_value(&f, "burn-status").unwrap(),
+            "moderate"
+        );
+        assert!(
+            statusline_field_value(&f, "block-left")
+                .unwrap()
+                .contains("1h 10m")
+        );
         assert!(statusline_field_value(&f, "bogus").is_none());
     }
 
@@ -1099,7 +1132,10 @@ mod statusline_field_tests {
             "claude-opus-4-8 $22.18"
         );
         // Unknown tokens are left untouched.
-        assert_eq!(render_statusline_format(&f, "{model} {bogus}"), "claude-opus-4-8 {bogus}");
+        assert_eq!(
+            render_statusline_format(&f, "{model} {bogus}"),
+            "claude-opus-4-8 {bogus}"
+        );
     }
 }
 
@@ -1192,7 +1228,11 @@ mod statusline_init_tests {
     fn init_writes_backs_up_and_preserves_keys() {
         let dir = temp_dir("write");
         let path = dir.join("settings.json");
-        std::fs::write(&path, r#"{"model":"opus","statusLine":{"command":"ccstatusline"}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"model":"opus","statusLine":{"command":"ccstatusline"}}"#,
+        )
+        .unwrap();
 
         run_statusline_init(&seam(&path)).unwrap();
 
@@ -1203,7 +1243,11 @@ mod statusline_init_tests {
         // Original was backed up verbatim before the overwrite.
         let bak = path.with_extension("json.bak");
         assert!(bak.exists(), "backup should exist");
-        assert!(std::fs::read_to_string(&bak).unwrap().contains("ccstatusline"));
+        assert!(
+            std::fs::read_to_string(&bak)
+                .unwrap()
+                .contains("ccstatusline")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1235,7 +1279,10 @@ mod statusline_init_tests {
         let err = run_statusline_init(&seam(&path)).unwrap_err();
         assert!(err.to_string().contains("valid JSON"));
         // File left untouched.
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not json");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ this is not json"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

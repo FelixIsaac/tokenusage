@@ -669,7 +669,12 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
     } else if args.tui {
         run_report_tui(&report)
     } else {
-        print_report_table_with_options(&report, args.common.compact, args.common.breakdown, args.common.brief);
+        print_report_table_with_options(
+            &report,
+            args.common.compact,
+            args.common.breakdown,
+            args.common.brief,
+        );
         print_debug(&report.stats, &args.common);
         Ok(())
     }
@@ -733,7 +738,12 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
             stats: report.stats,
             insights: report.insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
+        print_report_table_with_options(
+            &show,
+            args.common.compact,
+            args.common.breakdown,
+            args.common.brief,
+        );
         print_debug(&show.stats, &args.common);
         Ok(())
     }
@@ -799,7 +809,12 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
             stats: report.stats,
             insights: report.insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
+        print_report_table_with_options(
+            &show,
+            args.common.compact,
+            args.common.breakdown,
+            args.common.brief,
+        );
         print_debug(&show.stats, &args.common);
         Ok(())
     }
@@ -1150,7 +1165,12 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             stats: json_report.stats,
             insights,
         };
-        print_report_table_with_options(&show, args.common.compact, args.common.breakdown, args.common.brief);
+        print_report_table_with_options(
+            &show,
+            args.common.compact,
+            args.common.breakdown,
+            args.common.brief,
+        );
         print_debug(&show.stats, &args.common);
         Ok(())
     }

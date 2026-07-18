@@ -223,8 +223,8 @@ fn cache_economics(rows: &[DailyRow]) -> (Option<f64>, Option<f64>) {
                 && (rate.cache_read_per_million > 0.0 || rate.cache_creation_per_million > 0.0)
             {
                 priced_tokens += read + create;
-                net_savings +=
-                    (read as f64 / 1_000_000.0) * (rate.input_per_million - rate.cache_read_per_million);
+                net_savings += (read as f64 / 1_000_000.0)
+                    * (rate.input_per_million - rate.cache_read_per_million);
                 net_savings -= (create as f64 / 1_000_000.0)
                     * (rate.cache_creation_per_million - rate.input_per_million);
             }
@@ -640,7 +640,7 @@ mod tests {
     fn cache_economics_computes_net_savings_and_reuse() {
         // claude-sonnet default rates: input 3.0, cache_read 0.3, cache_creation 3.75 per Mtok.
         let counts = TokenCounts {
-            cache_read_input_tokens: 10_000_000, // reads
+            cache_read_input_tokens: 10_000_000,    // reads
             cache_creation_input_tokens: 1_000_000, // writes
             total_tokens: 11_000_000,
             ..TokenCounts::default()
@@ -649,7 +649,10 @@ mod tests {
         let (savings, reuse) = cache_economics(&rows);
         // reads saved: 10M * (3.0 - 0.3)/1e6 = 27.0 ; write premium: 1M * (3.75 - 3.0)/1e6 = 0.75
         let expected = 27.0 - 0.75;
-        assert!((savings.unwrap() - expected).abs() < 1e-6, "savings={savings:?}");
+        assert!(
+            (savings.unwrap() - expected).abs() < 1e-6,
+            "savings={savings:?}"
+        );
         // reuse = 10M reads / 1M writes = 10x
         assert!((reuse.unwrap() - 10.0).abs() < 1e-6);
     }
