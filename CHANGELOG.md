@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-18
+
+### Added
+- New log-based source: **Grok Build** (`SourceKind::Grok`), reading real
+  per-turn token counts from `~/.grok/logs/unified.jsonl`
+  (`--grok-log-dir` to override). Verified pricing for `grok-4.5`
+  ($2/$0.5/$6 per M input/cached/output tokens, doubling above 200K).
+  Grok's log has no per-turn model field, so events are labelled with
+  a fixed fallback model rather than a per-event value; `tu parity`
+  explicitly rejects Grok since no ccusage-family equivalent exists.
+- cargo-dist release pipeline: prebuilt binaries for macOS (arm64/x64),
+  Windows x64, and Linux x64/arm64, published to GitHub Releases and a
+  Homebrew tap (`FelixIsaac/homebrew-tokenusage`).
+
 ## [1.10.1] - 2026-06-12
 
 ### Changed
