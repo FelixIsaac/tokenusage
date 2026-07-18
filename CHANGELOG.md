@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-07-18
+
+### Fixed
+- `Cargo.toml`'s `repository` field still pointed at upstream
+  (`hanbu97/tokenusage`), which cargo-dist bakes into every generated
+  install script/Homebrew formula at release time — v1.11.0's install
+  instructions 404'd because they pointed at upstream's releases,
+  which don't have this fork's binaries. Now points at
+  `FelixIsaac/tokenusage`. v1.11.0 release/tag were deleted;
+  this supersedes it.
+
 ## [1.11.0] - 2026-07-18
 
 ### Added
