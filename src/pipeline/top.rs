@@ -251,7 +251,7 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 }),
                 TopSortKey::OutputTokens => {
-                    new_sessions.sort_by(|a, b| b.output_tokens_total.cmp(&a.output_tokens_total))
+                    new_sessions.sort_by_key(|s| std::cmp::Reverse(s.output_tokens_total))
                 }
                 TopSortKey::Rate => new_sessions.sort_by(|a, b| {
                     let ra = rates.get(&a.rate_key).copied().unwrap_or(0.0);
@@ -259,7 +259,7 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
                     rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal)
                 }),
                 TopSortKey::Recent => {
-                    new_sessions.sort_by(|a, b| b.last_activity.cmp(&a.last_activity))
+                    new_sessions.sort_by_key(|s| std::cmp::Reverse(s.last_activity))
                 }
             }
 

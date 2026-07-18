@@ -364,6 +364,7 @@ pub(super) async fn fetch_selected_official_limits(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_blocks_live(
     args: &BlocksArgs,
     tz: &TimeZoneMode,
@@ -1287,7 +1288,7 @@ pub(super) fn render_live_antigravity_tab(
         .collect();
 
     // Draw each model with a gauge-style bar
-    for model in ordered.iter().chain(rest.into_iter()) {
+    for model in ordered.iter().chain(rest) {
         lines.push(Line::from(vec![Span::styled(
             format!("  {}", model.label),
             Style::default().add_modifier(Modifier::BOLD),
@@ -2645,7 +2646,7 @@ pub(super) fn live_limit_lines(context: &LiveFrameContext<'_>) -> Vec<Line<'stat
             .iter()
             .filter(|m| !shown.contains(&m.label))
             .collect();
-        for model in ordered.iter().chain(rest.into_iter()) {
+        for model in ordered.iter().chain(rest) {
             let (pct_text, color) = if let Some(frac) = model.remaining_fraction {
                 let remaining = frac * 100.0;
                 let used = 100.0 - remaining;

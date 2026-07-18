@@ -318,7 +318,7 @@ pub struct ParseStatsAtomic {
 /// | `lines_invalid_json` | Lines that were not valid JSON |
 /// | `lines_missing_usage` | JSON lines without token usage fields |
 /// | `lines_unknown_pricing` | Events where the model had no pricing data |
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ParseStats {
     pub files_discovered: usize,
     pub files_open_failed: usize,
@@ -328,21 +328,6 @@ pub struct ParseStats {
     pub lines_invalid_json: usize,
     pub lines_missing_usage: usize,
     pub lines_unknown_pricing: usize,
-}
-
-impl Default for ParseStats {
-    fn default() -> Self {
-        Self {
-            files_discovered: 0,
-            files_open_failed: 0,
-            lines_total: 0,
-            lines_parsed: 0,
-            lines_filtered: 0,
-            lines_invalid_json: 0,
-            lines_missing_usage: 0,
-            lines_unknown_pricing: 0,
-        }
-    }
 }
 
 impl ParseStatsAtomic {
@@ -513,7 +498,7 @@ impl PricingTable {
 
         table
             .prefixes
-            .sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+            .sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
 
         table
     }
@@ -714,7 +699,7 @@ pub struct DailyRow {
 ///
 /// This struct implements `Serialize`, so you can convert it directly to
 /// JSON with `serde_json::to_string(&report)?`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct DailyReport {
     /// Per-period rows (daily, weekly, or monthly depending on the request).
     pub daily: Vec<DailyRow>,
@@ -729,18 +714,6 @@ pub struct DailyReport {
     /// Extra derived analytics for the report (cache ratio, peak period, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insights: Option<ReportInsights>,
-}
-
-impl Default for DailyReport {
-    fn default() -> Self {
-        Self {
-            daily: Vec::new(),
-            totals: TokenCounts::default(),
-            activity_totals: None,
-            stats: ParseStats::default(),
-            insights: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

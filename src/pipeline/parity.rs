@@ -232,6 +232,7 @@ fn to_ccusage_date(input: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

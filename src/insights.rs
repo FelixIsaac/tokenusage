@@ -365,7 +365,7 @@ fn streaks_if_daily(rows: &[DailyRow]) -> (Option<u32>, Option<u32>, u32) {
 
     let current = days
         .last()
-        .and_then(|(last, _)| {
+        .map(|(last, _)| {
             let mut run = 0u32;
             let mut cursor = *last;
             for (day, active) in days.iter().rev() {
@@ -379,7 +379,7 @@ fn streaks_if_daily(rows: &[DailyRow]) -> (Option<u32>, Option<u32>, u32) {
                 }
                 cursor = cursor.pred_opt().unwrap_or(cursor);
             }
-            Some(run)
+            run
         })
         .unwrap_or(0);
 
@@ -397,7 +397,7 @@ fn token_spikes(
 ) -> Vec<SpikePeriod> {
     let mut values = rows
         .iter()
-        .filter_map(|row| Some((row.date.clone(), row.totals.total_tokens)))
+        .map(|row| (row.date.clone(), row.totals.total_tokens))
         .collect::<Vec<_>>();
     if values.len() < 7 {
         return Vec::new();
@@ -409,7 +409,7 @@ fn token_spikes(
         return Vec::new();
     }
 
-    values.sort_by(|a, b| b.1.cmp(&a.1));
+    values.sort_by_key(|v| std::cmp::Reverse(v.1));
     values
         .into_iter()
         .filter(|(_, tokens)| *tokens > median.saturating_mul(3))
@@ -457,7 +457,7 @@ fn token_anomalies(
         return Vec::new();
     }
 
-    values.sort_by(|a, b| b.1.cmp(&a.1));
+    values.sort_by_key(|v| std::cmp::Reverse(v.1));
     values
         .into_iter()
         .filter_map(|(date, total_tokens)| {

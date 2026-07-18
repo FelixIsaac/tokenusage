@@ -271,13 +271,17 @@ impl ReportCache {
     }
 
     fn insert(&mut self, key: CacheKey, report: DailyReport) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key, report);
-            return;
+        use std::collections::hash_map::Entry;
+        match self.map.entry(key.clone()) {
+            Entry::Occupied(mut e) => {
+                e.insert(report);
+                return;
+            }
+            Entry::Vacant(e) => {
+                e.insert(report);
+            }
         }
-
-        self.order.push_back(key.clone());
-        self.map.insert(key, report);
+        self.order.push_back(key);
 
         while self.order.len() > self.capacity {
             if let Some(oldest) = self.order.pop_front() {
@@ -623,22 +627,25 @@ async fn load_report(request: ReportRequest) -> Result<DailyReport, String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::cli::ProviderArg;
 
     fn base_request() -> ReportRequest {
-        let mut common = CommonArgs::default();
-        common.order = SortOrder::Desc;
-        common.no_claude = false;
-        common.no_codex = false;
-        common.no_gemini = false;
-        common.no_opencode = false;
-        common.timezone = Some("Asia/Singapore".to_string());
-        common.since = Some("2026-04-01".to_string());
-        common.until = Some("2026-04-30".to_string());
-        common.only = vec![ProviderArg::Claude, ProviderArg::Codex];
-        common.sources = vec![ProviderArg::Opencode];
+        let common = CommonArgs {
+            order: SortOrder::Desc,
+            no_claude: false,
+            no_codex: false,
+            no_gemini: false,
+            no_opencode: false,
+            timezone: Some("Asia/Singapore".to_string()),
+            since: Some("2026-04-01".to_string()),
+            until: Some("2026-04-30".to_string()),
+            only: vec![ProviderArg::Claude, ProviderArg::Codex],
+            sources: vec![ProviderArg::Opencode],
+            ..CommonArgs::default()
+        };
 
         ReportRequest {
             common,

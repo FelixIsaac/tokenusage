@@ -166,7 +166,7 @@ pub(super) fn parse_files_with_cache(
     }
 
     if sort_events {
-        events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        events.sort_by_key(|e| e.timestamp);
     }
     dedupe_opencode_events(&mut events);
 
@@ -904,12 +904,7 @@ pub(super) fn parse_single_file(
             base_stats = base_cache.stats.clone();
             cached_events.extend(base_cache.events.iter().cloned());
             local_events.extend(hydrate_cached_events(
-                &job.file,
-                &base_cache,
-                filter,
-                timezone,
-                pricing,
-                stats,
+                &job.file, base_cache, filter, timezone, pricing, stats,
             ));
             match job.file.source {
                 SourceKind::Codex => {
@@ -2730,7 +2725,7 @@ mod cache_tests {
         let loaded = load_incremental_cache(&path, "pk");
         assert_eq!(loaded.files.len(), 1);
         assert_eq!(loaded.files.get("a").unwrap().fingerprint.size, 99);
-        assert!(loaded.files.get("b").is_none());
+        assert!(!loaded.files.contains_key("b"));
         cleanup(&path);
     }
 

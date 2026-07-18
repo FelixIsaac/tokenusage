@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
+  <a href="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/FelixIsaac/tokenusage/actions/workflows/release.yml"><img src="https://github.com/FelixIsaac/tokenusage/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
   <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
   <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
   <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
@@ -42,7 +42,7 @@ tu                          # daily cost report in 0.08s
 </p>
 
 <p align="center">
-  If <code>tokenusage</code> saves you time, <a href="https://github.com/hanbu97/tokenusage">give it a star</a> — it directly helps other Codex and Claude users find it.
+  If <code>tokenusage</code> saves you time, <a href="https://github.com/FelixIsaac/tokenusage">give it a star</a> — it directly helps other Codex and Claude users find it.
 </p>
 
 ---
@@ -140,13 +140,20 @@ tool goes upstream — this fork extends it with the following (see
 ### Install this fork
 
 The published `tokenusage` packages (npm / cargo / pip) are **upstream**. To run this
-fork, build from source:
+fork:
 
 ```bash
+# Prebuilt binary via Homebrew (macOS, Linux) — recommended, no Rust toolchain needed
+brew install FelixIsaac/tokenusage/tokenusage
+
+# Or build from source
 git clone https://github.com/FelixIsaac/tokenusage
 cd tokenusage
 cargo install --path . --bin tu
 ```
+
+Prebuilt binaries (shell/PowerShell installer scripts, and Windows/Linux archives) are
+also on the [Releases page](https://github.com/FelixIsaac/tokenusage/releases).
 
 ## Install
 
@@ -248,8 +255,9 @@ tu img week
 - Codex CLI: `$CODEX_HOME/sessions` (fallback `~/.codex/sessions`, override with `--codex-sessions-dir`)
 - Gemini CLI: `~/.gemini/tmp` (override with `--gemini-data-dir`)
 - OpenCode: `$OPENCODE_DATA_DIR` or `$XDG_DATA_HOME/opencode` (fallback `~/.local/share/opencode`, override with `--opencode-data-dir`)
+- Grok Build: `~/.grok/logs` (override with `--grok-log-dir`)
 
-`--only` / `--sources` currently target log-based providers (`claude`, `codex`, `gemini`, `opencode`). Antigravity remains a separate quota probe.
+`--only` / `--sources` currently target log-based providers (`claude`, `codex`, `gemini`, `opencode`, `grok`). Antigravity remains a separate quota probe. Note: `tu grok` is the pre-existing xAI balance-check subcommand (needs `XAI_API_KEY`) — Grok's log-based usage data is accessed via `--sources grok`/`--only grok`, not a `tu grok daily`-style shortcut like the other four sources have, since the bare word `grok` is already claimed by that balance command.
 
 ## Benchmark Details
 
@@ -286,9 +294,10 @@ From local log directories and IDE probes:
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
 - Gemini: `~/.gemini/tmp`
 - OpenCode: `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`
+- Grok Build: `~/.grok/logs`
 - Antigravity: probed from running IDE language server (no log files needed)
 
-You can override with `--claude-projects-dir`, `--codex-sessions-dir`, `--gemini-data-dir`, and `--opencode-data-dir`.
+You can override with `--claude-projects-dir`, `--codex-sessions-dir`, `--gemini-data-dir`, `--opencode-data-dir`, and `--grok-log-dir`.
 
 OpenCode merge semantics:
 - `tu` ingests both `opencode.db` and legacy `storage/message/**/*.json` when both exist.
@@ -399,7 +408,7 @@ Example:
       "period": "daily",
       "bars": 24,
       "brand": "tokenusage",
-      "brandUrl": "https://github.com/hanbu97/tokenusage"
+      "brandUrl": "https://github.com/FelixIsaac/tokenusage"
     },
     "weekly": {
       "startOfWeek": "monday"

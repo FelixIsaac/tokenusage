@@ -1010,7 +1010,7 @@ pub(crate) async fn run_antigravity(args: AntigravityArgs) -> Result<()> {
                 .filter(|m| !shown_labels.contains(m.label.as_str()))
                 .collect();
 
-            for model in ordered.iter().chain(rest.into_iter()) {
+            for model in ordered.iter().chain(rest) {
                 if let Some(frac) = model.remaining_fraction {
                     let remaining_pct = frac * 100.0;
                     let used_pct = 100.0 - remaining_pct;

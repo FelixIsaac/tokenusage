@@ -312,9 +312,10 @@ impl CommonArgs {
                   - Codex:    $CODEX_HOME/sessions      (--codex-sessions-dir)\n\
                   - Gemini:   ~/.gemini/tmp             (--gemini-data-dir)\n\
                   - OpenCode: $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
+                  - Grok:     ~/.grok/logs              (--grok-log-dir)\n\
                   \n\
-                  GitHub:  https://github.com/hanbu97/tokenusage\n\
-                  Issues:  https://github.com/hanbu97/tokenusage/issues"
+                  GitHub:  https://github.com/FelixIsaac/tokenusage\n\
+                  Issues:  https://github.com/FelixIsaac/tokenusage/issues"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -879,7 +880,7 @@ pub(crate) struct ImgArgs {
     pub(crate) brand: String,
     #[arg(
         long,
-        default_value = "https://github.com/hanbu97/tokenusage",
+        default_value = "https://github.com/FelixIsaac/tokenusage",
         help = "Brand URL shown on the card"
     )]
     pub(crate) brand_url: String,
