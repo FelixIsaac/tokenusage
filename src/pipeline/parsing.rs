@@ -513,7 +513,13 @@ fn codex_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
 
 fn gemini_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
     if common.gemini_data_dir.is_empty() {
-        return vec![home.join(".gemini").join("tmp")];
+        let base = home.join(".gemini");
+        return vec![
+            base.join("tmp"),
+            base.join("antigravity-cli").join("brain"),
+            base.join("antigravity-cli"),
+            base,
+        ];
     }
     common
         .gemini_data_dir
@@ -1435,29 +1441,39 @@ pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> Par
         Err(_) => return ParseLineResult::InvalidJson,
     };
 
-    // Gemini CLI chat logs contain many record types; we only care about
-    // assistant completions with token accounting.
-    if get_value(&value, "type")
-        .and_then(Value::as_str)
-        .is_some_and(|entry_type| entry_type != "gemini")
-    {
-        return ParseLineResult::MissingUsage;
+    // If type is present, allow "gemini" or step records that carry token metrics
+    let entry_type = get_value(&value, "type").and_then(Value::as_str);
+    if let Some(t) = entry_type {
+        if t != "gemini"
+            && get_value(&value, "tokens").is_none()
+            && get_value(&value, "usage").is_none()
+        {
+            return ParseLineResult::MissingUsage;
+        }
     }
 
     let Some(timestamp) = extract_timestamp(&value) else {
         return ParseLineResult::MissingUsage;
     };
 
-    let Some(model) = extract_string(&value, &["model"]) else {
-        return ParseLineResult::MissingUsage;
-    };
+    let model = extract_string(&value, &["model"])
+        .unwrap_or_else(|| "gemini-3.6-flash".to_string());
 
     let usage = UsageAccumulator {
-        input_tokens: extract_u64(&value, &["tokens.input"]).unwrap_or(0),
+        input_tokens: extract_u64(&value, &["tokens.input"])
+            .or_else(|| extract_u64(&value, &["usage.input_tokens"]))
+            .or_else(|| extract_u64(&value, &["tokens.input_tokens"]))
+            .unwrap_or(0),
         cache_creation_input_tokens: 0,
-        cache_read_input_tokens: extract_u64(&value, &["tokens.cached"]).unwrap_or(0),
-        output_tokens: extract_u64(&value, &["tokens.output"]).unwrap_or(0),
-        reasoning_output_tokens: extract_u64(&value, &["tokens.thoughts"]).unwrap_or(0),
+        cache_read_input_tokens: extract_u64(&value, &["tokens.cached"])
+            .or_else(|| extract_u64(&value, &["usage.cache_read_input_tokens"]))
+            .unwrap_or(0),
+        output_tokens: extract_u64(&value, &["tokens.output"])
+            .or_else(|| extract_u64(&value, &["usage.output_tokens"]))
+            .unwrap_or(0),
+        reasoning_output_tokens: extract_u64(&value, &["tokens.thoughts"])
+            .or_else(|| extract_u64(&value, &["usage.reasoning_output_tokens"]))
+            .unwrap_or(0),
         cost_usd: 0.0,
     };
 

@@ -980,15 +980,30 @@ pub(crate) enum ParityOpencodeScope {
 
 #[cfg(feature = "cli")]
 fn normalize_provider_first(argv: &mut Vec<String>) {
-    let Some(provider) = argv.get(1).map(|s| s.to_ascii_lowercase()) else {
+    let Some(raw_provider) = argv.get(1).map(|s| s.to_ascii_lowercase()) else {
         return;
     };
-    if !matches!(
-        provider.as_str(),
-        "claude" | "codex" | "gemini" | "opencode"
-    ) {
-        return;
-    }
+    let provider = match raw_provider.as_str() {
+        "claude" => "claude",
+        "codex" => "codex",
+        "gemini" => "gemini",
+        "opencode" => "opencode",
+        "antigravity" | "agy" => {
+            if let Some(next) = argv.get(2).map(|s| s.to_ascii_lowercase()) {
+                if matches!(
+                    next.as_str(),
+                    "daily" | "weekly" | "monthly" | "today" | "activity" | "blocks" | "session" | "live" | "top" | "gui" | "statusline" | "img" | "doctor"
+                ) || next.starts_with('-') {
+                    "gemini"
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    };
 
     let report = argv
         .get(2)
@@ -1013,7 +1028,7 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
 
     if !argv.iter().any(|arg| arg == "--only") && !argv.iter().any(|arg| arg == "--sources") {
         argv.insert(2, "--only".to_string());
-        argv.insert(3, provider);
+        argv.insert(3, provider.to_string());
     }
 }
 
