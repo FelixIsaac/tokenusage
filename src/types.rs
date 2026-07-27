@@ -778,3 +778,106 @@ impl TableLayout {
         }
     }
 }
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::*;
+
+    fn rate(input: f64, output: f64, cache_read: f64) -> PricingRate {
+        PricingRate {
+            input_per_million: input,
+            output_per_million: output,
+            cache_creation_per_million: 0.0,
+            cache_read_per_million: cache_read,
+            reasoning_output_per_million: 0.0,
+            ..PricingRate::default()
+        }
+    }
+
+    #[test]
+    fn find_rate_matches_exact_before_alias() {
+        let mut table = PricingTable::default();
+        table
+            .exact
+            .insert("gemini-3.1-pro-low".to_string(), rate(1.0, 1.0, 1.0));
+        table
+            .exact
+            .insert("gemini-3.1-pro-preview".to_string(), rate(2.0, 2.0, 2.0));
+
+        let found = table.find_rate("gemini-3.1-pro-low").unwrap();
+        assert_eq!(found.input_per_million, 1.0);
+    }
+
+    #[test]
+    fn find_rate_strips_effort_suffix_and_aliases_to_preview() {
+        let mut table = PricingTable::default();
+        table
+            .exact
+            .insert("gemini-3.1-pro-preview".to_string(), rate(2.0, 12.0, 0.2));
+
+        for suffixed in [
+            "gemini-3.1-pro-low",
+            "gemini-3.1-pro-medium",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-xhigh",
+            "gemini-3.1-pro-none",
+        ] {
+            let found = table
+                .find_rate(suffixed)
+                .unwrap_or_else(|| panic!("expected a rate for {suffixed}"));
+            assert_eq!(found.input_per_million, 2.0);
+            assert_eq!(found.output_per_million, 12.0);
+        }
+    }
+
+    #[test]
+    fn find_rate_aliases_other_known_gemini_bases() {
+        let mut table = PricingTable::default();
+        table
+            .exact
+            .insert("gemini-3-pro-preview".to_string(), rate(1.25, 5.0, 0.3));
+        table
+            .exact
+            .insert("gemini-3-flash-preview".to_string(), rate(0.1, 0.4, 0.025));
+
+        assert_eq!(
+            table.find_rate("gemini-3-pro-low").unwrap().input_per_million,
+            1.25
+        );
+        assert_eq!(
+            table
+                .find_rate("gemini-3-flash-high")
+                .unwrap()
+                .input_per_million,
+            0.1
+        );
+    }
+
+    #[test]
+    fn find_rate_returns_none_for_unmapped_model() {
+        let table = PricingTable::default();
+        assert!(table.find_rate("gemini-3.1-pro-low").is_none());
+        assert!(table.find_rate("totally-unknown-model").is_none());
+    }
+
+    #[test]
+    fn estimate_cost_uses_alias_fallback_end_to_end() {
+        let mut table = PricingTable::default();
+        table
+            .exact
+            .insert("gemini-3.1-pro-preview".to_string(), rate(2.0, 12.0, 0.2));
+
+        let usage = UsageAccumulator {
+            input_tokens: 1_000_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 1_000_000,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            cost_usd: 0.0,
+        };
+        let cost = table
+            .estimate_cost("gemini-3.1-pro-low", usage)
+            .expect("alias fallback should price this model");
+        assert!((cost - 2.2).abs() < 1e-9);
+    }
+}

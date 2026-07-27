@@ -1848,77 +1848,71 @@ struct ParsedAntigravityGen {
     timestamp_secs: i64,
 }
 
+/// The bytes payload of the first length-delimited (wire type 2) field with
+/// the given field number, or `None` if absent or a different wire type.
+fn find_proto_bytes<'a>(fields: &[(u32, ProtoWireVal<'a>)], field_number: u32) -> Option<&'a [u8]> {
+    fields.iter().find_map(|(fn_num, val)| match val {
+        ProtoWireVal::Bytes(b) if *fn_num == field_number => Some(*b),
+        _ => None,
+    })
+}
+
+/// The value of the first varint (wire type 0) field with the given field
+/// number, or `None` if absent or a different wire type.
+fn find_proto_varint(fields: &[(u32, ProtoWireVal<'_>)], field_number: u32) -> Option<u64> {
+    fields.iter().find_map(|(fn_num, val)| match val {
+        ProtoWireVal::Varint(v) if *fn_num == field_number => Some(*v),
+        _ => None,
+    })
+}
+
+/// Extracts one generation event from a `gen_metadata.data` protobuf blob.
+///
+/// Antigravity has no published `.proto` schema, so these field numbers
+/// were reverse-engineered from real blobs. Assumed message shape (numbers
+/// are field numbers, nesting shows length-delimited submessages):
+///
+/// ```text
+/// 1: bytes   generation record wrapper
+///    4: bytes   token usage
+///       2: varint  input_tokens
+///       3: varint  output_tokens
+///       5: varint  cache_read_tokens
+///    9: bytes   request timing
+///       4: bytes   wall-clock timestamp
+///          1: varint  unix_epoch_seconds
+///    19: string  model_id (e.g. "gemini-3.6-flash")
+/// ```
+///
+/// If Antigravity's internal schema changes, a renumbered field could
+/// coincidentally decode as a plausible varint/string rather than failing
+/// loudly — the only safety net is the all-zero-tokens rejection below.
+/// Re-verify against a fresh blob dump if costs/tokens look wrong after an
+/// Antigravity app update.
 fn extract_antigravity_gen_event(blob: &[u8]) -> Option<ParsedAntigravityGen> {
     let top = parse_proto_fields(blob);
-    let f1_bytes = top.iter().find_map(|(fn_num, val)| {
-        if *fn_num == 1 {
-            if let ProtoWireVal::Bytes(b) = val {
-                return Some(*b);
-            }
-        }
-        None
-    })?;
+    let f1 = parse_proto_fields(find_proto_bytes(&top, 1)?);
 
-    let f1 = parse_proto_fields(f1_bytes);
+    let model = find_proto_bytes(&f1, 19)
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("gemini-3.6-flash")
+        .to_string();
 
-    let mut model = "gemini-3.6-flash".to_string();
-    for (fn_num, val) in &f1 {
-        if *fn_num == 19 {
-            if let ProtoWireVal::Bytes(b) = val {
-                if let Ok(s) = std::str::from_utf8(b) {
-                    if !s.is_empty() {
-                        model = s.to_string();
-                    }
-                }
-            }
-        }
-    }
+    let usage = find_proto_bytes(&f1, 4)
+        .map(parse_proto_fields)
+        .unwrap_or_default();
+    let input_tokens = find_proto_varint(&usage, 2).unwrap_or(0);
+    let output_tokens = find_proto_varint(&usage, 3).unwrap_or(0);
+    let cache_read_tokens = find_proto_varint(&usage, 5).unwrap_or(0);
 
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
-    let mut cache_read_tokens = 0u64;
-
-    for (fn_num, val) in &f1 {
-        if *fn_num == 4 {
-            if let ProtoWireVal::Bytes(b) = val {
-                let f4 = parse_proto_fields(b);
-                for (sub_fn, sub_val) in f4 {
-                    if let ProtoWireVal::Varint(v) = sub_val {
-                        match sub_fn {
-                            2 => input_tokens = v,
-                            3 => output_tokens = v,
-                            5 => cache_read_tokens = v,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut timestamp_secs = 0i64;
-    for (fn_num, val) in &f1 {
-        if *fn_num == 9 {
-            if let ProtoWireVal::Bytes(b) = val {
-                let f9 = parse_proto_fields(b);
-                for (sub_fn, sub_val) in f9 {
-                    if sub_fn == 4 {
-                        if let ProtoWireVal::Bytes(b4) = sub_val {
-                            let f9_4 = parse_proto_fields(b4);
-                            for (leaf_fn, leaf_val) in f9_4 {
-                                if leaf_fn == 1 {
-                                    if let ProtoWireVal::Varint(v) = leaf_val {
-                                        timestamp_secs = v as i64;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let timestamp_secs = find_proto_bytes(&f1, 9)
+        .map(parse_proto_fields)
+        .and_then(|timing| find_proto_bytes(&timing, 4))
+        .map(parse_proto_fields)
+        .and_then(|wall_clock| find_proto_varint(&wall_clock, 1))
+        .map(|v| v as i64)
+        .unwrap_or(0);
 
     if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 {
         return None;
@@ -2963,6 +2957,167 @@ pub(super) fn normalized_discovered_path(path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         normalize_path(path)
+    }
+}
+
+#[cfg(test)]
+mod antigravity_proto_tests {
+    use super::*;
+
+    fn encode_varint(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if v == 0 {
+                break;
+            }
+        }
+    }
+
+    fn encode_tag(field_number: u32, wire_type: u32, out: &mut Vec<u8>) {
+        encode_varint(((field_number as u64) << 3) | wire_type as u64, out);
+    }
+
+    fn encode_varint_field(field_number: u32, value: u64, out: &mut Vec<u8>) {
+        encode_tag(field_number, 0, out);
+        encode_varint(value, out);
+    }
+
+    fn encode_bytes_field(field_number: u32, payload: &[u8], out: &mut Vec<u8>) {
+        encode_tag(field_number, 2, out);
+        encode_varint(payload.len() as u64, out);
+        out.extend_from_slice(payload);
+    }
+
+    fn encode_string_field(field_number: u32, s: &str, out: &mut Vec<u8>) {
+        encode_bytes_field(field_number, s.as_bytes(), out);
+    }
+
+    /// Builds a synthetic blob matching the assumed Antigravity generation
+    /// record shape documented on `extract_antigravity_gen_event`.
+    fn build_gen_blob(model: &str, input: u64, output: u64, cache_read: u64, ts: i64) -> Vec<u8> {
+        let mut usage = Vec::new();
+        encode_varint_field(2, input, &mut usage);
+        encode_varint_field(3, output, &mut usage);
+        encode_varint_field(5, cache_read, &mut usage);
+
+        let mut wall_clock = Vec::new();
+        encode_varint_field(1, ts as u64, &mut wall_clock);
+
+        let mut timing = Vec::new();
+        encode_bytes_field(4, &wall_clock, &mut timing);
+
+        let mut f1 = Vec::new();
+        encode_bytes_field(4, &usage, &mut f1);
+        encode_bytes_field(9, &timing, &mut f1);
+        encode_string_field(19, model, &mut f1);
+
+        let mut top = Vec::new();
+        encode_bytes_field(1, &f1, &mut top);
+        top
+    }
+
+    #[test]
+    fn decode_varint_single_byte() {
+        assert_eq!(decode_varint(&[0x05], 0), Some((5, 1)));
+    }
+
+    #[test]
+    fn decode_varint_multi_byte() {
+        // 300 = 0b1_0010_1100 -> low 7 bits 0101100 with continuation, then 0000010
+        let mut buf = Vec::new();
+        encode_varint(300, &mut buf);
+        assert_eq!(decode_varint(&buf, 0), Some((300, buf.len())));
+    }
+
+    #[test]
+    fn decode_varint_truncated_returns_none() {
+        // Continuation bit set but no following byte.
+        assert_eq!(decode_varint(&[0x80], 0), None);
+    }
+
+    #[test]
+    fn decode_varint_adversarial_overflow_returns_none() {
+        // 10 bytes all with the continuation bit set never terminates within
+        // 64 bits and must not panic on the shift.
+        let bytes = vec![0xFF; 10];
+        assert_eq!(decode_varint(&bytes, 0), None);
+    }
+
+    #[test]
+    fn parse_proto_fields_roundtrips_varint_and_bytes() {
+        let mut buf = Vec::new();
+        encode_varint_field(1, 42, &mut buf);
+        encode_string_field(2, "hello", &mut buf);
+
+        let fields = parse_proto_fields(&buf);
+        assert_eq!(find_proto_varint(&fields, 1), Some(42));
+        assert_eq!(
+            find_proto_bytes(&fields, 2).and_then(|b| std::str::from_utf8(b).ok()),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn parse_proto_fields_stops_gracefully_on_truncated_length() {
+        // A length-delimited field claiming more bytes than are present.
+        let mut buf = Vec::new();
+        encode_tag(1, 2, &mut buf);
+        encode_varint(1000, &mut buf); // claims 1000 bytes, none follow
+        let fields = parse_proto_fields(&buf);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn extract_antigravity_gen_event_full_record() {
+        let blob = build_gen_blob("gemini-3.1-pro-low", 100, 20, 5000, 1_700_000_000);
+        let event = extract_antigravity_gen_event(&blob).expect("should parse");
+        assert_eq!(event.model, "gemini-3.1-pro-low");
+        assert_eq!(event.input_tokens, 100);
+        assert_eq!(event.output_tokens, 20);
+        assert_eq!(event.cache_read_tokens, 5000);
+        assert_eq!(event.timestamp_secs, 1_700_000_000);
+    }
+
+    #[test]
+    fn extract_antigravity_gen_event_all_zero_tokens_returns_none() {
+        let blob = build_gen_blob("gemini-3.6-flash", 0, 0, 0, 1_700_000_000);
+        assert!(extract_antigravity_gen_event(&blob).is_none());
+    }
+
+    #[test]
+    fn extract_antigravity_gen_event_missing_wrapper_returns_none() {
+        // No field-1 wrapper at all.
+        let mut top = Vec::new();
+        encode_varint_field(2, 999, &mut top);
+        assert!(extract_antigravity_gen_event(&top).is_none());
+    }
+
+    #[test]
+    fn extract_antigravity_gen_event_missing_model_falls_back_to_default() {
+        let mut usage = Vec::new();
+        encode_varint_field(2, 10, &mut usage);
+
+        let mut f1 = Vec::new();
+        encode_bytes_field(4, &usage, &mut f1);
+        // No field 19 (model) present.
+
+        let mut top = Vec::new();
+        encode_bytes_field(1, &f1, &mut top);
+
+        let event = extract_antigravity_gen_event(&top).expect("should parse");
+        assert_eq!(event.model, "gemini-3.6-flash");
+        assert_eq!(event.input_tokens, 10);
+    }
+
+    #[test]
+    fn extract_antigravity_gen_event_garbage_blob_returns_none() {
+        let garbage = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert!(extract_antigravity_gen_event(&garbage).is_none());
     }
 }
 
