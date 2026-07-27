@@ -60,7 +60,7 @@ impl SourceKind {
         match self {
             SourceKind::Claude => "Claude",
             SourceKind::Codex => "Codex",
-            SourceKind::Gemini => "Gemini",
+            SourceKind::Gemini => "Antigravity",
             SourceKind::OpenCode => "OpenCode",
             SourceKind::Grok => "Grok",
         }

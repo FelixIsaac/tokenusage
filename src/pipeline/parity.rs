@@ -109,7 +109,7 @@ fn normalize_tu_for_provider(provider: ProviderArg, raw: &TokenCounts) -> TokenC
                 cost_usd: raw.cost_usd,
             }
         }
-        ProviderArg::Claude | ProviderArg::Gemini | ProviderArg::Opencode | ProviderArg::Grok => {
+        ProviderArg::Claude | ProviderArg::Gemini | ProviderArg::Antigravity | ProviderArg::Opencode | ProviderArg::Grok => {
             // ccusage-family totals generally exclude reasoning as a separate additive bucket.
             TokenCounts {
                 input_tokens: raw.input_tokens,
@@ -165,7 +165,7 @@ fn provider_name(provider: ProviderArg) -> &'static str {
     match provider {
         ProviderArg::Claude => "claude",
         ProviderArg::Codex => "codex",
-        ProviderArg::Gemini => "gemini",
+        ProviderArg::Gemini | ProviderArg::Antigravity => "gemini",
         ProviderArg::Opencode => "opencode",
         ProviderArg::Grok => "grok",
     }
@@ -184,7 +184,7 @@ fn fetch_ccusage_totals(
     let package = match provider {
         ProviderArg::Claude => "ccusage@latest",
         ProviderArg::Codex => "@ccusage/codex@latest",
-        ProviderArg::Gemini => "@ccusage/gemini@latest",
+        ProviderArg::Gemini | ProviderArg::Antigravity => "@ccusage/gemini@latest",
         ProviderArg::Opencode => "@ccusage/opencode@latest",
         ProviderArg::Grok => {
             bail!(

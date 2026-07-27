@@ -67,10 +67,13 @@ pub enum CostSource {
 #[cfg_attr(feature = "cli", derive(ValueEnum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "cli", value(rename_all = "kebab-case"))]
 pub enum ProviderArg {
     Claude,
     Codex,
     Gemini,
+    #[cfg_attr(feature = "cli", value(name = "antigravity", alias = "agy"))]
+    Antigravity,
     Opencode,
     Grok,
 }
@@ -80,7 +83,7 @@ impl ProviderArg {
         match self {
             ProviderArg::Claude => SourceKind::Claude,
             ProviderArg::Codex => SourceKind::Codex,
-            ProviderArg::Gemini => SourceKind::Gemini,
+            ProviderArg::Gemini | ProviderArg::Antigravity => SourceKind::Gemini,
             ProviderArg::Opencode => SourceKind::OpenCode,
             ProviderArg::Grok => SourceKind::Grok,
         }
