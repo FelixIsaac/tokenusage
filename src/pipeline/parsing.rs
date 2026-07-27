@@ -452,7 +452,7 @@ fn provider_registry() -> [ProviderSpec; 5] {
         },
         ProviderSpec {
             kind: SourceKind::Gemini,
-            accepted_exts: &["jsonl"],
+            accepted_exts: &["jsonl", "db"],
             enabled: |common| !common.no_gemini,
             roots: gemini_source_roots,
         },
@@ -925,6 +925,18 @@ pub(super) fn parse_single_file(
             }
         } else {
             let _ = reader.seek(SeekFrom::Start(0));
+        }
+    }
+
+    if job.file.source == SourceKind::Gemini {
+        let ext = job
+            .file
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if ext.eq_ignore_ascii_case("db") {
+            return parse_antigravity_db_file(job, filter, timezone, pricing, stats);
         }
     }
 
@@ -1750,6 +1762,287 @@ fn filter_bounds_utc_millis(filter: DateFilter, tz: &TimeZoneMode) -> Option<(i6
     };
 
     Some((start_utc.timestamp_millis(), end_utc.timestamp_millis()))
+}
+
+fn decode_varint(data: &[u8], mut offset: usize) -> Option<(u64, usize)> {
+    let mut res: u64 = 0;
+    let mut shift = 0;
+    while offset < data.len() {
+        let b = data[offset];
+        res |= ((b & 0x7f) as u64) << shift;
+        offset += 1;
+        if (b & 0x80) == 0 {
+            return Some((res, offset));
+        }
+        shift += 7;
+        if shift >= 64 {
+            return None;
+        }
+    }
+    None
+}
+
+enum ProtoWireVal<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+    Fixed64,
+    Fixed32,
+}
+
+fn parse_proto_fields<'a>(data: &'a [u8]) -> Vec<(u32, ProtoWireVal<'a>)> {
+    let mut offset = 0;
+    let mut fields = Vec::new();
+    while offset < data.len() {
+        let Some((tag_byte, new_off)) = decode_varint(data, offset) else {
+            break;
+        };
+        offset = new_off;
+        let field_number = (tag_byte >> 3) as u32;
+        let wire_type = (tag_byte & 0x07) as u32;
+
+        match wire_type {
+            0 => {
+                let Some((val, new_off)) = decode_varint(data, offset) else {
+                    break;
+                };
+                offset = new_off;
+                fields.push((field_number, ProtoWireVal::Varint(val)));
+            }
+            2 => {
+                let Some((length, new_off)) = decode_varint(data, offset) else {
+                    break;
+                };
+                let len = length as usize;
+                if new_off + len > data.len() {
+                    break;
+                }
+                let val_bytes = &data[new_off..new_off + len];
+                offset = new_off + len;
+                fields.push((field_number, ProtoWireVal::Bytes(val_bytes)));
+            }
+            1 => {
+                if offset + 8 > data.len() {
+                    break;
+                }
+                offset += 8;
+                fields.push((field_number, ProtoWireVal::Fixed64));
+            }
+            5 => {
+                if offset + 4 > data.len() {
+                    break;
+                }
+                offset += 4;
+                fields.push((field_number, ProtoWireVal::Fixed32));
+            }
+            _ => break,
+        }
+    }
+    fields
+}
+
+struct ParsedAntigravityGen {
+    model: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    timestamp_secs: i64,
+}
+
+fn extract_antigravity_gen_event(blob: &[u8]) -> Option<ParsedAntigravityGen> {
+    let top = parse_proto_fields(blob);
+    let f1_bytes = top.iter().find_map(|(fn_num, val)| {
+        if *fn_num == 1 {
+            if let ProtoWireVal::Bytes(b) = val {
+                return Some(*b);
+            }
+        }
+        None
+    })?;
+
+    let f1 = parse_proto_fields(f1_bytes);
+
+    let mut model = "gemini-3.6-flash".to_string();
+    for (fn_num, val) in &f1 {
+        if *fn_num == 19 {
+            if let ProtoWireVal::Bytes(b) = val {
+                if let Ok(s) = std::str::from_utf8(b) {
+                    if !s.is_empty() {
+                        model = s.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut cache_read_tokens = 0u64;
+
+    for (fn_num, val) in &f1 {
+        if *fn_num == 4 {
+            if let ProtoWireVal::Bytes(b) = val {
+                let f4 = parse_proto_fields(b);
+                for (sub_fn, sub_val) in f4 {
+                    if let ProtoWireVal::Varint(v) = sub_val {
+                        match sub_fn {
+                            2 => input_tokens = v,
+                            3 => output_tokens = v,
+                            5 => cache_read_tokens = v,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut timestamp_secs = 0i64;
+    for (fn_num, val) in &f1 {
+        if *fn_num == 9 {
+            if let ProtoWireVal::Bytes(b) = val {
+                let f9 = parse_proto_fields(b);
+                for (sub_fn, sub_val) in f9 {
+                    if sub_fn == 4 {
+                        if let ProtoWireVal::Bytes(b4) = sub_val {
+                            let f9_4 = parse_proto_fields(b4);
+                            for (leaf_fn, leaf_val) in f9_4 {
+                                if leaf_fn == 1 {
+                                    if let ProtoWireVal::Varint(v) = leaf_val {
+                                        timestamp_secs = v as i64;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 {
+        return None;
+    }
+
+    Some(ParsedAntigravityGen {
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        timestamp_secs,
+    })
+}
+
+fn parse_antigravity_db_file(
+    job: FileParseJob,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Option<ParsedFileOutput> {
+    let path = &job.file.path;
+
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|_| {
+        stats.files_open_failed.fetch_add(1, Ordering::Relaxed);
+    })
+    .ok()?;
+
+    let mut stmt = conn.prepare("SELECT data FROM gen_metadata").ok()?;
+    let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)).ok()?;
+
+    let mut events = Vec::new();
+    let mut lines_total = 0usize;
+    let mut lines_parsed = 0usize;
+    let mut lines_missing_usage = 0usize;
+    let mut lines_unknown_pricing = 0usize;
+    let mut lines_filtered = 0usize;
+
+    for row_res in rows {
+        let Ok(blob) = row_res else { continue };
+        lines_total += 1;
+
+        let Some(gen_event) = extract_antigravity_gen_event(&blob) else {
+            lines_missing_usage += 1;
+            continue;
+        };
+
+        if gen_event.timestamp_secs <= 0 {
+            lines_missing_usage += 1;
+            continue;
+        }
+
+        let Some(timestamp) = DateTime::from_timestamp(gen_event.timestamp_secs, 0) else {
+            lines_missing_usage += 1;
+            continue;
+        };
+
+        if !filter.allows(local_date(timestamp, timezone)) {
+            lines_filtered += 1;
+            continue;
+        }
+
+        let usage = UsageAccumulator {
+            input_tokens: gen_event.input_tokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: gen_event.cache_read_tokens,
+            output_tokens: gen_event.output_tokens,
+            reasoning_output_tokens: 0,
+            cost_usd: 0.0,
+        };
+
+        let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&gen_event.model, usage) {
+            Some(v) => (v, false),
+            None => (0.0, true),
+        };
+        if used_unknown_pricing {
+            lines_unknown_pricing += 1;
+        }
+
+        let event = UsageEvent {
+            timestamp,
+            source: SourceKind::Gemini,
+            model: gen_event.model,
+            session: path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+            project: None,
+            file_path: path.to_string_lossy().to_string(),
+            usage: UsageAccumulator { cost_usd, ..usage },
+        };
+        events.push(event);
+
+        lines_parsed += 1;
+    }
+
+    stats.lines_total.fetch_add(lines_total, Ordering::Relaxed);
+    stats.lines_parsed.fetch_add(lines_parsed, Ordering::Relaxed);
+    stats.lines_missing_usage.fetch_add(lines_missing_usage, Ordering::Relaxed);
+    stats.lines_unknown_pricing.fetch_add(lines_unknown_pricing, Ordering::Relaxed);
+    stats.lines_filtered.fetch_add(lines_filtered, Ordering::Relaxed);
+
+    let cached_events = events.iter().map(cached_usage_event).collect();
+
+    Some(ParsedFileOutput {
+        events,
+        cache_entry: CachedFileEntry {
+            fingerprint: job.fingerprint,
+            stats: CachedFileStats {
+                lines_total,
+                lines_invalid_json: 0,
+                lines_missing_usage,
+                lines_unknown_pricing,
+            },
+            events: cached_events,
+            parsed_offset: job.fingerprint.size,
+            codex_last_model: None,
+            codex_last_totals: None,
+            claude_recent_keys: vec![],
+        },
+    })
 }
 
 fn parse_opencode_db_file(
