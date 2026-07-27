@@ -903,7 +903,7 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
         Some(
             "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
             | "heartbeat" | "doctor" | "parity" | "monthly" | "weekly" | "week" | "img" | "session"
-            | "blocks" | "live" | "top" | "statusline" | "gui" | "antigravity",
+            | "blocks" | "live" | "top" | "statusline" | "gui",
         ) => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
@@ -991,20 +991,7 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
         "codex" => "codex",
         "gemini" => "gemini",
         "opencode" => "opencode",
-        "antigravity" | "agy" => {
-            if let Some(next) = argv.get(2).map(|s| s.to_ascii_lowercase()) {
-                if matches!(
-                    next.as_str(),
-                    "daily" | "weekly" | "monthly" | "today" | "activity" | "blocks" | "session" | "live" | "top" | "gui" | "statusline" | "img" | "doctor"
-                ) || next.starts_with('-') {
-                    "gemini"
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            }
-        }
+        "antigravity" | "agy" => "antigravity",
         _ => return,
     };
 
