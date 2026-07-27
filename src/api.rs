@@ -49,15 +49,17 @@ use crate::types::{DailyReport, ParseStats, UsageEvent};
 ///
 /// This is the library-friendly equivalent of CLI arguments.
 /// All fields have sensible defaults; a `Config::default()` will discover
-/// usage logs from standard locations for Claude Code, Codex, Gemini CLI,
-/// and OpenCode.
+/// usage logs from standard locations for Claude Code, Codex, Gemini CLI /
+/// Antigravity, and OpenCode.
 ///
 /// # Default behaviour
 ///
 /// - Scans default provider locations:
 ///   - Claude: `~/.claude/projects/*/`
 ///   - Codex: `~/.codex/sessions/`
-///   - Gemini: `~/.gemini/tmp/`
+///   - Gemini CLI / Antigravity: `~/.gemini/tmp/` (legacy Gemini CLI transcripts),
+///     `~/.gemini/antigravity-cli/conversations/*.db` (Antigravity's real token/cost
+///     accounting), `~/.gemini/antigravity-cli/brain/` (transcript logs)
 ///   - OpenCode: `~/.local/share/opencode/` (platform-dependent alternatives included)
 /// - Uses the system local timezone for date grouping.
 /// - Fetches live model pricing from the OpenRouter API; falls back to

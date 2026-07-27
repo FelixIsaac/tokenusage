@@ -134,8 +134,8 @@ tool goes upstream — this fork extends it with the following (see
 - Menu **Balances** lists only providers whose API key is configured.
 
 **Platform**
-- `tu antigravity` on Windows fails with a clear, actionable message instead of a cryptic
-  `ps`/`lsof` error (a real Windows port is tracked separately).
+- `tu antigravity status` on Windows fails with a clear, actionable message instead of a
+  cryptic `ps`/`lsof` error (a real Windows port is tracked separately).
 
 ### Install this fork
 
@@ -193,7 +193,8 @@ tu codex daily
 tu claude daily
 tu gemini
 tu opencode
-tu antigravity
+tu antigravity              # daily usage/cost table
+tu antigravity status       # live plan tier + session/weekly quota %
 
 # Provider selection (merged commands)
 tu --only codex,gemini
@@ -227,7 +228,7 @@ tu heartbeat watch .
 tu heartbeat stats
 tu heartbeat ping src/main.rs --write
 
-# Live monitor (tabs: Codex / Claude / Gemini / OpenCode / Antigravity)
+# Live monitor (tabs: Codex / Claude / Antigravity / OpenCode / Antigravity Quota)
 tu live
 tu live codex
 tu live claude
@@ -253,11 +254,11 @@ tu img week
 
 - Claude Code: `~/.claude/projects` (override with `--claude-projects-dir`)
 - Codex CLI: `$CODEX_HOME/sessions` (fallback `~/.codex/sessions`, override with `--codex-sessions-dir`)
-- Gemini CLI: `~/.gemini/tmp` (override with `--gemini-data-dir`)
+- Gemini CLI / Antigravity: `~/.gemini/tmp` (legacy Gemini CLI jsonl transcripts), plus `~/.gemini/antigravity-cli/conversations/*.db` (Antigravity's SQLite conversation databases, which carry the real token/cost accounting) and `~/.gemini/antigravity-cli/brain` (transcript logs) — override any of these with `--gemini-data-dir`
 - OpenCode: `$OPENCODE_DATA_DIR` or `$XDG_DATA_HOME/opencode` (fallback `~/.local/share/opencode`, override with `--opencode-data-dir`)
 - Grok Build: `~/.grok/logs` (override with `--grok-log-dir`)
 
-`--only` / `--sources` currently target log-based providers (`claude`, `codex`, `gemini`, `opencode`, `grok`). Antigravity remains a separate quota probe. Note: `tu grok` is the pre-existing xAI balance-check subcommand (needs `XAI_API_KEY`) — Grok's log-based usage data is accessed via `--sources grok`/`--only grok`, not a `tu grok daily`-style shortcut like the other four sources have, since the bare word `grok` is already claimed by that balance command.
+`--only` / `--sources` target log-based providers (`claude`, `codex`, `gemini`, `opencode`, `grok`) — `gemini`/`antigravity`/`agy` are equivalent aliases for the same source. Note: `tu grok` is the pre-existing xAI balance-check subcommand (needs `XAI_API_KEY`) — Grok's log-based usage data is accessed via `--sources grok`/`--only grok`, not a `tu grok daily`-style shortcut like the other four sources have, since the bare word `grok` is already claimed by that balance command.
 
 ## Benchmark Details
 
@@ -292,10 +293,10 @@ For a detailed feature comparison, see [tokenusage vs ccusage](docs/compare/toke
 From local log directories and IDE probes:
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
-- Gemini: `~/.gemini/tmp`
+- Gemini CLI: `~/.gemini/tmp`
+- Antigravity: `~/.gemini/antigravity-cli/conversations/*.db` (SQLite conversation databases carrying real token/cost accounting) and `~/.gemini/antigravity-cli/brain` (transcript logs). `tu antigravity status` additionally probes the running IDE's language server for your live plan tier and session/weekly quota %.
 - OpenCode: `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`
 - Grok Build: `~/.grok/logs`
-- Antigravity: probed from running IDE language server (no log files needed)
 
 You can override with `--claude-projects-dir`, `--codex-sessions-dir`, `--gemini-data-dir`, `--opencode-data-dir`, and `--grok-log-dir`.
 

@@ -1,7 +1,7 @@
 //! # tokenusage
 //!
 //! Fast, zero-config token usage tracker for **Codex**, **Claude Code**,
-//! **Gemini CLI**, **OpenCode**, and **Antigravity**. Parses local log files produced by AI coding assistants
+//! **Gemini CLI / Antigravity**, and **OpenCode**. Parses local log files produced by AI coding assistants
 //! and computes per-model, per-day, and per-session token counts with
 //! estimated USD costs.
 //!

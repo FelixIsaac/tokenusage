@@ -134,7 +134,8 @@ tu claude daily
 tu parity --provider claude --period daily --since 20260401 --until 20260401 --json
 tu gemini
 tu opencode
-tu antigravity
+tu antigravity              # 每日用量/费用报表
+tu antigravity status       # 实时套餐等级 + 会话/周配额百分比
 
 # 在合并报表中按 provider 过滤
 tu --only codex,gemini
@@ -167,7 +168,7 @@ tu heartbeat watch .
 tu heartbeat stats
 tu heartbeat ping src/main.rs --write
 
-# 实时监控（标签页: Codex / Claude / Gemini / OpenCode / Antigravity）
+# 实时监控（标签页: Codex / Claude / Antigravity / OpenCode / Antigravity Quota）
 tu live
 tu live codex
 tu live claude
@@ -221,13 +222,13 @@ tu img week
 从本地日志目录和 IDE 探测：
 - Claude: `~/.config/claude/projects`, `~/.claude/projects`
 - Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
-- Gemini: `~/.gemini/tmp`
+- Gemini CLI: `~/.gemini/tmp`
+- Antigravity: `~/.gemini/antigravity-cli/conversations/*.db`（承载真实 token/费用数据的 SQLite 会话数据库）以及 `~/.gemini/antigravity-cli/brain`（对话记录）。`tu antigravity status` 还会额外探测运行中 IDE 的语言服务器，获取实时套餐等级与会话/周配额百分比。
 - OpenCode: `$OPENCODE_DATA_DIR` 或 `$XDG_DATA_HOME/opencode`（回退 `~/.local/share/opencode`）
-- Antigravity: 从运行中的 IDE 语言服务器探测（无需日志文件）
 
 可通过 `--claude-projects-dir`、`--codex-sessions-dir`、`--gemini-data-dir`、`--opencode-data-dir` 覆盖。
 
-`--only` / `--sources` 当前只作用于日志型 provider（`claude`、`codex`、`gemini`、`opencode`）。Antigravity 仍是独立的配额探测通道。
+`--only` / `--sources` 作用于日志型 provider（`claude`、`codex`、`gemini`、`opencode`、`grok`）——`gemini`/`antigravity`/`agy` 是同一数据源的等价别名。
 
 ### 如何估算费用?
 

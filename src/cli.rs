@@ -300,7 +300,7 @@ impl CommonArgs {
                   \x20 Live          live top gui\n\
                   \x20 Integration   statusline img heartbeat\n\
                   \x20 Diagnostics   doctor parity\n\
-                  \x20 Balances      antigravity deepseek openrouter grok kimi anthropic-api\n\
+                  \x20 Balances      antigravity status, deepseek, openrouter, grok, kimi, anthropic-api\n\
                   \n\
                   Examples:\n\
                   tu\n\
@@ -308,14 +308,17 @@ impl CommonArgs {
                   tu codex daily\n\
                   tu claude weekly --since 2026-04-01\n\
                   tu opencode doctor --json\n\
+                  tu antigravity monthly\n\
+                  tu antigravity status\n\
                   tu --only codex,gemini\n\
                   \n\
                   Default data locations (override with flags):\n\
-                  - Claude:   ~/.claude/projects        (--claude-projects-dir)\n\
-                  - Codex:    $CODEX_HOME/sessions      (--codex-sessions-dir)\n\
-                  - Gemini:   ~/.gemini/tmp             (--gemini-data-dir)\n\
-                  - OpenCode: $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
-                  - Grok:     ~/.grok/logs              (--grok-log-dir)\n\
+                  - Claude:      ~/.claude/projects        (--claude-projects-dir)\n\
+                  - Codex:       $CODEX_HOME/sessions      (--codex-sessions-dir)\n\
+                  - Gemini:      ~/.gemini/tmp             (--gemini-data-dir)\n\
+                  - Antigravity: ~/.gemini/antigravity-cli/conversations, .../brain (--gemini-data-dir)\n\
+                  - OpenCode:    $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
+                  - Grok:        ~/.grok/logs              (--grok-log-dir)\n\
                   \n\
                   GitHub:  https://github.com/FelixIsaac/tokenusage\n\
                   Issues:  https://github.com/FelixIsaac/tokenusage/issues"
@@ -995,6 +998,20 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
         _ => return,
     };
 
+    // `tu antigravity status` / `tu agy status` reach the live plan+quota
+    // probe (`Commands::Antigravity`) instead of the usage-table default
+    // below: rewrite to `tu antigravity <remaining args>` so clap parses
+    // it as that subcommand directly.
+    if provider == "antigravity"
+        && argv
+            .get(2)
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("status"))
+    {
+        argv.remove(2);
+        argv[1] = "antigravity".to_string();
+        return;
+    }
+
     let report = argv
         .get(2)
         .map(|s| s.to_ascii_lowercase())
@@ -1185,5 +1202,44 @@ mod tests {
             assert_eq!(out[2], "--only");
             assert_eq!(out[3], "codex");
         }
+    }
+
+    #[test]
+    fn antigravity_bare_defaults_to_daily_usage_table() {
+        for provider in ["antigravity", "agy"] {
+            let argv = vec!["tu".to_string(), provider.to_string()];
+            let out = normalize_cli_args(argv);
+            assert_eq!(out[1], "daily");
+            assert_eq!(out[2], "--only");
+            assert_eq!(out[3], "antigravity");
+        }
+    }
+
+    #[test]
+    fn antigravity_status_reaches_the_quota_probe_subcommand() {
+        for provider in ["antigravity", "agy"] {
+            let argv = vec!["tu".to_string(), provider.to_string(), "status".to_string()];
+            let out = normalize_cli_args(argv);
+            assert_eq!(out, vec!["tu".to_string(), "antigravity".to_string()]);
+        }
+    }
+
+    #[test]
+    fn antigravity_status_is_case_insensitive_and_keeps_trailing_flags() {
+        let argv = vec![
+            "tu".to_string(),
+            "agy".to_string(),
+            "STATUS".to_string(),
+            "--json".to_string(),
+        ];
+        let out = normalize_cli_args(argv);
+        assert_eq!(
+            out,
+            vec![
+                "tu".to_string(),
+                "antigravity".to_string(),
+                "--json".to_string()
+            ]
+        );
     }
 }

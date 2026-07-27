@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Google Antigravity** is now a first-class provider, not just a quota
+  probe: `SourceKind::Gemini`'s display name changed to "Antigravity", and
+  its real token/cost accounting is now parsed from Antigravity's own
+  local SQLite conversation databases (`~/.gemini/antigravity-cli/conversations/*.db`,
+  protobuf-encoded `gen_metadata` blobs — no published schema, so the
+  field layout was reverse-engineered) alongside the existing
+  `~/.gemini/tmp` and `~/.gemini/antigravity-cli/brain` transcript logs.
+- `tu antigravity` / `tu agy` provider-first subcommands (`tu antigravity monthly`,
+  `tu agy daily`, etc.) and `--only antigravity` / `--only agy` — matching
+  the existing `tu claude` / `tu codex` / `tu opencode` UX.
+- `tu antigravity status` restores access to the live plan-tier +
+  session/weekly quota-% probe (previously the only thing `tu antigravity`
+  did; now that name defaults to the usage table like the other
+  providers, `status` reaches the same probe explicitly).
+- Pricing for Gemini 2.5/3/3.1/3.6 Flash and Pro model variants, plus an
+  alias fallback (`PricingTable::find_rate`) that strips Antigravity's
+  internal reasoning-effort suffixes (`-low`/`-medium`/`-high`/`-xhigh`/`-none`)
+  and maps known model bases to their public "-preview" pricing key — these
+  were previously priced at $0.00 with no pricing-debug warning surfaced.
+
+### Fixed
+- `tu live`'s "Gemini" tab (renders the same Antigravity usage data as
+  everywhere else) now reads "Antigravity"; the separate live-quota tab
+  is now "Antigravity Quota" so the two don't collide.
+
 ## [1.11.1] - 2026-07-18
 
 ### Fixed
