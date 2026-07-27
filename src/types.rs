@@ -519,9 +519,22 @@ impl PricingTable {
         if let Some(rate) = self.exact.get(&model_key) {
             return Some(rate);
         }
-        self.prefixes
+        if let Some(rate) = self
+            .prefixes
             .iter()
             .find_map(|(prefix, rate)| model_key.starts_with(prefix).then_some(rate))
+        {
+            return Some(rate);
+        }
+        // Antigravity's internal model ids carry a reasoning-effort suffix
+        // (-low/-medium/-high/-xhigh/-none) that Gemini's flat per-token
+        // pricing doesn't vary by, but public catalogs (OpenRouter,
+        // models.dev) only carry the base "-preview" public name.
+        let aliased = antigravity_pricing_alias(&model_key);
+        if aliased != model_key {
+            return self.exact.get(&aliased);
+        }
+        None
     }
 
     /// Estimate the USD cost of a set of token counts for a given model.
@@ -614,6 +627,21 @@ fn component_cost(
 
 fn canonical_model_key(model: &str) -> String {
     model.trim().to_ascii_lowercase()
+}
+
+fn antigravity_pricing_alias(model_key: &str) -> String {
+    let base = ["-xhigh", "-high", "-medium", "-low", "-none"]
+        .iter()
+        .find_map(|suffix| model_key.strip_suffix(suffix))
+        .unwrap_or(model_key);
+
+    match base {
+        "gemini-3.1-pro" => "gemini-3.1-pro-preview",
+        "gemini-3-pro" => "gemini-3-pro-preview",
+        "gemini-3-flash" => "gemini-3-flash-preview",
+        other => other,
+    }
+    .to_string()
 }
 
 #[derive(Debug)]
