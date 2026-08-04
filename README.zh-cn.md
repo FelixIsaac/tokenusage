@@ -116,48 +116,55 @@ tu                          # 0.08 秒出日报
 
 ## 安装
 
-### 独立二进制脚本（零依赖 — macOS, Linux, Windows）
+根据你的开发环境选择最方便的安装方式：
 
-无需安装 Node.js, npm, Python 或 Rust 工具链。
+### 1. 🚀 独立预编译二进制（最简 — 零依赖）
 
-**macOS / Linux (Shell):**
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
-```
+无需 Node.js, npm, Python 或 Rust 工具链。自动下载并安装适合当前系统的预编译二进制文件。
 
-**Windows (PowerShell):**
-```powershell
-iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
-```
+* **macOS / Linux:**
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+  ```
+* **Windows (PowerShell):**
+  ```powershell
+  iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
+  ```
 
-### Homebrew (macOS & Linux)
+### 2. 🍺 Homebrew (macOS & Linux)
 
 ```bash
 brew install FelixIsaac/tokenusage/tokenusage
 ```
 
-### npm
+### 3. 📦 Node.js / npm
 
 ```bash
 npm install -g tokenusage
 ```
 
-### cargo (crates.io)
+### 4. 🦀 Rust (Cargo / cargo-binstall)
 
 ```bash
+# 预编译二进制快速安装
+cargo binstall tokenusage --no-confirm
+
+# 或从 Cargo 源码编译安装
 cargo install tokenusage --bin tu
 ```
 
-### pip (PyPI)
+### 5. 🐍 Python (pip)
 
 ```bash
 pip install tokenusage
 ```
 
-### cargo-binstall（预编译二进制）
+### 6. 🛠️ 源码编译
 
 ```bash
-cargo binstall tokenusage --no-confirm
+git clone https://github.com/FelixIsaac/tokenusage.git
+cd tokenusage
+cargo install --path . --bin tu
 ```
 
 ## 快速开始

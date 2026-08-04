@@ -154,52 +154,55 @@ tool goes upstream — this fork extends it with the following (see
 
 ## Install
 
-### Standalone Binary (Zero dependencies — macOS, Linux, Windows)
+Choose the installation method for your environment:
 
-No Node.js, npm, Python, or Rust toolchain required.
+### 1. 🚀 One-Line Standalone Installer (Simplest — Zero Dependencies)
 
-**macOS / Linux (Shell):**
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
-```
+No Node.js, npm, Python, or Rust toolchain required. Downloads the pre-compiled binary for your system directly.
 
-**Windows (PowerShell):**
-```powershell
-iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
-```
+* **macOS / Linux:**
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+  ```
+* **Windows (PowerShell):**
+  ```powershell
+  iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
+  ```
 
-### Homebrew (macOS & Linux)
+### 2. 🍺 Homebrew (macOS & Linux)
 
 ```bash
 brew install FelixIsaac/tokenusage/tokenusage
 ```
 
-### npm
+### 3. 📦 Node.js / npm
 
 ```bash
 npm install -g tokenusage
 ```
 
-```bash
-npm install -g tokenusage
-```
-
-### cargo (crates.io)
+### 4. 🦀 Rust (Cargo / cargo-binstall)
 
 ```bash
+# Pre-compiled binary install (Fast)
+cargo binstall tokenusage --no-confirm
+
+# Or build from source via Cargo
 cargo install tokenusage --bin tu
 ```
 
-### pip (PyPI)
+### 5. 🐍 Python (pip)
 
 ```bash
 pip install tokenusage
 ```
 
-### cargo-binstall (prebuilt binary)
+### 6. 🛠️ Build from Source
 
 ```bash
-cargo binstall tokenusage --no-confirm
+git clone https://github.com/FelixIsaac/tokenusage.git
+cd tokenusage
+cargo install --path . --bin tu
 ```
 
 ## Quick Start
