@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/FelixIsaac/tokenusage/actions/workflows/release.yml"><img src="https://github.com/FelixIsaac/tokenusage/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
   <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
   <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
   <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
@@ -22,58 +23,42 @@
 
 ---
 
-### 一行安装
+## ⚡ 概述
 
-```bash
-# 独立预编译二进制（无需 Node / npm / Python / Rust）
-curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+**tokenusage** (`tu`) 是一款极速、100% 本地的 AI 编码助手用量与 Token 成本监控仪表盘（支持 CLI、TUI 与 GUI）。
 
-# 或 macOS/Linux Homebrew:
-brew install FelixIsaac/tokenusage/tokenusage
-```
-
-### 运行
-
-```bash
-tu                          # 0.08 秒出日报
-```
+解析本地日志仅需 **0.08 秒**（比同类工具快 214 倍），`tu` 将 **Claude Code, OpenAI Codex, Antigravity/AGY, Gemini CLI, OpenCode, Grok, DeepSeek, OpenRouter, Kimi 与 Anthropic API** 的用量数据统一收录到一个本地控制面板中。
 
 ---
 
-<p align="center">
-  解析 Claude 日志比 ccusage <strong>快 214 倍</strong> · 解析 Codex 日志<strong>快 138 倍</strong>（热缓存） · <a href="#性能基准">查看基准测试</a>
-</p>
-
----
-
-## 截图
+## 📸 界面截图
 
 <table align="center" width="100%">
   <tr>
     <td valign="top" width="50%">
-      <code>tu</code> — 日报<br/>
+      <code>tu</code> — 每日开销报表<br/>
       <p align="center">
-        <a href="docs/images/cli-demo-padded.png"><img src="docs/images/thumbs/cli-demo-padded.png" alt="tu cli" height="220" loading="lazy" /></a>
+        <a href="docs/images/cli-demo-padded.png"><img src="docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu gui</code> — 桌面仪表盘<br/>
       <p align="center">
-        <a href="docs/images/gui-demo.png"><img src="docs/images/thumbs/gui-demo.png" alt="tu gui" height="220" loading="lazy" /></a>
+        <a href="docs/images/gui-demo.png"><img src="docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
     </td>
   </tr>
   <tr>
     <td valign="top" width="50%">
-      <code>tu img day</code> — 分享卡片<br/>
+      <code>tu img day</code> — 日报分享卡片<br/>
       <p align="center">
-        <a href="docs/images/share-demo.png"><img src="docs/images/thumbs/share-demo.png" alt="tu img daily" height="260" loading="lazy" /></a>
+        <a href="docs/images/share-demo.png"><img src="docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
-      <code>tu img week</code> — 周报卡片<br/>
+      <code>tu img week</code> — 周报分享卡片<br/>
       <p align="center">
-        <a href="docs/images/share-week-demo.png"><img src="docs/images/thumbs/share-week-demo.png" alt="tu img weekly" height="260" loading="lazy" /></a>
+        <a href="docs/images/share-week-demo.png"><img src="docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -81,25 +66,29 @@ tu                          # 0.08 秒出日报
     <td valign="top" colspan="2">
       <code>tu live</code> — 实时 TUI 监控<br/>
       <p align="center">
-        <a href="docs/images/live-demo.png"><img src="docs/images/thumbs/live-demo.png" alt="tu live" width="100%" loading="lazy" /></a>
+        <a href="docs/images/live-demo.png"><img src="docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
     </td>
   </tr>
 </table>
 
-## 为什么选 tokenusage
+---
 
-| 痛点 | tokenusage 方案 |
-|---|---|
-| 重构到一半被限速，毫无预警 | `tu live` 实时显示用量 |
-| 不知道 AI 编码每天花多少钱 | `tu` 0.08 秒给出每日开销明细 |
-| Codex / Claude / Gemini / OpenCode 日志分散在不同目录 | 一个统一仪表盘，合并所有数据源 |
-| 现有工具在大日志上很慢 | 比 ccusage 快 214 倍（Rust + 并行扫描 + 缓存） |
-| 不想把日志上传到云端 | 100% 本地解析，数据不离开你的电脑 |
-| 不只想看 token，还想看编码时间与效率 | 默认 `tu` 保持经典 token 报表；`--with-activity` 按需增加 coding time 与 tokens/hour |
-| 想分享使用统计 | `tu img` 生成可分享的图片卡 |
+## 🎯 为什么选择 tokenusage
 
-## 支持的 AI 助手与功能矩阵
+| 痛点 | tokenusage (`tu`) 解决方案 |
+| :--- | :--- |
+| **重构到一半被限速，毫无预警** | `tu live` 实时显示用量与剩余配额百分比 |
+| **不知道 AI 编码每天花多少钱** | `tu` 0.08 秒给出每日费用明细 |
+| **日志分散在多个 AI 编码工具中** | 统一仪表盘，合并 10 大 AI 服务商数据源 |
+| **现有日志工具在日志量大时卡顿** | 比 ccusage 快 214 倍（Rust + Rayon 并行扫描 + SQLite WAL） |
+| **担心隐私日志上传到云端** | 100% 本地解析，数据绝不离开你的电脑 |
+| **不仅想看 Token，还想看编码时间** | `--with-activity` 增加真实编码时长与 Tokens/Hour 上下文 |
+| **想向团队或社交媒体分享战报** | `tu img` 生成高清可分享卡片 |
+
+---
+
+## 🤖 支持的 AI 助手与功能矩阵
 
 | 服务商 / 助手 | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
 | :--- | :--- | :---: | :---: | :---: | :--- |
@@ -114,13 +103,15 @@ tu                          # 0.08 秒出日报
 | **Kimi (Moonshot)** | API 余额 | — | — | ✅ (`tu kimi`) | `tu kimi` |
 | **Anthropic API** | API 用量 | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
 
-## 安装
+---
+
+## 🚀 安装指南
 
 根据你的开发环境选择最方便的安装方式：
 
-### 1. 🚀 独立预编译二进制（最简 — 零依赖）
+### 1. 独立预编译二进制（最简 — 零依赖）
 
-无需 Node.js, npm, Python 或 Rust 工具链。自动下载并安装适合当前系统的预编译二进制文件。
+无需 Node.js, npm, Python 或 Rust 工具链。自动下载并安装预编译二进制文件。
 
 * **macOS / Linux:**
   ```bash
@@ -167,189 +158,76 @@ cd tokenusage
 cargo install --path . --bin tu
 ```
 
-## 快速开始
+---
+
+## 💡 快速开始与常用命令
 
 ```bash
-# 日报（默认）
-tu                          # 经典合并 token 报表
-tu --tui                    # 同一份报表的终端 UI
+# 每日费用报表（默认）
+tu
 
-# 指定数据源
+# 交互式 TUI 界面
+tu --tui
+
+# 指定 AI 助手报表
 tu codex daily
-tu claude daily
-tu parity --provider claude --period daily --since 20260401 --until 20260401 --json
-tu gemini
-tu opencode
-tu antigravity              # 每日用量/费用报表
-tu antigravity status       # 实时套餐等级 + 会话/周配额百分比
+tu claude weekly
+tu antigravity
+tu antigravity status      # 实时套餐等级 + 会话/周配额百分比
 
-# 在合并报表中按 provider 过滤
+# 过滤特定数据源
 tu --only codex,gemini
 tu weekly --sources claude,opencode
 
-# 数据源诊断
-tu doctor
-tu doctor --only opencode --json
+# 自动补全脚本配置
+tu completions zsh > ~/.zsh/completion/_tu
+tu completions bash > ~/.bash_completion.d/tu
 
-# 日期过滤
-tu --since 2026-02-01 --until 2026-02-28
+# 低配额告警阈值设置
+tu antigravity status --warn-threshold 15
 
-# 周报 / 月报
-tu weekly --start-of-week monday
-tu monthly
-
-# 基于本地 AI 使用记录推断的时间视图
-tu today
-tu activity
-tu activity --days 14
-tu activity --project tokenusage
-
-# 给合并后的 token 报表增加 activity 列（Coding / Tok/hr）
-tu --with-activity
-tu --with-activity --tui
-tu live --with-activity
-
-# 原生本地 heartbeat 采集层
-tu heartbeat watch .
-tu heartbeat stats
-tu heartbeat ping src/main.rs --write
-
-# 实时监控（标签页: Codex / Claude / Antigravity / OpenCode / Antigravity Quota）
+# 实时进程监控（Token 界的 htop）
 tu live
-tu live codex
-tu live claude
-tu live gemini
-tu live opencode
-tu live antigravity
-
-# htop 风格的会话查看器
 tu top
-tu top --active-hours 12    # 显示最近 12 小时的活跃会话
 
-# GUI 仪表盘
+# 桌面 GUI 仪表盘
 tu gui
 
-# 生成分享图片
-tu img
+# 生成分享卡片
 tu img day
 tu img week
 ```
 
-## 性能基准
+---
 
-**测试环境:**
+## ⚡ 性能基准测试
 
-- 机器: Apple M3 Max, macOS 15.6.1
-- `tu` 版本: `1.2.6` · `ccusage` 版本: `18.0.8`
-- 默认模式（无日期过滤，在线定价，网络启用）
+**测试环境:** Apple M3 Max, macOS 15.6.1 · `tu` v1.11.2 对比 `ccusage` v18.0.8
 
-**Claude** — 1,521 个 JSONL 文件, 2.2 GB
+### Codex — 91 个 JSONL 文件, 1.7 GB (`~/.codex/sessions`)
 
-| | `tu claude daily` | `bunx ccusage` | 加速比 |
-|---|---:|---:|---:|
-| 冷启动（重建缓存） | **0.73s** | 17.15s | **23.5x** |
-| 热缓存（5 次最佳 / 3 次均值） | **0.08s** | 17.15s | **214x** |
+| 模式 | `tu codex daily` | `bunx @ccusage/codex` | 加速倍数 |
+| :--- | :---: | :---: | :---: |
+| **冷启动 (重建缓存)** | **0.92s** | 20.76s | **22.6x** |
+| **热启动 (5 次最佳)** | **0.15s** | 20.76s | **138x** |
 
-**Codex** — 91 个 JSONL 文件, 1.7 GB
+### Claude — 1,521 个 JSONL 文件, 2.2 GB (`~/.claude/projects`)
 
-| | `tu codex daily` | `bunx @ccusage/codex` | 加速比 |
-|---|---:|---:|---:|
-| 冷启动（重建缓存） | **0.92s** | 20.76s | **22.6x** |
-| 热缓存（5 次最佳 / 3 次均值） | **0.15s** | 20.76s | **138x** |
+| 模式 | `tu claude daily` | `bunx ccusage` | 加速倍数 |
+| :--- | :---: | :---: | :---: |
+| **冷启动 (重建缓存)** | **0.73s** | 17.15s | **23.5x** |
+| **热启动 (5 次最佳)** | **0.08s** | 17.15s | **214x** |
 
-> 结果因硬件、文件系统缓存状态和日志量而异。
+---
 
-详细对比请看 [tokenusage vs ccusage](docs/compare/tokenusage-vs-ccusage.md)。
+## 🙏 致谢与贡献者声明
 
-## 常见问题
+**tokenusage** 最初由 **[@hanbu97](https://github.com/hanbu97)** (`hanbu97/tokenusage`) 创建并构思架构。
 
-### 数据从哪来?
+本项目的所有核心最初灵感与初始解析框架均归功于原作者。本仓库 (**[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)**) 作为独立项目持续进行维护、性能优化与功能扩展，引入了全方位的多 Agent 支持、跨平台独立安装包与实时配额遥测功能。
 
-从本地日志目录和 IDE 探测：
-- Claude: `~/.config/claude/projects`, `~/.claude/projects`
-- Codex: `~/.codex/sessions`, `~/.config/codex/sessions`
-- Gemini CLI: `~/.gemini/tmp`
-- Antigravity: `~/.gemini/antigravity-cli/conversations/*.db`（承载真实 token/费用数据的 SQLite 会话数据库）以及 `~/.gemini/antigravity-cli/brain`（对话记录）。`tu antigravity status` 还会额外探测运行中 IDE 的语言服务器，获取实时套餐等级与会话/周配额百分比。
-- OpenCode: `$OPENCODE_DATA_DIR` 或 `$XDG_DATA_HOME/opencode`（回退 `~/.local/share/opencode`）
+---
 
-可通过 `--claude-projects-dir`、`--codex-sessions-dir`、`--gemini-data-dir`、`--opencode-data-dir` 覆盖。
+## 📄 开源协议
 
-`--only` / `--sources` 作用于日志型 provider（`claude`、`codex`、`gemini`、`opencode`、`grok`）——`gemini`/`antigravity`/`agy` 是同一数据源的等价别名。
-
-### 如何估算费用?
-
-`tu` 优先使用 OpenRouter 在线定价（缓存 6 小时），网络不可用时回退到内置离线费率。
-
-### `--with-activity` 是怎么工作的?
-
-`tu` 会直接从本地机器推断编码活跃时间。默认情况下它会把相近的 AI usage 事件聚合成活跃窗口；如果你启用了原生 heartbeat 采集层（`tu heartbeat watch ...`），那么在 heartbeat 覆盖足够的日期上会优先使用 heartbeat，在其他日期回退到 token 事件推断。
-
-基于这套本地 activity 信号，`tu` 会得到：
-
-- coding time
-- tokens per coding hour
-- cost per coding hour
-- project / language / source breakdowns
-
-专门的时间视图命令 `tu today` / `tu activity` 会自动启用这一能力。`--with-activity` 会把同一套本地 activity 上下文合并进日/周/月报表和 `tu live`。
-
-默认情况下，`tu` 会保持原来的合并 token 报表列布局。只有在显式启用 `--with-activity`，或使用专门的时间视图时，才会显示额外的 `Coding` / `Tok/hr` 列。
-
-### 数据隐私安全吗?
-
-日志解析完全在本地进行。`tu` 仅请求定价元数据，使用 `--offline` 可完全离线。
-
-## 配置文件
-
-配置搜索顺序：
-1. `./.tu/tu.json`
-2. `~/.config/tu/tu.json`
-3. `~/.config/tokenusage/tokenusage.json`
-
-指定配置文件：
-
-```bash
-tu --config /path/to/tu.json
-```
-
-示例：
-
-```json
-{
-  "defaults": {
-    "timezone": "Asia/Shanghai",
-    "workers": 16,
-    "compact": false
-  },
-  "commands": {
-    "daily": {
-      "instances": true
-    },
-    "live": {
-      "sessionLength": 5,
-      "refreshInterval": 1
-    },
-    "img": {
-      "period": "daily",
-      "bars": 24,
-      "brand": "tokenusage",
-      "brandUrl": "https://github.com/hanbu97/tokenusage"
-    },
-    "weekly": {
-      "startOfWeek": "monday"
-    }
-  }
-}
-```
-
-## 开发
-
-```bash
-cargo fmt
-cargo clippy --all-targets --all-features
-cargo check
-```
-
-## 许可证
-
-MIT. 见 [LICENSE](./LICENSE)。
+基于 MIT 协议开源。详情参见 [`LICENSE`](./LICENSE)。
