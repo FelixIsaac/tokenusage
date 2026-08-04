@@ -26,7 +26,11 @@
 ### Install in one line
 
 ```bash
-npm i -g tokenusage        # or: cargo install tokenusage --bin tu
+# macOS / Linux (Zero dependencies):
+curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+
+# Or Homebrew:
+brew install FelixIsaac/tokenusage/tokenusage
 ```
 
 ### Run it
