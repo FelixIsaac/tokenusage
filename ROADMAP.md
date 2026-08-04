@@ -15,7 +15,7 @@ This document outlines the strategic roadmap for **tokenusage** as a real-time d
 ## 🗺️ Upcoming Milestones
 
 ### Phase 1: Rebranding & Scoped Registries (Q3 2026)
-- [ ] **GitHub Fork Detachment:** Submit request to GitHub Support to detach `FelixIsaac/tokenusage` into an independent root repository network.
+- [x] **GitHub Fork Detachment:** Detached `FelixIsaac/tokenusage` into an independent root repository network.
 - [ ] **Rebranding Evaluation:** Transition brand towards `codetop` or `aipulse` (or publish as `@felixisaac/tokenusage` on NPM and `tokenusage-ext` on Crates.io) to avoid collisions with inactive upstream domains.
 - [ ] **Binary Aliases:** Maintain `tu` binary compatibility alongside any new brand command.
 

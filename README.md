@@ -115,12 +115,9 @@ tu                          # daily cost report in 0.08s
 | **Kimi (Moonshot)** | API Balance | — | — | ✅ (`tu kimi`) | `tu kimi` |
 | **Anthropic API** | API Usage | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
 
-## This fork
+## Features & Project Extensions
 
-This is **[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)**, a fork of
-[hanbu97/tokenusage](https://github.com/hanbu97/tokenusage). All credit for the original
-tool goes upstream — this fork extends it with the following (see
-[CHANGELOG.md](CHANGELOG.md) for detail):
+**[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)** was originally created by @hanbu97 and is actively maintained and expanded as an independent standalone project. Key extensions include (see [CHANGELOG.md](CHANGELOG.md) for detail):
 
 **Performance & correctness**
 - **SQLite parse cache** (`parse-cache-v3.db`) replacing the rewrite-everything JSON
