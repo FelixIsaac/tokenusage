@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.2] - 2026-08-04
+
+### Added
+- **Shell Auto-Completions:** `tu completions <shell>` subcommands for `bash`, `zsh`, `fish`, `powershell`, and `elvish` via `clap_complete`.
+- **Low-Quota Warning Thresholds:** Added `--warn-threshold <PCT>` to `tu antigravity` and status probes to print warnings when remaining model quota drops below the specified threshold.
+- **Native Windows Antigravity Support:** Cross-platform Windows process and port detection using PowerShell `Get-CimInstance Win32_Process` and `netstat -ano` listening port discovery.
+- **Grok OAuth Proxy Token Fallback:** Auto-reads Grok CLI OAuth proxy tokens from `~/.grok/auth.json` with token auto-refresh when `XAI_API_KEY` is not set.
+- **Standalone Binary Installers:** Pre-compiled cross-platform shell (`tokenusage-installer.sh`) and PowerShell (`tokenusage-installer.ps1`) installer scripts hosted directly on GitHub Releases.
+
 ## [Unreleased]
 
 ### Added

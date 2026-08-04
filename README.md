@@ -100,6 +100,21 @@ tu                          # daily cost report in 0.08s
 | Want coding-time context, not just raw tokens | `tu` keeps the classic token table by default; `--with-activity` opt-in adds coding time and tokens/hour |
 | Want to share usage stats | `tu img` generates shareable image cards |
 
+## Supported Providers & Feature Matrix
+
+| Provider | Data Source | Local Parsing | Real-time TUI (`tu live`/`top`) | Quota / Balance Probe | Command Shortcut |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Claude Code** | Log / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
+| **OpenAI Codex** | Log / JSON | ✅ | ✅ | — | `tu codex` |
+| **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
+| **Gemini CLI** | Log / JSON | ✅ | ✅ | — | `tu gemini` |
+| **OpenCode** | Log / JSON | ✅ | ✅ | — | `tu opencode` |
+| **Grok (xAI)** | Log / OAuth Proxy | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
+| **DeepSeek API** | API Balance | — | — | ✅ (`tu deepseek`) | `tu deepseek` |
+| **OpenRouter API** | API Balance | — | — | ✅ (`tu openrouter`) | `tu openrouter` |
+| **Kimi (Moonshot)** | API Balance | — | — | ✅ (`tu kimi`) | `tu kimi` |
+| **Anthropic API** | API Usage | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
+
 ## This fork
 
 This is **[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)**, a fork of

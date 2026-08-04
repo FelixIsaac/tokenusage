@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/hanbu97/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml"><img src="https://github.com/FelixIsaac/tokenusage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://crates.io/crates/tokenusage"><img src="https://img.shields.io/crates/v/tokenusage?color=orange" alt="crates.io" /></a>
   <a href="https://www.npmjs.com/package/tokenusage"><img src="https://img.shields.io/npm/v/tokenusage?color=red" alt="npm" /></a>
   <a href="https://pypi.org/project/tokenusage/"><img src="https://img.shields.io/pypi/v/tokenusage?color=blue" alt="PyPI" /></a>
@@ -25,7 +25,11 @@
 ### 一行安装
 
 ```bash
-npm i -g tokenusage        # 或: cargo install tokenusage --bin tu
+# 独立预编译二进制（无需 Node / npm / Python / Rust）
+curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+
+# 或 macOS/Linux Homebrew:
+brew install FelixIsaac/tokenusage/tokenusage
 ```
 
 ### 运行
@@ -89,15 +93,50 @@ tu                          # 0.08 秒出日报
 |---|---|
 | 重构到一半被限速，毫无预警 | `tu live` 实时显示用量 |
 | 不知道 AI 编码每天花多少钱 | `tu` 0.08 秒给出每日开销明细 |
-| Codex 和 Claude 日志分散在不同目录 | 一个统一仪表盘，合并所有数据源 |
+| Codex / Claude / Gemini / OpenCode 日志分散在不同目录 | 一个统一仪表盘，合并所有数据源 |
 | 现有工具在大日志上很慢 | 比 ccusage 快 214 倍（Rust + 并行扫描 + 缓存） |
 | 不想把日志上传到云端 | 100% 本地解析，数据不离开你的电脑 |
 | 不只想看 token，还想看编码时间与效率 | 默认 `tu` 保持经典 token 报表；`--with-activity` 按需增加 coding time 与 tokens/hour |
 | 想分享使用统计 | `tu img` 生成可分享的图片卡 |
 
+## 支持的 AI 助手与功能矩阵
+
+| 服务商 / 助手 | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Claude Code** | 日志 / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
+| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | — | `tu codex` |
+| **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
+| **Gemini CLI** | 日志 / JSON | ✅ | ✅ | — | `tu gemini` |
+| **OpenCode** | 日志 / JSON | ✅ | ✅ | — | `tu opencode` |
+| **Grok (xAI)** | 日志 / OAuth 代理 | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
+| **DeepSeek API** | API 余额 | — | — | ✅ (`tu deepseek`) | `tu deepseek` |
+| **OpenRouter API** | API 余额 | — | — | ✅ (`tu openrouter`) | `tu openrouter` |
+| **Kimi (Moonshot)** | API 余额 | — | — | ✅ (`tu kimi`) | `tu kimi` |
+| **Anthropic API** | API 用量 | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
+
 ## 安装
 
-### npm（推荐）
+### 独立二进制脚本（零依赖 — macOS, Linux, Windows）
+
+无需安装 Node.js, npm, Python 或 Rust 工具链。
+
+**macOS / Linux (Shell):**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
+```
+
+### Homebrew (macOS & Linux)
+
+```bash
+brew install FelixIsaac/tokenusage/tokenusage
+```
+
+### npm
 
 ```bash
 npm install -g tokenusage

@@ -1,0 +1,71 @@
+name: Bug Report
+description: Create a report to help us fix a bug or issue in tokenusage
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out as much details as possible.
+  - type: input
+    id: version
+    attributes:
+      label: tokenusage Version
+      description: Run `tu --version` and paste the version string here.
+      placeholder: "e.g. tokenusage 1.11.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS (Apple Silicon - M1/M2/M3/M4)
+        - macOS (Intel)
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: AI Provider / Log Source (if applicable)
+      options:
+        - All / General
+        - Claude Code
+        - OpenAI Codex
+        - Antigravity / AGY
+        - Gemini CLI
+        - OpenCode
+        - Grok (xAI)
+        - DeepSeek
+        - OpenRouter
+        - Kimi
+        - Anthropic API
+    validations:
+      required: false
+  - type: textarea
+    id: describe-bug
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run 'tu ...'
+        2. See error
+    validations:
+      required: true
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: `tu doctor` Output
+      description: Run `tu doctor` and paste the output here if applicable.
+      render: text
+    validations:
+      required: false
