@@ -530,9 +530,15 @@ impl PricingTable {
         // (-low/-medium/-high/-xhigh/-none) that Gemini's flat per-token
         // pricing doesn't vary by, but public catalogs (OpenRouter,
         // models.dev) only carry the base "-preview" public name.
-        let aliased = antigravity_pricing_alias(&model_key);
+        let aliased = model_pricing_alias(&model_key);
         if aliased != model_key {
-            return self.exact.get(&aliased);
+            if let Some(rate) = self.exact.get(&aliased) {
+                return Some(rate);
+            }
+            return self
+                .prefixes
+                .iter()
+                .find_map(|(prefix, rate)| aliased.starts_with(prefix).then_some(rate));
         }
         None
     }
@@ -626,22 +632,29 @@ fn component_cost(
 }
 
 fn canonical_model_key(model: &str) -> String {
-    model.trim().to_ascii_lowercase()
+    let mut s = model.trim().to_ascii_lowercase();
+    for prefix in &["f16x/", "svr/", "nov/", "f16/"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.to_string();
+            break;
+        }
+    }
+    s
 }
 
-fn antigravity_pricing_alias(model_key: &str) -> String {
+fn model_pricing_alias(model_key: &str) -> String {
     let base = ["-xhigh", "-high", "-medium", "-low", "-none"]
         .iter()
         .find_map(|suffix| model_key.strip_suffix(suffix))
         .unwrap_or(model_key);
 
     match base {
-        "gemini-3.1-pro" => "gemini-3.1-pro-preview",
-        "gemini-3-pro" => "gemini-3-pro-preview",
-        "gemini-3-flash" => "gemini-3-flash-preview",
-        other => other,
+        "gemini-3.1-pro" => "gemini-3.1-pro-preview".to_string(),
+        "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
+        "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
+        "grok-proxy" | "grok-build" => GROK_DEFAULT_MODEL_FALLBACK.to_string(),
+        other => other.to_string(),
     }
-    .to_string()
 }
 
 #[derive(Debug)]

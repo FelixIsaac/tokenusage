@@ -137,27 +137,33 @@ tool goes upstream — this fork extends it with the following (see
 - `tu antigravity status` on Windows fails with a clear, actionable message instead of a
   cryptic `ps`/`lsof` error (a real Windows port is tracked separately).
 
-### Install this fork
-
-The published `tokenusage` packages (npm / cargo / pip) are **upstream**. To run this
-fork:
-
-```bash
-# Prebuilt binary via Homebrew (macOS, Linux) — recommended, no Rust toolchain needed
-brew install FelixIsaac/tokenusage/tokenusage
-
-# Or build from source
-git clone https://github.com/FelixIsaac/tokenusage
-cd tokenusage
-cargo install --path . --bin tu
-```
-
-Prebuilt binaries (shell/PowerShell installer scripts, and Windows/Linux archives) are
-also on the [Releases page](https://github.com/FelixIsaac/tokenusage/releases).
-
 ## Install
 
-### npm (recommended)
+### Standalone Binary (Zero dependencies — macOS, Linux, Windows)
+
+No Node.js, npm, Python, or Rust toolchain required.
+
+**macOS / Linux (Shell):**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr https://github.com/FelixIsaac/tokenusage/releases/latest/download/tokenusage-installer.ps1 | iex
+```
+
+### Homebrew (macOS & Linux)
+
+```bash
+brew install FelixIsaac/tokenusage/tokenusage
+```
+
+### npm
+
+```bash
+npm install -g tokenusage
+```
 
 ```bash
 npm install -g tokenusage

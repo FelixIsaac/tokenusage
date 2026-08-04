@@ -271,6 +271,7 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
         Commands::Grok(args) => Commands::Grok(args),
         Commands::Kimi(args) => Commands::Kimi(args),
         Commands::AnthropicApi(args) => Commands::AnthropicApi(args),
+        Commands::Completions(args) => Commands::Completions(args),
         Commands::Monthly(mut args) => {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             if let Some(monthly_cfg) = config.commands.as_ref().and_then(|c| c.monthly.as_ref()) {
@@ -364,6 +365,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Grok(_) => None,
         Commands::Kimi(_) => None,
         Commands::AnthropicApi(_) => None,
+        Commands::Completions(_) => None,
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),

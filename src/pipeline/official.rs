@@ -1655,14 +1655,8 @@ pub(super) struct AntigravityRequestContext {
     csrf_token: String,
 }
 
+#[cfg(not(windows))]
 pub(super) async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
-    if cfg!(windows) {
-        bail!(
-            "Antigravity detection isn't supported on Windows yet — tu uses ps/lsof (macOS/Linux). \
-             On Windows the language server runs as `agy` with a different port discovery; \
-             see usage-tray-windows for a working implementation."
-        );
-    }
     let output = tokio::task::spawn_blocking(|| {
         Command::new("/bin/ps")
             .args(["-ax", "-o", "pid=,command="])
@@ -1683,11 +1677,11 @@ pub(super) async fn detect_antigravity_process() -> Result<(u32, String, Option<
             None => continue,
         };
         let lower = cmd.to_ascii_lowercase();
-        if !lower.contains("language_server_macos") {
+        if !lower.contains("language_server") && !lower.contains("agy") {
             continue;
         }
         let is_antigravity = (lower.contains("--app_data_dir") && lower.contains("antigravity"))
-            || lower.contains("/antigravity/");
+            || lower.contains("antigravity");
         if !is_antigravity {
             continue;
         }
@@ -1695,6 +1689,54 @@ pub(super) async fn detect_antigravity_process() -> Result<(u32, String, Option<
             Ok(p) => p,
             Err(_) => continue,
         };
+        let csrf = match extract_flag_value("--csrf_token", cmd) {
+            Some(v) => v,
+            None => continue,
+        };
+        let ext_port =
+            extract_flag_value("--extension_server_port", cmd).and_then(|v| v.parse::<u16>().ok());
+        return Ok((pid, csrf, ext_port));
+    }
+    bail!("Antigravity language server not detected")
+}
+
+#[cfg(windows)]
+pub(super) async fn detect_antigravity_process() -> Result<(u32, String, Option<u16>)> {
+    let output = tokio::task::spawn_blocking(|| {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process | Select-Object ProcessId, CommandLine | ConvertTo-Json",
+            ])
+            .output()
+            .context("failed to run powershell for antigravity detection")
+    })
+    .await
+    .context("powershell task join failed")??;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+    let list = items.as_array().cloned().unwrap_or_else(|| vec![items]);
+
+    for item in list {
+        let cmd = match item.get("CommandLine").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => continue,
+        };
+        let pid = match item.get("ProcessId").and_then(|v| v.as_u64()) {
+            Some(p) => p as u32,
+            None => continue,
+        };
+        let lower = cmd.to_ascii_lowercase();
+        if !lower.contains("language_server") && !lower.contains("agy") {
+            continue;
+        }
+        let is_antigravity = (lower.contains("--app_data_dir") && lower.contains("antigravity"))
+            || lower.contains("antigravity");
+        if !is_antigravity {
+            continue;
+        }
         let csrf = match extract_flag_value("--csrf_token", cmd) {
             Some(v) => v,
             None => continue,
@@ -1719,6 +1761,7 @@ pub(super) fn extract_flag_value(flag: &str, command: &str) -> Option<String> {
     Some(value.to_string())
 }
 
+#[cfg(not(windows))]
 pub(super) async fn antigravity_listening_ports(pid: u32) -> Result<Vec<u16>> {
     let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
         .iter()
@@ -1746,6 +1789,48 @@ pub(super) async fn antigravity_listening_ports(pid: u32) -> Result<Vec<u16>> {
                 if let Ok(port) = port_str.parse::<u16>() {
                     ports.insert(port);
                 }
+            }
+        }
+    }
+
+    if ports.is_empty() {
+        bail!("Antigravity process has no listening ports");
+    }
+    Ok(ports.into_iter().collect())
+}
+
+#[cfg(windows)]
+pub(super) async fn antigravity_listening_ports(pid: u32) -> Result<Vec<u16>> {
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("netstat")
+            .args(["-ano"])
+            .output()
+            .context("failed to run netstat on windows")
+    })
+    .await
+    .context("netstat task join failed")??;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ports = std::collections::BTreeSet::new();
+    let pid_str = pid.to_string();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.contains("LISTENING") {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let last_part = parts[parts.len() - 1];
+        if last_part != pid_str {
+            continue;
+        }
+        let local_addr = parts[1];
+        if let Some(colon_idx) = local_addr.rfind(':') {
+            if let Ok(port) = local_addr[colon_idx + 1..].parse::<u16>() {
+                ports.insert(port);
             }
         }
     }
@@ -2408,12 +2493,17 @@ pub(super) struct OfficialGrokSnapshot {
 }
 
 pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot> {
-    let api_key =
-        std::env::var("XAI_API_KEY").context("XAI_API_KEY environment variable not set")?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .context("failed to build HTTP client for Grok")?;
+
+    if let Some(snapshot) = fetch_grok_cli_proxy_limits(&client).await {
+        return Ok(snapshot);
+    }
+
+    let api_key =
+        std::env::var("XAI_API_KEY").context("XAI_API_KEY environment variable not set and ~/.grok/auth.json unavailable")?;
     let response = client
         .get("https://api.x.ai/v1/dashboard/billing/credit_grants")
         .header("Authorization", format!("Bearer {api_key}"))
@@ -2444,6 +2534,115 @@ pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot>
         total_granted,
         total_used,
         total_remaining,
+        used_percent,
+        currency: Some("USD".to_string()),
+    })
+}
+
+async fn fetch_grok_cli_proxy_limits(client: &reqwest::Client) -> Option<OfficialGrokSnapshot> {
+    let home = dirs::home_dir()?;
+    let auth_path = home.join(".grok").join("auth.json");
+    if !auth_path.exists() {
+        return None;
+    }
+    let body_bytes = std::fs::read(&auth_path).ok()?;
+    let mut auth_map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&body_bytes).ok()?;
+
+    let (target_key, mut entry) = auth_map.iter_mut().find_map(|(k, v)| {
+        if v.is_object() {
+            Some((k.clone(), v.clone()))
+        } else {
+            None
+        }
+    })?;
+
+    let obj = entry.as_object_mut()?;
+    let mut token = obj
+        .get("key")
+        .or_else(|| obj.get("token"))
+        .or_else(|| obj.get("access_token"))
+        .and_then(|v| v.as_str())
+        .map(String::from)?;
+
+    let refresh_token = obj
+        .get("refresh_token")
+        .or_else(|| obj.get("refresh"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let oidc_client_id = obj
+        .get("oidc_client_id")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| target_key.rsplit("::").next().map(String::from))
+        .unwrap_or_else(|| "b1a00492-073a-47ea-816f-4c329264a828".to_string());
+
+    let res = client
+        .get("https://cli-chat-proxy.grok.com/v1/billing?format=credits")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("X-XAI-Token-Auth", "xai-grok-cli")
+        .header("Accept", "application/json")
+        .header("User-Agent", "tokenusage")
+        .send()
+        .await
+        .ok()?;
+
+    let status = res.status();
+    let body_json: serde_json::Value = if status == reqwest::StatusCode::UNAUTHORIZED && refresh_token.is_some() {
+        let refresh_tok = refresh_token.as_ref().unwrap();
+        let refresh_params = [
+            ("grant_type", "refresh_token"),
+            ("client_id", oidc_client_id.as_str()),
+            ("refresh_token", refresh_tok.as_str()),
+        ];
+        let refresh_res = client
+            .post("https://auth.x.ai/oauth2/token")
+            .form(&refresh_params)
+            .send()
+            .await
+            .ok()?;
+        if !refresh_res.status().is_success() {
+            return None;
+        }
+        let refresh_json: serde_json::Value = refresh_res.json().await.ok()?;
+        let new_access = refresh_json.get("access_token")?.as_str()?.to_string();
+        token = new_access.clone();
+
+        obj.insert("key".to_string(), serde_json::Value::String(token.clone()));
+        if let Some(new_ref) = refresh_json.get("refresh_token").and_then(|v| v.as_str()) {
+            obj.insert("refresh_token".to_string(), serde_json::Value::String(new_ref.to_string()));
+        }
+        auth_map.insert(target_key, serde_json::Value::Object(obj.clone()));
+        if let Ok(updated_data) = serde_json::to_vec_pretty(&auth_map) {
+            let _ = std::fs::write(&auth_path, updated_data);
+        }
+
+        let retry_res = client
+            .get("https://cli-chat-proxy.grok.com/v1/billing?format=credits")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("X-XAI-Token-Auth", "xai-grok-cli")
+            .header("Accept", "application/json")
+            .header("User-Agent", "tokenusage")
+            .send()
+            .await
+            .ok()?;
+        if !retry_res.status().is_success() {
+            return None;
+        }
+        retry_res.json().await.ok()?
+    } else if status.is_success() {
+        res.json().await.ok()?
+    } else {
+        return None;
+    };
+
+    let config = body_json.get("config")?;
+    let used_percent = config.get("creditUsagePercent").and_then(|v| v.as_f64());
+
+    Some(OfficialGrokSnapshot {
+        total_granted: None,
+        total_used: None,
+        total_remaining: None,
         used_percent,
         currency: Some("USD".to_string()),
     })

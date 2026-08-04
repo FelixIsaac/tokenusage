@@ -323,6 +323,13 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Grok(args) => pipeline::run_grok(args).await,
         Commands::Kimi(args) => pipeline::run_kimi(args).await,
         Commands::AnthropicApi(args) => pipeline::run_anthropic_api(args).await,
+        Commands::Completions(args) => {
+            use clap::CommandFactory;
+            use clap_complete::generate;
+            let mut cmd = cli::Cli::command();
+            generate(args.shell, &mut cmd, "tu", &mut std::io::stdout());
+            Ok(())
+        }
         Commands::Monthly(args) => pipeline::run_monthly(args).await,
         Commands::Weekly(args) => pipeline::run_weekly(args).await,
         Commands::Img(args) => share::run_share(args).await,

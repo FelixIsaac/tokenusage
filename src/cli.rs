@@ -412,6 +412,18 @@ pub(crate) enum Commands {
         display_order = 45
     )]
     AnthropicApi(AnthropicApiArgs),
+    #[command(
+        about = "Generate shell completion scripts (bash, zsh, fish, powershell, elvish)",
+        display_order = 50
+    )]
+    Completions(CompletionsArgs),
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone)]
+pub(crate) struct CompletionsArgs {
+    #[arg(value_enum, help = "Shell to generate completions for")]
+    pub(crate) shell: clap_complete::Shell,
 }
 
 #[cfg(feature = "cli")]
