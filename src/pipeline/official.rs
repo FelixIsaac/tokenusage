@@ -2590,8 +2590,9 @@ async fn fetch_grok_cli_proxy_limits(client: &reqwest::Client) -> Option<Officia
 
     let status = res.status();
     let body_json: serde_json::Value =
-        if status == reqwest::StatusCode::UNAUTHORIZED && refresh_token.is_some() {
-            let refresh_tok = refresh_token.as_ref().unwrap();
+        if let (reqwest::StatusCode::UNAUTHORIZED, Some(refresh_tok)) =
+            (status, refresh_token.as_ref())
+        {
             let refresh_params = [
                 ("grant_type", "refresh_token"),
                 ("client_id", oidc_client_id.as_str()),
