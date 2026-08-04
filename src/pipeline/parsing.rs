@@ -1468,8 +1468,8 @@ pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> Par
         return ParseLineResult::MissingUsage;
     };
 
-    let model = extract_string(&value, &["model"])
-        .unwrap_or_else(|| "gemini-3.6-flash".to_string());
+    let model =
+        extract_string(&value, &["model"]).unwrap_or_else(|| "gemini-3.6-flash".to_string());
 
     let usage = UsageAccumulator {
         input_tokens: extract_u64(&value, &["tokens.input"])
@@ -1990,7 +1990,8 @@ fn parse_antigravity_db_file(
             cost_usd: 0.0,
         };
 
-        let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&gen_event.model, usage) {
+        let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&gen_event.model, usage)
+        {
             Some(v) => (v, false),
             None => (0.0, true),
         };
@@ -2002,7 +2003,11 @@ fn parse_antigravity_db_file(
             timestamp,
             source: SourceKind::Gemini,
             model: gen_event.model,
-            session: path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+            session: path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
             project: None,
             file_path: path.to_string_lossy().to_string(),
             usage: UsageAccumulator { cost_usd, ..usage },
@@ -2013,10 +2018,18 @@ fn parse_antigravity_db_file(
     }
 
     stats.lines_total.fetch_add(lines_total, Ordering::Relaxed);
-    stats.lines_parsed.fetch_add(lines_parsed, Ordering::Relaxed);
-    stats.lines_missing_usage.fetch_add(lines_missing_usage, Ordering::Relaxed);
-    stats.lines_unknown_pricing.fetch_add(lines_unknown_pricing, Ordering::Relaxed);
-    stats.lines_filtered.fetch_add(lines_filtered, Ordering::Relaxed);
+    stats
+        .lines_parsed
+        .fetch_add(lines_parsed, Ordering::Relaxed);
+    stats
+        .lines_missing_usage
+        .fetch_add(lines_missing_usage, Ordering::Relaxed);
+    stats
+        .lines_unknown_pricing
+        .fetch_add(lines_unknown_pricing, Ordering::Relaxed);
+    stats
+        .lines_filtered
+        .fetch_add(lines_filtered, Ordering::Relaxed);
 
     let cached_events = events.iter().map(cached_usage_event).collect();
 

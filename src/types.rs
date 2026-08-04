@@ -854,7 +854,10 @@ mod pricing_tests {
             .insert("gemini-3-flash-preview".to_string(), rate(0.1, 0.4, 0.025));
 
         assert_eq!(
-            table.find_rate("gemini-3-pro-low").unwrap().input_per_million,
+            table
+                .find_rate("gemini-3-pro-low")
+                .unwrap()
+                .input_per_million,
             1.25
         );
         assert_eq!(

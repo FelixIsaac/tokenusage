@@ -109,7 +109,11 @@ fn normalize_tu_for_provider(provider: ProviderArg, raw: &TokenCounts) -> TokenC
                 cost_usd: raw.cost_usd,
             }
         }
-        ProviderArg::Claude | ProviderArg::Gemini | ProviderArg::Antigravity | ProviderArg::Opencode | ProviderArg::Grok => {
+        ProviderArg::Claude
+        | ProviderArg::Gemini
+        | ProviderArg::Antigravity
+        | ProviderArg::Opencode
+        | ProviderArg::Grok => {
             // ccusage-family totals generally exclude reasoning as a separate additive bucket.
             TokenCounts {
                 input_tokens: raw.input_tokens,

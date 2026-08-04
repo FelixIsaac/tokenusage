@@ -2502,8 +2502,8 @@ pub(super) async fn fetch_grok_official_limits() -> Result<OfficialGrokSnapshot>
         return Ok(snapshot);
     }
 
-    let api_key =
-        std::env::var("XAI_API_KEY").context("XAI_API_KEY environment variable not set and ~/.grok/auth.json unavailable")?;
+    let api_key = std::env::var("XAI_API_KEY")
+        .context("XAI_API_KEY environment variable not set and ~/.grok/auth.json unavailable")?;
     let response = client
         .get("https://api.x.ai/v1/dashboard/billing/credit_grants")
         .header("Authorization", format!("Bearer {api_key}"))
@@ -2546,7 +2546,8 @@ async fn fetch_grok_cli_proxy_limits(client: &reqwest::Client) -> Option<Officia
         return None;
     }
     let body_bytes = std::fs::read(&auth_path).ok()?;
-    let mut auth_map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&body_bytes).ok()?;
+    let mut auth_map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&body_bytes).ok()?;
 
     let (target_key, mut entry) = auth_map.iter_mut().find_map(|(k, v)| {
         if v.is_object() {
@@ -2588,53 +2589,57 @@ async fn fetch_grok_cli_proxy_limits(client: &reqwest::Client) -> Option<Officia
         .ok()?;
 
     let status = res.status();
-    let body_json: serde_json::Value = if status == reqwest::StatusCode::UNAUTHORIZED && refresh_token.is_some() {
-        let refresh_tok = refresh_token.as_ref().unwrap();
-        let refresh_params = [
-            ("grant_type", "refresh_token"),
-            ("client_id", oidc_client_id.as_str()),
-            ("refresh_token", refresh_tok.as_str()),
-        ];
-        let refresh_res = client
-            .post("https://auth.x.ai/oauth2/token")
-            .form(&refresh_params)
-            .send()
-            .await
-            .ok()?;
-        if !refresh_res.status().is_success() {
-            return None;
-        }
-        let refresh_json: serde_json::Value = refresh_res.json().await.ok()?;
-        let new_access = refresh_json.get("access_token")?.as_str()?.to_string();
-        token = new_access.clone();
+    let body_json: serde_json::Value =
+        if status == reqwest::StatusCode::UNAUTHORIZED && refresh_token.is_some() {
+            let refresh_tok = refresh_token.as_ref().unwrap();
+            let refresh_params = [
+                ("grant_type", "refresh_token"),
+                ("client_id", oidc_client_id.as_str()),
+                ("refresh_token", refresh_tok.as_str()),
+            ];
+            let refresh_res = client
+                .post("https://auth.x.ai/oauth2/token")
+                .form(&refresh_params)
+                .send()
+                .await
+                .ok()?;
+            if !refresh_res.status().is_success() {
+                return None;
+            }
+            let refresh_json: serde_json::Value = refresh_res.json().await.ok()?;
+            let new_access = refresh_json.get("access_token")?.as_str()?.to_string();
+            token = new_access.clone();
 
-        obj.insert("key".to_string(), serde_json::Value::String(token.clone()));
-        if let Some(new_ref) = refresh_json.get("refresh_token").and_then(|v| v.as_str()) {
-            obj.insert("refresh_token".to_string(), serde_json::Value::String(new_ref.to_string()));
-        }
-        auth_map.insert(target_key, serde_json::Value::Object(obj.clone()));
-        if let Ok(updated_data) = serde_json::to_vec_pretty(&auth_map) {
-            let _ = std::fs::write(&auth_path, updated_data);
-        }
+            obj.insert("key".to_string(), serde_json::Value::String(token.clone()));
+            if let Some(new_ref) = refresh_json.get("refresh_token").and_then(|v| v.as_str()) {
+                obj.insert(
+                    "refresh_token".to_string(),
+                    serde_json::Value::String(new_ref.to_string()),
+                );
+            }
+            auth_map.insert(target_key, serde_json::Value::Object(obj.clone()));
+            if let Ok(updated_data) = serde_json::to_vec_pretty(&auth_map) {
+                let _ = std::fs::write(&auth_path, updated_data);
+            }
 
-        let retry_res = client
-            .get("https://cli-chat-proxy.grok.com/v1/billing?format=credits")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("X-XAI-Token-Auth", "xai-grok-cli")
-            .header("Accept", "application/json")
-            .header("User-Agent", "tokenusage")
-            .send()
-            .await
-            .ok()?;
-        if !retry_res.status().is_success() {
+            let retry_res = client
+                .get("https://cli-chat-proxy.grok.com/v1/billing?format=credits")
+                .header("Authorization", format!("Bearer {token}"))
+                .header("X-XAI-Token-Auth", "xai-grok-cli")
+                .header("Accept", "application/json")
+                .header("User-Agent", "tokenusage")
+                .send()
+                .await
+                .ok()?;
+            if !retry_res.status().is_success() {
+                return None;
+            }
+            retry_res.json().await.ok()?
+        } else if status.is_success() {
+            res.json().await.ok()?
+        } else {
             return None;
-        }
-        retry_res.json().await.ok()?
-    } else if status.is_success() {
-        res.json().await.ok()?
-    } else {
-        return None;
-    };
+        };
 
     let config = body_json.get("config")?;
     let used_percent = config.get("creditUsagePercent").and_then(|v| v.as_f64());
