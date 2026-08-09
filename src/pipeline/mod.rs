@@ -4,6 +4,7 @@ mod block_report;
 mod commands;
 #[cfg(feature = "cli")]
 mod display;
+pub mod history;
 #[cfg(feature = "cli")]
 mod live;
 #[cfg(feature = "cli")]
@@ -1029,6 +1030,8 @@ where
         .collect::<Vec<_>>();
 
     rows.sort_by(|a, b| a.date.cmp(&b.date));
+    history::apply_monthly_overrides(&mut rows);
+    let _ = history::persist_report_rows(&rows);
     if *order == SortOrder::Desc {
         rows.reverse();
     }

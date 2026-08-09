@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.3] - 2026-08-09
+
+### Added
+- **Historical Baseline Overrides:** Support for `~/.config/tokenusage/history_overrides.json` to restore historical monthly metrics and model breakdowns if raw session log transcripts are purged from disk.
+- **SQLite History Auto-Persistence (`history.db`):** Automatically upserts daily and monthly aggregated token counts and costs into SQLite at `~/.config/tokenusage/history.db` using `rusqlite`, permanently preserving historical usage metrics across future disk cleanups.
+
 ## [1.11.2] - 2026-08-04
 
 ### Added
