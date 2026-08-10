@@ -621,7 +621,7 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let rows = build_group_rows(&events, &args.common.order, |event| {
+    let rows = build_group_rows(&events, ReportPeriod::Daily, &args.common, |event| {
         let day = local_date(event.timestamp, &tz);
         let day_key = day.format("%Y-%m-%d").to_string();
         if args.instances {
@@ -686,7 +686,7 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let loaded = load_usage(&args.common, &tz).await?;
 
-    let rows = build_group_rows(&loaded.events, &args.common.order, |event| {
+    let rows = build_group_rows(&loaded.events, ReportPeriod::Monthly, &args.common, |event| {
         let day = local_date(event.timestamp, &tz);
         format!("{:04}-{:02}", day.year(), day.month())
     });
@@ -755,7 +755,7 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let loaded = load_usage(&args.common, &tz).await?;
 
-    let rows = build_group_rows(&loaded.events, &args.common.order, |event| {
+    let rows = build_group_rows(&loaded.events, ReportPeriod::Weekly, &args.common, |event| {
         let day = local_date(event.timestamp, &tz);
         let start = week_start(day, args.start_of_week);
         format!("{}", start.format("%Y-%m-%d"))
@@ -1205,7 +1205,7 @@ pub async fn collect_report(
                 .cloned()
                 .collect::<Vec<_>>();
 
-            build_group_rows(&events, &common.order, |event| {
+            build_group_rows(&events, ReportPeriod::Daily, &common, |event| {
                 let day = local_date(event.timestamp, &tz);
                 let day_key = day.format("%Y-%m-%d").to_string();
                 if instances {
@@ -1218,11 +1218,11 @@ pub async fn collect_report(
                 }
             })
         }
-        ReportPeriod::Monthly => build_group_rows(&loaded.events, &common.order, |event| {
+        ReportPeriod::Monthly => build_group_rows(&loaded.events, ReportPeriod::Monthly, &common, |event| {
             let day = local_date(event.timestamp, &tz);
             format!("{:04}-{:02}", day.year(), day.month())
         }),
-        ReportPeriod::Weekly => build_group_rows(&loaded.events, &common.order, |event| {
+        ReportPeriod::Weekly => build_group_rows(&loaded.events, ReportPeriod::Weekly, &common, |event| {
             let day = local_date(event.timestamp, &tz);
             let start = week_start(day, start_of_week);
             start.format("%Y-%m-%d").to_string()

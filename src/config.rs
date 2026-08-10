@@ -57,6 +57,10 @@ struct CommonConfig {
     no_opencode: Option<bool>,
     #[serde(alias = "noAntigravity")]
     no_antigravity: Option<bool>,
+    #[serde(alias = "noHistoryOverrides")]
+    no_history_overrides: Option<bool>,
+    #[serde(alias = "noHistoryDb")]
+    no_history_db: Option<bool>,
     only: Option<Vec<ProviderArg>>,
     sources: Option<Vec<ProviderArg>>,
     #[serde(alias = "claudeProjectsDir")]
@@ -425,6 +429,8 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_false(&mut common.no_gemini, cfg.no_gemini);
     merge_if_false(&mut common.no_opencode, cfg.no_opencode);
     merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
+    merge_if_false(&mut common.no_history_overrides, cfg.no_history_overrides);
+    merge_if_false(&mut common.no_history_db, cfg.no_history_db);
     if common.only.is_empty()
         && let Some(values) = cfg.only.as_ref()
     {

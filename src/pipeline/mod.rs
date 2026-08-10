@@ -995,7 +995,12 @@ where
         .collect::<BTreeMap<_, _>>()
 }
 
-fn build_group_rows<F>(events: &[UsageEvent], order: &SortOrder, mut key_fn: F) -> Vec<DailyRow>
+fn build_group_rows<F>(
+    events: &[UsageEvent],
+    period: ReportPeriod,
+    common: &CommonArgs,
+    mut key_fn: F,
+) -> Vec<DailyRow>
 where
     F: FnMut(&UsageEvent) -> String,
 {
@@ -1030,9 +1035,16 @@ where
         .collect::<Vec<_>>();
 
     rows.sort_by(|a, b| a.date.cmp(&b.date));
-    history::apply_monthly_overrides(&mut rows);
-    let _ = history::persist_report_rows(&rows);
-    if *order == SortOrder::Desc {
+
+    if period == ReportPeriod::Monthly && !common.no_history_overrides {
+        history::apply_monthly_overrides(&mut rows);
+    }
+
+    if period == ReportPeriod::Daily && !common.no_history_db {
+        let _ = history::persist_report_rows(&rows);
+    }
+
+    if common.order == SortOrder::Desc {
         rows.reverse();
     }
 
