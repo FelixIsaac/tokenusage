@@ -229,6 +229,8 @@ tu img week
 | **Antigravity / Gemini** | `~/.gemini/antigravity-cli/conversations/*.db` & `~/.gemini/tmp` | `--gemini-data-dir` |
 | **OpenCode** | `$OPENCODE_DATA_DIR` (or `~/.local/share/opencode`) | `--opencode-data-dir` |
 | **Grok Build** | `~/.grok/logs` & `~/.grok/auth.json` | `--grok-log-dir` |
+| **History Overrides** | `~/.config/tokenusage/history_overrides.json` | `--no-history-overrides` |
+| **History Database** | `~/.config/tokenusage/history.db` | `--no-history-db` |
 
 ---
 

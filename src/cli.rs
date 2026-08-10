@@ -184,6 +184,16 @@ pub struct CommonArgs {
     pub no_antigravity: bool,
     #[cfg_attr(
         feature = "cli",
+        arg(long, help = "Disable historical overrides from history_overrides.json")
+    )]
+    pub no_history_overrides: bool,
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Disable SQLite history auto-persistence to history.db")
+    )]
+    pub no_history_db: bool,
+    #[cfg_attr(
+        feature = "cli",
         arg(
             long = "only",
             value_enum,
@@ -319,6 +329,8 @@ impl CommonArgs {
                   - Antigravity: ~/.gemini/antigravity-cli/conversations, .../brain (--gemini-data-dir)\n\
                   - OpenCode:    $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
                   - Grok:        ~/.grok/logs              (--grok-log-dir)\n\
+                  - Overrides:   ~/.config/tokenusage/history_overrides.json (--no-history-overrides)\n\
+                  - Persistence: ~/.config/tokenusage/history.db (--no-history-db)\n\
                   \n\
                   GitHub:  https://github.com/FelixIsaac/tokenusage\n\
                   Issues:  https://github.com/FelixIsaac/tokenusage/issues"

@@ -407,6 +407,8 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         no_opencode: config.no_opencode,
         no_grok: config.no_grok,
         no_antigravity: true,
+        no_history_overrides: false,
+        no_history_db: false,
         only: Vec::new(),
         sources: Vec::new(),
         claude_projects_dir: config.claude_projects_dir.clone(),
