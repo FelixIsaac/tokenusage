@@ -350,6 +350,10 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             }
             Commands::Gui(args)
         }
+        Commands::Carbon(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Carbon(args)
+        }
     };
 
     Ok(merged)
@@ -372,6 +376,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Completions(_) => None,
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
+        Commands::Carbon(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),
         Commands::Session(args) => args.common.config.as_deref(),
         Commands::Blocks(args) => args.common.config.as_deref(),

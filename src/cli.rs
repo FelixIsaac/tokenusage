@@ -90,6 +90,18 @@ impl ProviderArg {
     }
 }
 
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CarbonPeriodArg {
+    #[default]
+    Today,
+    Daily,
+    Weekly,
+    Monthly,
+    About,
+}
+
 // ---------------------------------------------------------------------------
 // CommonArgs — shared struct, clap attributes conditional on `cli` feature
 // ---------------------------------------------------------------------------
@@ -107,6 +119,8 @@ pub struct CommonArgs {
         arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")
     )]
     pub until: Option<String>,
+    #[cfg_attr(feature = "cli", arg(long, help = "Show environmental carbon/energy/water impact"))]
+    pub carbon: bool,
     #[cfg_attr(feature = "cli", arg(long, short = 'j', help = "Output JSON report"))]
     pub json: bool,
     #[cfg_attr(
@@ -361,6 +375,11 @@ pub(crate) enum Commands {
     Blocks(BlocksArgs),
     #[command(about = "Per-session token usage", display_order = 7)]
     Session(SessionArgs),
+    #[command(
+        about = "Carbon footprint, energy (kWh), and water usage report",
+        display_order = 8
+    )]
+    Carbon(CarbonArgs),
 
     // --- Live / interactive (display_order 10-12) ---
     #[command(about = "Live-updating usage view", display_order = 10)]
@@ -436,6 +455,25 @@ pub(crate) enum Commands {
 pub(crate) struct CompletionsArgs {
     #[arg(value_enum, help = "Shell to generate completions for")]
     pub(crate) shell: clap_complete::Shell,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct CarbonArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        value_enum,
+        default_value_t = CarbonPeriodArg::Today,
+        help = "Period breakdown for carbon report: today (default), daily, weekly, monthly, about"
+    )]
+    pub(crate) period: CarbonPeriodArg,
+    #[arg(
+        long = "region",
+        default_value = "us-east",
+        help = "Grid region: us-east, us-west, us-avg, eu-west, nordic, google-cfe, global"
+    )]
+    pub(crate) region: String,
 }
 
 #[cfg(feature = "cli")]
