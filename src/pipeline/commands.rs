@@ -1480,7 +1480,7 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
                         return false;
                     }
                 }
-                CarbonPeriodArg::About => {}
+                CarbonPeriodArg::All | CarbonPeriodArg::About => {}
             }
             if let Some(since) = &args.common.since {
                 if let Ok(dt) = chrono::NaiveDate::parse_from_str(since, "%Y-%m-%d") {

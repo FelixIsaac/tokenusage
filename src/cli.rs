@@ -92,13 +92,15 @@ impl ProviderArg {
 
 #[cfg_attr(feature = "cli", derive(ValueEnum))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum CarbonPeriodArg {
     #[default]
     Today,
     Daily,
     Weekly,
     Monthly,
+    #[serde(alias = "all-time", alias = "alltime")]
+    All,
     About,
 }
 
@@ -465,7 +467,7 @@ pub(crate) struct CarbonArgs {
     #[arg(
         value_enum,
         default_value_t = CarbonPeriodArg::Today,
-        help = "Period breakdown for carbon report: today (default), daily, weekly, monthly, about"
+        help = "Period breakdown for carbon report: today (default), daily, weekly, monthly, all, about"
     )]
     pub(crate) period: CarbonPeriodArg,
     #[arg(
@@ -474,6 +476,8 @@ pub(crate) struct CarbonArgs {
         help = "Grid region: us-east, us-west, us-avg, eu-west, nordic, google-cfe, global"
     )]
     pub(crate) region: String,
+    #[arg(long, help = "Interactive TUI (sticky header + scroll)")]
+    pub(crate) tui: bool,
 }
 
 #[cfg(feature = "cli")]
