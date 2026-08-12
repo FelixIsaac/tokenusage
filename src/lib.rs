@@ -110,6 +110,7 @@
 
 mod activity;
 pub mod api;
+pub mod carbon;
 mod cli;
 #[cfg(feature = "cli")]
 mod config;
@@ -132,6 +133,7 @@ pub use api::{Config, SortOrder, WeekStart};
 pub use api::{
     daily_report, daily_report_with_week_start, load_events, parse_stats, usage_snapshot,
 };
+pub use carbon::{EnvironmentalEquivalences, EnvironmentalMetrics, GridRegion};
 pub use pipeline::{ReportPeriod, TimeZoneMode, UsageSnapshot};
 pub use types::{
     ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats, PricingRate, PricingTable,
@@ -236,6 +238,7 @@ fn extract_throttle(cmd: &Commands) -> u64 {
         Commands::Activity(a) => a.common.slow,
         Commands::Monthly(a) => a.common.slow,
         Commands::Weekly(a) => a.common.slow,
+        Commands::Carbon(a) => a.common.slow,
         Commands::Img(a) => a.common.slow,
         Commands::Session(a) => a.common.slow,
         Commands::Blocks(a) => a.common.slow,
@@ -332,6 +335,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         }
         Commands::Monthly(args) => pipeline::run_monthly(args).await,
         Commands::Weekly(args) => pipeline::run_weekly(args).await,
+        Commands::Carbon(args) => pipeline::run_carbon(args).await,
         Commands::Img(args) => share::run_share(args).await,
         Commands::Session(args) => pipeline::run_session(args).await,
         Commands::Blocks(args) => pipeline::run_blocks(args).await,
