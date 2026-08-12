@@ -189,7 +189,7 @@ impl EnvironmentalMetrics {
     }
 }
 
-/// Intuitive human equivalences for energy, carbon, and water.
+/// Intuitive human equivalences for energy, carbon, and water with dynamic scaling & wow factor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentalEquivalences {
     /// Number of full smartphone charges (~12 Wh per charge)
@@ -206,10 +206,19 @@ pub struct EnvironmentalEquivalences {
     pub tree_months: f64,
     /// Hours of HD video streaming (~0.08 kWh/hour)
     pub streaming_hours: f64,
+    /// Days of average US home power consumption (~30 kWh/day)
+    pub home_power_days: f64,
+    /// Transatlantic economy flights NYC -> London (~650 kg CO2e per passenger)
+    pub nyc_london_flights: f64,
+    /// Full standard 150-liter bathtubs of water
+    pub bathtubs: f64,
 }
 
 impl EnvironmentalEquivalences {
     pub fn from_metrics(metrics: &EnvironmentalMetrics) -> Self {
+        let carbon_kg = metrics.carbon_gco2e / 1000.0;
+        let water_l = metrics.water_ml / 1000.0;
+
         Self {
             smartphone_charges: (metrics.energy_kwh * 1000.0) / 12.0,
             cups_boiled: (metrics.energy_kwh * 1000.0) / 23.0,
@@ -218,7 +227,100 @@ impl EnvironmentalEquivalences {
             water_bottles: metrics.water_ml / 500.0,
             tree_months: metrics.carbon_gco2e / 2000.0,
             streaming_hours: metrics.energy_kwh / 0.08,
+            home_power_days: metrics.energy_kwh / 30.0,
+            nyc_london_flights: carbon_kg / 650.0,
+            bathtubs: water_l / 150.0,
         }
+    }
+
+    /// Dynamic multi-tier human equivalences with "wow factor" scaling.
+    pub fn wow_factor_summary_lines(&self, metrics: &EnvironmentalMetrics) -> Vec<String> {
+        let mut lines = Vec::new();
+        let kwh = metrics.energy_kwh;
+        let carbon_kg = metrics.carbon_gco2e / 1000.0;
+        let water_l = metrics.water_ml / 1000.0;
+
+        if kwh >= 500.0 {
+            lines.push(format!(
+                "   ⚡ [Home Power] ~ {} Days powering an average US home (30 kWh/day)",
+                format_commas_f64(self.home_power_days, 1)
+            ));
+        } else {
+            lines.push(format!(
+                "   📱 [Charging]   ~ {} Smartphone charges (12Wh each)",
+                format_commas_f64(self.smartphone_charges, 0)
+            ));
+            lines.push(format!(
+                "   ☕ [Kettle]     ~ {} Cups of tea / coffee boiled (23Wh each)",
+                format_commas_f64(self.cups_boiled, 0)
+            ));
+        }
+
+        if carbon_kg >= 300.0 {
+            lines.push(format!(
+                "   ✈️  [Flight CO₂] ~ {} Transatlantic flights (NYC ✈️ London, 650kg CO₂e each)",
+                format_commas_f64(self.nyc_london_flights, 2)
+            ));
+        }
+
+        let cross_country_trips = self.ev_km / 4000.0; // 4000 km ~ NYC to LA
+        if self.ev_km >= 4000.0 {
+            lines.push(format!(
+                "   🚀 [EV Driving] ~ {} km in an EV (or {} km gas) — {:.1}× coast-to-coast US trips!",
+                format_commas_f64(self.ev_km, 1),
+                format_commas_f64(self.petrol_car_km, 1),
+                cross_country_trips
+            ));
+        } else {
+            lines.push(format!(
+                "   🚘 [EV Driving] ~ {} km in an Electric Vehicle (or {} km in gas car)",
+                format_commas_f64(self.ev_km, 1),
+                format_commas_f64(self.petrol_car_km, 1)
+            ));
+        }
+
+        if water_l >= 300.0 {
+            lines.push(format!(
+                "   🛁 [Water Draw] ~ {} Full bathtubs (150L each) or {} bottles",
+                format_commas_f64(self.bathtubs, 1),
+                format_commas_f64(self.water_bottles, 0)
+            ));
+        } else {
+            lines.push(format!(
+                "   💧 [Water Draw] ~ {} Drinking water bottles (500ml) evaporated",
+                format_commas_f64(self.water_bottles, 1)
+            ));
+        }
+
+        if self.tree_months >= 12.0 {
+            let tree_years = self.tree_months / 12.0;
+            lines.push(format!(
+                "   🌳 [CO₂ Offset] ~ {} Tree-months ({:.1} full tree-years) of forest absorption",
+                format_commas_f64(self.tree_months, 1),
+                tree_years
+            ));
+        } else {
+            lines.push(format!(
+                "   🌳 [CO₂ Offset] ~ {} Tree-months of mature tree CO₂ absorption",
+                format_commas_f64(self.tree_months, 1)
+            ));
+        }
+
+        if self.streaming_hours >= 1000.0 {
+            let streaming_years = self.streaming_hours / (24.0 * 365.25);
+            lines.push(format!(
+                "   📺 [Streaming]  ~ {} Hours ({:.1} years continuous) of HD video streaming",
+                format_commas_f64(self.streaming_hours, 1),
+                streaming_years
+            ));
+        } else {
+            lines.push(format!(
+                "   📺 [Streaming]  ~ {} Hours of HD video streaming",
+                format_commas_f64(self.streaming_hours, 1)
+            ));
+        }
+
+        lines
     }
 }
 

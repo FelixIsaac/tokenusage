@@ -1596,12 +1596,9 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         println!("  Water Consumption      : {}", format_water_human(total_metrics.water_ml));
         println!();
         println!(" ENVIRONMENTAL EQUIVALENCES:");
-        println!("   [Charging]  ~ {} Smartphone charges (12Wh each)", format_commas_f64(equiv.smartphone_charges, 0));
-        println!("   [Kettle]    ~ {} Cups of tea / coffee boiled (23Wh each)", format_commas_f64(equiv.cups_boiled, 0));
-        println!("   [Driving]   ~ {} km in an Electric Vehicle (or {} km in gas car)", format_commas_f64(equiv.ev_km, 2), format_commas_f64(equiv.petrol_car_km, 2));
-        println!("   [Water]     ~ {} Drinking water bottles (500ml) evaporated", format_commas_f64(equiv.water_bottles, 1));
-        println!("   [Trees]     ~ {} Tree-months of CO₂ absorption", format_commas_f64(equiv.tree_months, 1));
-        println!("   [Streaming] ~ {} Hours of HD video streaming", format_commas_f64(equiv.streaming_hours, 1));
+        for line in equiv.wow_factor_summary_lines(&total_metrics) {
+            println!("{}", line);
+        }
         println!();
         println!(" MODEL BREAKDOWN:");
         println!("{:<30} {:>16} {:>14} {:>14} {:>12}", "Model", "Tokens", "Energy (kWh)", "Carbon (kg)", "Water (L)");
