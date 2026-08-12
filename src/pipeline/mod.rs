@@ -29,8 +29,9 @@ pub use commands::{collect_report, collect_usage_snapshot};
 // Re-exports: crate-internal (CLI commands)
 #[cfg(feature = "cli")]
 pub(crate) use commands::{
-    run_activity, run_anthropic_api, run_antigravity, run_daily, run_deepseek, run_doctor,
-    run_grok, run_kimi, run_monthly, run_openrouter, run_session, run_today, run_weekly,
+    run_activity, run_anthropic_api, run_antigravity, run_carbon, run_daily, run_deepseek,
+    run_doctor, run_grok, run_kimi, run_monthly, run_openrouter, run_session, run_today,
+    run_weekly,
 };
 #[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
