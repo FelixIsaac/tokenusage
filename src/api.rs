@@ -384,6 +384,7 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
     cli::CommonArgs {
         since: config.since.clone(),
         until: config.until.clone(),
+        carbon: false,
         json: false,
         jq: None,
         debug: false,

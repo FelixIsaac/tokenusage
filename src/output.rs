@@ -611,6 +611,10 @@ fn menu_rows() -> Vec<MenuRow> {
             name: "session",
             desc: "Per-session token usage",
         },
+        Cmd {
+            name: "carbon",
+            desc: "Carbon footprint, energy (kWh), and water report",
+        },
         Header("Live"),
         Cmd {
             name: "live",
