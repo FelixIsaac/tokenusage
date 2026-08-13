@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${ROOT_DIR}/pypi/tu/README.md"
-RAW_BASE="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main"
+RAW_BASE="https://raw.githubusercontent.com/hanbu97/tokenusage/main"
 
 cp "${ROOT_DIR}/README.md" "${DEST}"
 

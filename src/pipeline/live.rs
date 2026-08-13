@@ -39,6 +39,9 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
         bail!("--live cannot be used together with --json/--jq");
     }
     if args.official_limits_only {
+        if args.common.no_codex {
+            bail!("--official-limits-only requires the Codex source");
+        }
         if !use_json {
             bail!("--official-limits-only requires --json or --jq");
         }

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
+  <img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
 </p>
 
 <h1 align="center">tokenusage</h1>
@@ -38,13 +38,13 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" width="50%">
       <code>tu</code> — Daily Cost Report<br/>
       <p align="center">
-        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
+        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu gui</code> — Desktop Dashboard<br/>
       <p align="center">
-        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
+        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -52,13 +52,13 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" width="50%">
       <code>tu img day</code> — Daily Social Card<br/>
       <p align="center">
-        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
+        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu img week</code> — Weekly Social Card<br/>
       <p align="center">
-        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
+        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -66,7 +66,7 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" colspan="2">
       <code>tu live</code> — Real-time TUI Monitor<br/>
       <p align="center">
-        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
+        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -279,4 +279,4 @@ All core credit for creating the initial tool belongs to the original author. Th
 
 ## 📄 License
 
-Distributed under the MIT License. See [`LICENSE`](https://github.com/FelixIsaac/tokenusage/blob/main/LICENSE) for details.
+Distributed under the MIT License. See [`LICENSE`](https://github.com/hanbu97/tokenusage/blob/main/LICENSE) for details.
