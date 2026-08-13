@@ -1,7 +1,7 @@
-#[cfg(target_os = "linux")]
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 
-#[cfg(target_os = "linux")]
 #[test]
 fn official_limits_only_is_a_no_history_codex_contract() {
     let help = std::process::Command::new(env!("CARGO_BIN_EXE_tu"))
@@ -42,7 +42,9 @@ fn official_limits_only_is_a_no_history_codex_contract() {
             .unwrap()
     };
 
-    let disabled = run(&["--no-codex"]);
+    let config = root.join("tu.json");
+    std::fs::write(&config, br#"{"defaults":{"noCodex":true}}"#).unwrap();
+    let disabled = run(&["--config", config.to_str().unwrap()]);
     assert!(!disabled.status.success());
     assert!(
         String::from_utf8_lossy(&disabled.stderr)
@@ -56,7 +58,6 @@ fn official_limits_only_is_a_no_history_codex_contract() {
     assert!(stderr.contains("oauth failed first"), "{stderr}");
 
     let missing_pricing = root.join("missing-pricing.json");
-    let config = root.join("tu.json");
     std::fs::write(&config, br#"{"commands":{"blocks":{"live":true}}}"#).unwrap();
     std::fs::write(
         codex_home.join("auth.json"),
@@ -76,7 +77,7 @@ fn official_limits_only_is_a_no_history_codex_contract() {
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let _ = stream.read(&mut [0; 1024]);
-        let body = r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":12,"reset_at":123,"limit_window_seconds":18000},"secondary_window":{"used_percent":34,"reset_at":456,"limit_window_seconds":10080}}}"#;
+        let body = r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":12,"reset_at":123,"limit_window_seconds":18000},"secondary_window":{"used_percent":34,"reset_at":456,"limit_window_seconds":604800}}}"#;
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -106,7 +107,7 @@ fn official_limits_only_is_a_no_history_codex_contract() {
                 "primary_used_percent": 12.0,
                 "secondary_used_percent": 34.0,
                 "primary_window_mins": 300,
-                "secondary_window_mins": 168,
+                "secondary_window_mins": 10080,
                 "primary_resets_at": 123,
                 "secondary_resets_at": 456
             }
