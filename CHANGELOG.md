@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.4] - 2026-08-13
+
+### Added
+- **Environmental Telemetry & Carbon Footprint Report (`tu carbon`):** Calculates IT + datacenter electrical energy (kWh), grid operational carbon emissions (kg CO₂e), cooling water draw (Liters), and eco-efficiency ratings across LLM token workloads.
+- **Physics Engine & Data Provenance Framework:** Implemented EcoLogits/ML.ENERGY GPU physics formulas separating prefill matrix multiplication from autoregressive output decoding and KV prompt cache reuse. Includes transparency disclosures (`tu carbon about`).
+- **Dynamic Multi-Tier "Wow Factor" Equivalences:** Dynamic human-scale comparisons that automatically scale depending on workload volume (Smartphone charges, Kettle boiling, EV driving, US Home Powering days, Transatlantic economy flights NYC ✈️ London, Datacenter cooling bathtubs, and Tree-years of forest CO₂ absorption).
+- **Carbon Period Subcommands & All-Time Reporting:** `tu carbon today`, `tu carbon daily`, `tu carbon weekly`, `tu carbon monthly`, and `tu carbon all` (or `tu carbon all-time`).
+- **Regional Grid Intensity Selection (`--region`):** Support for `us-east` (Virginia), `us-west` (Oregon hydro), `us-avg`, `eu-west` (France nuclear), `nordic` (Iceland/Norway hydro), `google-cfe` (24/7 CFE matched), and `global` grid regions.
+- **Interactive TUI Menu Integration:** Added `carbon` directly to the interactive Ratatui command menu (`tu` bare launcher) and support for `--tui` interactive sticky header scrolling.
+
 ## [1.11.3] - 2026-08-09
 
 ### Added

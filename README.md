@@ -193,6 +193,14 @@ tu top
 # Desktop GUI dashboard
 tu gui
 
+# Carbon footprint & environmental telemetry report (energy kWh, CO2e, water L)
+tu carbon                 # Today's carbon report
+tu carbon weekly          # Current week carbon report
+tu carbon monthly         # Current month carbon report
+tu carbon all             # Lifetime all-time carbon report
+tu carbon about           # Methodology physics equations & jargon glossary
+tu carbon --region nordic # Change grid region (us-east, us-west, eu-west, nordic, google-cfe)
+
 # Generate shareable card
 tu img day
 tu img week
