@@ -27,17 +27,7 @@ use super::statusline::*;
 use super::*;
 
 pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
-    if args.session_length == 0 {
-        bail!("--session-length must be greater than 0");
-    }
-    if args.refresh_interval == 0 {
-        bail!("--refresh-interval must be greater than 0");
-    }
-
     let use_json = should_emit_json(&args.common);
-    if args.live && use_json {
-        bail!("--live cannot be used together with --json/--jq");
-    }
     if args.official_limits_only {
         if args.common.no_codex {
             bail!("--official-limits-only requires the Codex source");
@@ -49,6 +39,17 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             &serde_json::json!({ "official_codex": fetch_codex_official_limits().await? }),
             args.common.jq.as_deref(),
         );
+    }
+
+    if args.session_length == 0 {
+        bail!("--session-length must be greater than 0");
+    }
+    if args.refresh_interval == 0 {
+        bail!("--refresh-interval must be greater than 0");
+    }
+
+    if args.live && use_json {
+        bail!("--live cannot be used together with --json/--jq");
     }
 
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
