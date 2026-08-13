@@ -57,11 +57,7 @@ fn official_limits_only_is_a_no_history_codex_contract() {
 
     let missing_pricing = root.join("missing-pricing.json");
     let config = root.join("tu.json");
-    std::fs::write(
-        &config,
-        br#"{"commands":{"blocks":{"live":true,"sessionLength":0,"refreshInterval":0}}}"#,
-    )
-    .unwrap();
+    std::fs::write(&config, br#"{"commands":{"blocks":{"live":true}}}"#).unwrap();
     std::fs::write(
         codex_home.join("auth.json"),
         br#"{"OPENAI_API_KEY":"test-token"}"#,
