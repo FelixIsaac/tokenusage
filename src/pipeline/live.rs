@@ -46,9 +46,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             bail!("--official-limits-only requires --json or --jq");
         }
         return emit_json(
-            &serde_json::json!({
-                "official_codex": fetch_codex_official_limits().await?,
-            }),
+            &serde_json::json!({ "official_codex": fetch_codex_official_limits().await? }),
             args.common.jq.as_deref(),
         );
     }
