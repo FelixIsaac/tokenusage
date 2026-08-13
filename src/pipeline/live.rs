@@ -38,6 +38,17 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     if args.live && use_json {
         bail!("--live cannot be used together with --json/--jq");
     }
+    if args.official_limits_only {
+        if !use_json {
+            bail!("--official-limits-only requires --json or --jq");
+        }
+        return emit_json(
+            &serde_json::json!({
+                "official_codex": fetch_codex_official_limits().await?,
+            }),
+            args.common.jq.as_deref(),
+        );
+    }
 
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let window_secs = i64::from(args.session_length) * 3600;

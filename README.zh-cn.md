@@ -93,7 +93,7 @@
 | 服务商 / 助手 | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | 日志 / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | — | `tu codex` |
+| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | 日志 / JSON | ✅ | ✅ | — | `tu gemini` |
 | **OpenCode** | 日志 / JSON | ✅ | ✅ | — | `tu opencode` |
@@ -171,6 +171,7 @@ tu --tui
 
 # 指定 AI 助手报表
 tu codex daily
+tu blocks --official-limits-only --json # 官方 Codex 配额，不读取本地历史
 tu claude weekly
 tu antigravity
 tu antigravity status      # 实时套餐等级 + 会话/周配额百分比

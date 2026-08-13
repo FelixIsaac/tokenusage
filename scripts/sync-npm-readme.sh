@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_README="${ROOT_DIR}/README.md"
 DST_README="${ROOT_DIR}/npm/tu/README.md"
 
-REPO_BLOB_BASE="https://github.com/hanbu97/tokenusage/blob/main"
-REPO_RAW_BASE="https://raw.githubusercontent.com/hanbu97/tokenusage/main"
+REPO_BLOB_BASE="https://github.com/FelixIsaac/tokenusage/blob/main"
+REPO_RAW_BASE="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main"
 
 tmp_file="$(mktemp)"
 trap 'rm -f "${tmp_file}"' EXIT

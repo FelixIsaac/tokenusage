@@ -93,7 +93,7 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 | Provider | Data Source | Local Parsing | Real-time TUI (`tu live`/`top`) | Quota / Balance Probe | Command Shortcut |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | Log / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | Log / JSON | ✅ | ✅ | — | `tu codex` |
+| **OpenAI Codex** | Log / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | Log / JSON | ✅ | ✅ | — | `tu gemini` |
 | **OpenCode** | Log / JSON | ✅ | ✅ | — | `tu opencode` |
@@ -171,6 +171,7 @@ tu --tui
 
 # Provider-specific commands
 tu codex daily
+tu blocks --official-limits-only --json # Official Codex limits without local history
 tu claude weekly
 tu antigravity
 tu antigravity status      # Live plan tier + session/weekly quota %
