@@ -529,14 +529,19 @@ fn gemini_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
 }
 
 fn grok_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
-    if common.grok_log_dir.is_empty() {
-        return vec![home.join(".grok").join("logs")];
+    if !common.grok_log_dir.is_empty() {
+        return common
+            .grok_log_dir
+            .iter()
+            .map(|p| expand_user_path(p))
+            .collect();
     }
-    common
-        .grok_log_dir
-        .iter()
-        .map(|p| expand_user_path(p))
-        .collect()
+    let sessions_dir = home.join(".grok").join("sessions");
+    if sessions_dir.is_dir() {
+        vec![sessions_dir]
+    } else {
+        vec![home.join(".grok").join("logs")]
+    }
 }
 
 fn opencode_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
@@ -690,6 +695,13 @@ pub(super) fn discover_files_in_root(
                 .replace('\\', "/")
                 .to_ascii_lowercase();
             if !normalized.contains("/storage/message/") {
+                continue;
+            }
+        }
+
+        if kind == SourceKind::Grok {
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if file_name != "updates.jsonl" && file_name != "unified.jsonl" {
                 continue;
             }
         }
@@ -1087,6 +1099,8 @@ fn provider_fast_line_markers(source: SourceKind) -> &'static [&'static str] {
         ],
         SourceKind::OpenCode => &[],
         SourceKind::Grok => &[
+            "\"sessionUpdate\":\"turn_completed\"",
+            "\"sessionUpdate\": \"turn_completed\"",
             "\"msg\":\"shell.turn.inference_done\"",
             "\"msg\": \"shell.turn.inference_done\"",
         ],
@@ -1111,6 +1125,19 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
                 .unwrap_or_default()
                 .to_string()
         }
+        SourceKind::Grok => {
+            // `<encoded_cwd>/<sessionID>/updates.jsonl` -> `<sessionID>`
+            let normalized = relative.to_string_lossy().replace('\\', "/");
+            let parts: Vec<&str> = normalized.split('/').collect();
+            if parts.len() >= 2 {
+                parts[parts.len() - 2].to_string()
+            } else {
+                relative
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            }
+        }
         _ => relative
             .with_extension("")
             .to_string_lossy()
@@ -1128,7 +1155,7 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
         SourceKind::Codex => extract_codex_project_from_file(&file.path).or(raw_project),
         SourceKind::Gemini => None,
         SourceKind::OpenCode => None,
-        SourceKind::Grok => None,
+        SourceKind::Grok => raw_project.map(|p| decode_grok_project_dir(&p)),
     };
 
     (session, project)
@@ -1156,6 +1183,51 @@ pub(super) fn decode_claude_project_dir(dir_name: &str) -> String {
     } else {
         dir_name.to_string()
     }
+}
+
+/// Decode Grok URL-encoded cwd folder (e.g. `%2FUsers%2Ffelix%2FProjects%2Fequity-signals`)
+/// into a clean project name (`equity-signals`).
+pub(super) fn decode_grok_project_dir(dir_name: &str) -> String {
+    let unencoded = if dir_name.contains("%2F") || dir_name.contains("%2f") {
+        percent_decode_str(dir_name)
+    } else {
+        dir_name.to_string()
+    };
+    let trimmed = unencoded.trim_end_matches('/');
+    if let Some(name) = trimmed.split('/').next_back() {
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    dir_name.to_string()
+}
+
+fn percent_decode_str(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(c1), Some(c2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", c1, c2), 16) {
+                    out.push(byte as char);
+                    continue;
+                }
+                out.push('%');
+                out.push(c1);
+                out.push(c2);
+            } else {
+                out.push('%');
+                if let Some(c1) = h1 {
+                    out.push(c1);
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Read the first line of a Codex JSONL file to extract project from session_meta cwd.
@@ -1513,22 +1585,98 @@ pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> Par
     })
 }
 
-/// Parse one line of `~/.grok/logs/unified.jsonl`.
+/// Parse one line of Grok session (`updates.jsonl`) or unified log (`unified.jsonl`).
 ///
-/// Only `"msg":"shell.turn.inference_done"` lines carry token accounting;
-/// everything else (phase transitions, auth, tool exec logs, etc.) is
-/// filtered out by [`provider_fast_line_markers`] before this is even called.
-///
-/// The log has no per-turn model field, so every event is labelled with
-/// [`crate::types::GROK_DEFAULT_MODEL_FALLBACK`]. `prompt_tokens` already
-/// includes `cached_prompt_tokens`, so fresh input tokens are the
-/// difference between the two.
+/// Supports:
+/// 1. `~/.grok/sessions/<encoded_cwd>/<session_id>/updates.jsonl` with `"sessionUpdate":"turn_completed"`
+///    containing explicit per-model breakdowns, exact token metrics, and costUsdTicks.
+/// 2. `~/.grok/logs/unified.jsonl` with `"msg":"shell.turn.inference_done"` for fallback.
 pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
     let value: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => return ParseLineResult::InvalidJson,
     };
 
+    // Format 1: updates.jsonl line with turn_completed
+    let is_turn_completed = get_value(&value, "params.update.sessionUpdate")
+        .or_else(|| get_value(&value, "update.sessionUpdate"))
+        .and_then(Value::as_str)
+        == Some("turn_completed");
+
+    if is_turn_completed {
+        let timestamp = extract_timestamp(&value)
+            .or_else(|| get_value(&value, "_meta.agentTimestampMs").and_then(parse_timestamp_value))
+            .or_else(|| get_value(&value, "timestamp").and_then(parse_timestamp_value));
+        let Some(timestamp) = timestamp else {
+            return ParseLineResult::MissingUsage;
+        };
+
+        let session =
+            extract_string(&value, &["params.sessionId", "sessionId"]).unwrap_or_default();
+        let usage_obj =
+            get_value(&value, "params.update.usage").or_else(|| get_value(&value, "update.usage"));
+
+        let Some(usage_val) = usage_obj else {
+            return ParseLineResult::MissingUsage;
+        };
+
+        let input_tokens = extract_u64(usage_val, &["inputTokens"]).unwrap_or(0);
+        let cached_read_tokens = extract_u64(usage_val, &["cachedReadTokens"]).unwrap_or(0);
+        let output_tokens = extract_u64(usage_val, &["outputTokens"]).unwrap_or(0);
+        let reasoning_tokens = extract_u64(usage_val, &["reasoningTokens"]).unwrap_or(0);
+        let cost_usd_ticks = extract_u64(usage_val, &["costUsdTicks"]).unwrap_or(0);
+
+        let usage = UsageAccumulator {
+            input_tokens: input_tokens.saturating_sub(cached_read_tokens),
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: cached_read_tokens,
+            output_tokens,
+            reasoning_output_tokens: reasoning_tokens,
+            cost_usd: 0.0,
+        };
+
+        if usage.total_tokens() == 0 {
+            return ParseLineResult::MissingUsage;
+        }
+
+        // Determine model from modelUsage map or fallback
+        let model = if let Some(model_usage) =
+            get_value(usage_val, "modelUsage").and_then(Value::as_object)
+        {
+            model_usage
+                .iter()
+                .max_by_key(|(_, v)| extract_u64(v, &["totalTokens", "inputTokens"]).unwrap_or(0))
+                .map(|(k, _)| k.clone())
+                .unwrap_or_else(|| crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string())
+        } else {
+            extract_string(usage_val, &["model", "model_id"])
+                .unwrap_or_else(|| crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string())
+        };
+
+        let (cost_usd, used_unknown_pricing) = if cost_usd_ticks > 0 {
+            ((cost_usd_ticks as f64) / 1e9, false)
+        } else {
+            match pricing.estimate_cost(&model, usage) {
+                Some(v) => (v, false),
+                None => (0.0, true),
+            }
+        };
+
+        return ParseLineResult::Parsed(ParsedLine {
+            event: UsageEvent {
+                timestamp,
+                source: SourceKind::Grok,
+                model,
+                session,
+                project: None,
+                file_path: String::new(),
+                usage: UsageAccumulator { cost_usd, ..usage },
+            },
+            used_unknown_pricing,
+        });
+    }
+
+    // Format 2: unified.jsonl line with shell.turn.inference_done
     if get_value(&value, "msg").and_then(Value::as_str) != Some("shell.turn.inference_done") {
         return ParseLineResult::MissingUsage;
     }
@@ -2382,7 +2530,7 @@ fn provider_model_paths(source: SourceKind) -> &'static [&'static str] {
         SourceKind::OpenCode => &["model.modelID", "modelID", "model"],
         // Grok's unified.jsonl never records a per-turn model name; the
         // fallback in `parse_grok_usage_line` is used unconditionally instead.
-        SourceKind::Grok => &[],
+        SourceKind::Grok => &["params.update.usage.model", "update.usage.model", "model"],
     }
 }
 
@@ -3245,5 +3393,56 @@ mod cache_tests {
         let _ = std::fs::remove_file(&json_path);
         cleanup(&path);
         cleanup(&path2);
+    }
+
+    #[test]
+    fn parse_grok_session_update_turn_completed() {
+        let pricing = PricingTable::default();
+        let sample = r#"{"timestamp":1785179745,"method":"_x.ai/session/update","params":{"sessionId":"019fa4ff-8769-76c1-b662-ab0d9141d183","update":{"sessionUpdate":"turn_completed","prompt_id":"019fa4ff-8a6a-7b71-a71e-e681dee271c4","stop_reason":"end_turn","usage":{"inputTokens":659466,"outputTokens":11143,"totalTokens":670609,"cachedReadTokens":608640,"reasoningTokens":6744,"modelCalls":15,"apiDurationMs":102689,"costUsdTicks":1948400000,"modelUsage":{"grok-4.6-build":{"inputTokens":659466,"outputTokens":11143,"totalTokens":670609,"cachedReadTokens":608640,"reasoningTokens":6744,"modelCalls":15,"apiDurationMs":102689,"costUsdTicks":1948400000}},"numTurns":15}},"_meta":{"eventId":"019fa4ff-8769-76c1-b662-ab0d9141d183-38799","agentTimestampMs":1785179745037}}}"#;
+
+        let result = parse_grok_usage_line(sample, &pricing);
+        let ParseLineResult::Parsed(parsed) = result else {
+            panic!("Expected parsed result");
+        };
+
+        assert_eq!(parsed.event.source, SourceKind::Grok);
+        assert_eq!(parsed.event.model, "grok-4.6-build");
+        assert_eq!(parsed.event.session, "019fa4ff-8769-76c1-b662-ab0d9141d183");
+        assert_eq!(parsed.event.usage.input_tokens, 659466 - 608640);
+        assert_eq!(parsed.event.usage.cache_read_input_tokens, 608640);
+        assert_eq!(parsed.event.usage.output_tokens, 11143);
+        assert_eq!(parsed.event.usage.reasoning_output_tokens, 6744);
+        assert!((parsed.event.usage.cost_usd - 1.9484).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_grok_unified_log_turn_inference_done() {
+        let pricing = PricingTable::default();
+        let sample = r#"{"ts":"2026-08-25T14:12:31.661Z","src":"shell","pid":49284,"ver":"1.0.5","lvl":"info","sid":"01a03943-f501-70f3-a587-28e468a24112","msg":"shell.turn.inference_done","ctx":{"prompt_tokens":1000,"cached_prompt_tokens":800,"completion_tokens":200,"reasoning_tokens":50}}"#;
+
+        let result = parse_grok_usage_line(sample, &pricing);
+        let ParseLineResult::Parsed(parsed) = result else {
+            panic!("Expected parsed result");
+        };
+
+        assert_eq!(parsed.event.source, SourceKind::Grok);
+        assert_eq!(parsed.event.session, "01a03943-f501-70f3-a587-28e468a24112");
+        assert_eq!(parsed.event.usage.input_tokens, 200);
+        assert_eq!(parsed.event.usage.cache_read_input_tokens, 800);
+        assert_eq!(parsed.event.usage.output_tokens, 200);
+        assert_eq!(parsed.event.usage.reasoning_output_tokens, 50);
+    }
+
+    #[test]
+    fn decode_grok_project_dir_url_decodes_cleanly() {
+        assert_eq!(
+            decode_grok_project_dir("%2FUsers%2Ffelix%2FProjects%2Fequity-signals"),
+            "equity-signals"
+        );
+        assert_eq!(decode_grok_project_dir("%2Fprivate%2Ftmp"), "tmp");
+        assert_eq!(
+            decode_grok_project_dir("standalone-proj"),
+            "standalone-proj"
+        );
     }
 }

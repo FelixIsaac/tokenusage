@@ -496,6 +496,25 @@ impl PricingTable {
             },
         ));
 
+        // xAI Grok 4.6: $3/M input, $0.75/M cached input, $15/M output under
+        // 200K prompt tokens; doubles above threshold.
+        table.prefixes.push((
+            "grok-4.6".to_string(),
+            PricingRate {
+                input_per_million: 3.0,
+                output_per_million: 15.0,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.75,
+                reasoning_output_per_million: 0.0,
+                tier_threshold_tokens: Some(200_000),
+                input_above_per_million: Some(6.0),
+                output_above_per_million: Some(30.0),
+                cache_creation_above_per_million: None,
+                cache_read_above_per_million: Some(1.5),
+                reasoning_output_above_per_million: None,
+            },
+        ));
+
         table
             .prefixes
             .sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
@@ -653,6 +672,9 @@ fn model_pricing_alias(model_key: &str) -> String {
         "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
         "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
         "grok-proxy" | "grok-build" => GROK_DEFAULT_MODEL_FALLBACK.to_string(),
+        other if other.ends_with("-build") => {
+            other.strip_suffix("-build").unwrap_or(other).to_string()
+        }
         other => other.to_string(),
     }
 }
