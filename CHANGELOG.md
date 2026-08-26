@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.5] - 2026-08-27
+
+### Added
+- **Canonical `tu codex status` Subcommand:** Wired up `tu codex status` to the zero-history official Codex limits probe, matching `tu antigravity status` and supporting downstream status bars like Yazelix Nova Bar.
+- **PR #2 Merged (`--official-limits-only`):** Added `tu blocks --official-limits-only --json` fast bypass path, reducing memory usage by 95.1% (14.8 MiB vs 304 MiB) and execution time to ~0.60s without touching disk parse caches or pricing databases.
+- **Built-in Offline Model Pricing:** Added default rates for `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-3-5-haiku`, `gemini-3.1-pro`, `gemini-3.6-flash`, `gemini-2.5-flash`, and others.
+- **Zero-Allocation Model Normalization:** Fast zero-copy `Cow<str>` model key normalization eliminating 150k+ runtime heap allocations during cache hydration.
+
+### Fixed
+- **Reasoning Token Double-Counting:** Fixed token accumulator so generated reasoning/thinking tokens (which are a subset of output tokens) are not double-counted in `total_tokens()` or un-split output pricing.
+- **UTF-8 Char Boundary Safety:** Hardened string truncation and line prefix scanning against slicing mid-byte on multi-byte UTF-8 Unicode characters.
+- **OpenCode SQLite LEFT JOIN:** Switched message query to `LEFT JOIN` on sessions and projects with `Option<String>` unwraps, preventing silent data drops when project worktree is null.
+- **Claude Deduplication:** Fixed deduplication to operate on `message_id` even if `request_id` is missing in transcripts.
+- **SQLite Cache PRAGMAs:** Configured memory-mapped I/O (`mmap_size`), in-memory temp tables, and direct byte slice deserialization in `load_incremental_cache_inner`.
+
 ## [1.11.4] - 2026-08-27
 
 ### Added
