@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.6] - 2026-08-27
+
+### Performance & Engine
+- **Zero-Allocation Pricing Alias Lookups:** Converted `model_pricing_alias` to return `Cow<'a, str>`, eliminating heap allocations on unaliased models in the innermost cost estimation loop.
+- **64-Shard Threadpool Deduplication:** Sharded `ClaudeGlobalDedupe` into 64 lock buckets using `u64` hashes, eliminating global mutex contention across concurrent Rayon worker threads.
+- **SQLite History Engine Tuning:** Enabled memory-mapped I/O (`mmap_size = 64MB`) and `PRAGMA synchronous = NORMAL` for `history.db` writes.
+- **MSRV Compatibility Fix:** Replaced `floor_char_boundary` with MSRV 1.87-compatible `is_char_boundary` loop.
+
 ## [1.11.5] - 2026-08-27
 
 ### Added

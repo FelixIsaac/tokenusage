@@ -866,18 +866,37 @@ pub(super) fn worker_loop(
     output
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct ClaudeGlobalDedupe {
-    seen_keys: Mutex<HashSet<String>>,
+    shards: [Mutex<HashSet<u64>>; 64],
+}
+
+impl Default for ClaudeGlobalDedupe {
+    fn default() -> Self {
+        Self {
+            shards: std::array::from_fn(|_| Mutex::new(HashSet::new())),
+        }
+    }
 }
 
 impl ClaudeGlobalDedupe {
+    #[inline]
+    fn hash_key(key: &str) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[inline]
     fn insert(&self, key: &str) -> bool {
-        let mut seen = self
-            .seen_keys
+        let hash = Self::hash_key(key);
+        let shard_idx = (hash as usize) & 63;
+        let mut seen = self.shards[shard_idx]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        seen.insert(key.to_string())
+        seen.insert(hash)
     }
 }
 

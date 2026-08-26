@@ -144,7 +144,12 @@ pub fn apply_monthly_overrides_with_data(
 pub fn init_history_db() -> Result<Connection> {
     let path = get_history_db_path().context("Could not locate home directory for history.db")?;
     let conn = Connection::open(path)?;
-    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;");
+    let _ = conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA mmap_size=67108864;
+         PRAGMA busy_timeout=3000;",
+    );
     conn.execute(
         "CREATE TABLE IF NOT EXISTS daily_history (
             date TEXT PRIMARY KEY,
@@ -163,6 +168,9 @@ pub fn init_history_db() -> Result<Connection> {
 
 /// Persist current report rows to history.db SQLite.
 pub fn persist_report_rows(rows: &[DailyRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
     let Ok(mut conn) = init_history_db() else {
         return Ok(());
     };

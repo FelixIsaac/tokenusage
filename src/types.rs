@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -672,8 +673,8 @@ impl PricingTable {
         // pricing doesn't vary by, but public catalogs (OpenRouter,
         // models.dev) only carry the base "-preview" public name.
         let aliased = model_pricing_alias(model_key.as_ref());
-        if aliased != model_key.as_ref() {
-            if let Some(rate) = self.exact.get(&aliased) {
+        if aliased.as_ref() != model_key.as_ref() {
+            if let Some(rate) = self.exact.get(aliased.as_ref()) {
                 return Some(rate);
             }
             return self
@@ -798,21 +799,21 @@ fn canonical_model_key_fast(model: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn model_pricing_alias(model_key: &str) -> String {
+fn model_pricing_alias<'a>(model_key: &'a str) -> Cow<'a, str> {
     let base = ["-xhigh", "-high", "-medium", "-low", "-none"]
         .iter()
         .find_map(|suffix| model_key.strip_suffix(suffix))
         .unwrap_or(model_key);
 
     match base {
-        "gemini-3.1-pro" => "gemini-3.1-pro-preview".to_string(),
-        "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
-        "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
-        "grok-proxy" | "grok-build" => GROK_DEFAULT_MODEL_FALLBACK.to_string(),
+        "gemini-3.1-pro" => Cow::Borrowed("gemini-3.1-pro-preview"),
+        "gemini-3-pro" => Cow::Borrowed("gemini-3-pro-preview"),
+        "gemini-3-flash" => Cow::Borrowed("gemini-3-flash-preview"),
+        "grok-proxy" | "grok-build" => Cow::Borrowed(GROK_DEFAULT_MODEL_FALLBACK),
         other if other.ends_with("-build") => {
-            other.strip_suffix("-build").unwrap_or(other).to_string()
+            Cow::Borrowed(other.strip_suffix("-build").unwrap_or(other))
         }
-        other => other.to_string(),
+        _ => Cow::Borrowed(base),
     }
 }
 
