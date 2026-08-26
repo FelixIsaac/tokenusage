@@ -516,7 +516,7 @@ fn apply_weekly_config(args: &mut WeeklyArgs, cfg: &WeeklyConfig) {
     merge_if_default(
         &mut args.start_of_week,
         cfg.start_of_week,
-        WeekStart::Sunday,
+        WeekStart::Monday,
     );
 }
 
@@ -575,7 +575,7 @@ fn apply_gui_config(args: &mut GuiArgs, cfg: &GuiConfig) {
     merge_if_default(
         &mut args.start_of_week,
         cfg.start_of_week,
-        WeekStart::Sunday,
+        WeekStart::Monday,
     );
 }
 

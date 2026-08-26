@@ -214,9 +214,9 @@ pub enum SortOrder {
 /// [`ReportPeriod::Weekly`](crate::ReportPeriod::Weekly).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WeekStart {
-    /// Sunday (default, ISO-like US convention).
-    #[default]
     Sunday,
+    /// Monday (default, ISO 8601 convention).
+    #[default]
     Monday,
     Tuesday,
     Wednesday,

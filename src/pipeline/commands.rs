@@ -691,10 +691,15 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let loaded = load_usage(&args.common, &tz).await?;
 
-    let rows = build_group_rows(&loaded.events, ReportPeriod::Monthly, &args.common, |event| {
-        let day = local_date(event.timestamp, &tz);
-        format!("{:04}-{:02}", day.year(), day.month())
-    });
+    let rows = build_group_rows(
+        &loaded.events,
+        ReportPeriod::Monthly,
+        &args.common,
+        |event| {
+            let day = local_date(event.timestamp, &tz);
+            format!("{:04}-{:02}", day.year(), day.month())
+        },
+    );
     let period_attribution = build_period_attribution(&loaded.events, |event| {
         let day = local_date(event.timestamp, &tz);
         format!("{:04}-{:02}", day.year(), day.month())
@@ -760,11 +765,16 @@ pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
     let loaded = load_usage(&args.common, &tz).await?;
 
-    let rows = build_group_rows(&loaded.events, ReportPeriod::Weekly, &args.common, |event| {
-        let day = local_date(event.timestamp, &tz);
-        let start = week_start(day, args.start_of_week);
-        format!("{}", start.format("%Y-%m-%d"))
-    });
+    let rows = build_group_rows(
+        &loaded.events,
+        ReportPeriod::Weekly,
+        &args.common,
+        |event| {
+            let day = local_date(event.timestamp, &tz);
+            let start = week_start(day, args.start_of_week);
+            format!("{}", start.format("%Y-%m-%d"))
+        },
+    );
     let period_attribution = build_period_attribution(&loaded.events, |event| {
         let day = local_date(event.timestamp, &tz);
         let start = week_start(day, args.start_of_week);
@@ -1223,15 +1233,19 @@ pub async fn collect_report(
                 }
             })
         }
-        ReportPeriod::Monthly => build_group_rows(&loaded.events, ReportPeriod::Monthly, &common, |event| {
-            let day = local_date(event.timestamp, &tz);
-            format!("{:04}-{:02}", day.year(), day.month())
-        }),
-        ReportPeriod::Weekly => build_group_rows(&loaded.events, ReportPeriod::Weekly, &common, |event| {
-            let day = local_date(event.timestamp, &tz);
-            let start = week_start(day, start_of_week);
-            start.format("%Y-%m-%d").to_string()
-        }),
+        ReportPeriod::Monthly => {
+            build_group_rows(&loaded.events, ReportPeriod::Monthly, &common, |event| {
+                let day = local_date(event.timestamp, &tz);
+                format!("{:04}-{:02}", day.year(), day.month())
+            })
+        }
+        ReportPeriod::Weekly => {
+            build_group_rows(&loaded.events, ReportPeriod::Weekly, &common, |event| {
+                let day = local_date(event.timestamp, &tz);
+                let start = week_start(day, start_of_week);
+                start.format("%Y-%m-%d").to_string()
+            })
+        }
     };
 
     let (rows, activity_totals) = enrich_rows_with_activity(
@@ -1448,8 +1462,9 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
 
     let today_date = local_date(Utc::now(), &tz);
     let monday_date = week_start(today_date, crate::cli::WeekStart::Monday);
-    let month_start_date = chrono::NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1)
-        .unwrap_or(today_date);
+    let month_start_date =
+        chrono::NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1)
+            .unwrap_or(today_date);
     let seven_days_ago = today_date - chrono::TimeDelta::days(7);
 
     let events = loaded.events;
@@ -1508,7 +1523,10 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
     // Group events by model for per-model breakdown
     let mut model_events: BTreeMap<String, Vec<&UsageEvent>> = BTreeMap::new();
     for event in &events {
-        model_events.entry(event.model.clone()).or_default().push(event);
+        model_events
+            .entry(event.model.clone())
+            .or_default()
+            .push(event);
     }
 
     #[derive(Serialize)]
@@ -1577,23 +1595,50 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         emit_json(&out, args.common.jq.as_deref())
     } else {
         println!();
-        println!("+--------------------------------------------------------------------------------------+");
-        println!("|                    TOKENUSAGE (tu) ENVIRONMENTAL IMPACT REPORT                      |");
-        println!("|                                Period: {:<45} |", format!("{:?}", args.period));
-        println!("+--------------------------------------------------------------------------------------+");
+        println!(
+            "+--------------------------------------------------------------------------------------+"
+        );
+        println!(
+            "|                    TOKENUSAGE (tu) ENVIRONMENTAL IMPACT REPORT                      |"
+        );
+        println!(
+            "|                                Period: {:<45} |",
+            format!("{:?}", args.period)
+        );
+        println!(
+            "+--------------------------------------------------------------------------------------+"
+        );
         println!();
         println!(" SUMMARY METRICS:");
-        println!("  Total Tokens Processed : {}", format_commas_u64(total_tokens));
+        println!(
+            "  Total Tokens Processed : {}",
+            format_commas_u64(total_tokens)
+        );
         println!("  Estimated USD Cost     : {}", format_currency(total_cost));
-        println!("----------------------------------------------------------------------------------------");
+        println!(
+            "----------------------------------------------------------------------------------------"
+        );
         println!(" ENERGY & POWER:");
-        println!("  Total IT + DC Energy   : {} kWh ({} Wh)", format_commas_f64(total_metrics.energy_kwh, 3), format_commas_f64(total_metrics.energy_kwh * 1000.0, 1));
-        println!("  Datacenter PUE Factor  : {:.2}x (Hyperscaler Average)", pue);
+        println!(
+            "  Total IT + DC Energy   : {} kWh ({} Wh)",
+            format_commas_f64(total_metrics.energy_kwh, 3),
+            format_commas_f64(total_metrics.energy_kwh * 1000.0, 1)
+        );
+        println!(
+            "  Datacenter PUE Factor  : {:.2}x (Hyperscaler Average)",
+            pue
+        );
         println!();
         println!(" ENVIRONMENTAL FOOTPRINT:");
-        println!("  Carbon Footprint (CO2e): {}", format_carbon_human(total_metrics.carbon_gco2e));
+        println!(
+            "  Carbon Footprint (CO2e): {}",
+            format_carbon_human(total_metrics.carbon_gco2e)
+        );
         println!("  Grid Carbon Intensity  : {}", grid.display_name());
-        println!("  Water Consumption      : {}", format_water_human(total_metrics.water_ml));
+        println!(
+            "  Water Consumption      : {}",
+            format_water_human(total_metrics.water_ml)
+        );
         println!();
         println!(" ENVIRONMENTAL EQUIVALENCES:");
         for line in equiv.wow_factor_summary_lines(&total_metrics) {
@@ -1601,7 +1646,10 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         }
         println!();
         println!(" MODEL BREAKDOWN:");
-        println!("{:<30} {:>16} {:>14} {:>14} {:>12}", "Model", "Tokens", "Energy (kWh)", "Carbon (kg)", "Water (L)");
+        println!(
+            "{:<30} {:>16} {:>14} {:>14} {:>12}",
+            "Model", "Tokens", "Energy (kWh)", "Carbon (kg)", "Water (L)"
+        );
         println!("{}", "-".repeat(88));
         for row in &model_rows {
             println!(
@@ -1623,14 +1671,31 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
             total_metrics.water_ml / 1000.0
         );
         println!();
-        println!(" ECO-EFFICIENCY RATING:  [ Grade {} ] - {}", rating_grade, rating_desc);
-        println!("+--------------------------------------------------------------------------------------+");
+        println!(
+            " ECO-EFFICIENCY RATING:  [ Grade {} ] - {}",
+            rating_grade, rating_desc
+        );
+        println!(
+            "+--------------------------------------------------------------------------------------+"
+        );
         println!(" DATA PROVENANCE & METHODOLOGY NOTE:");
-        println!("  • Anthropic, OpenAI & Google treat per-inference energy & cluster hardware as trade secrets.");
-        println!("  • Estimates use peer-reviewed GPU physics models (EcoLogits, ML.ENERGY, Luccioni et al. 2023).");
-        println!("  • Assumes tiered H100/A100 compute profiles, PUE {:.2}x, & {} grid.", pue, grid.display_name());
-        println!("  • 💡 Tip: Run 'tu carbon about' for full methodology, physics assumptions & term definitions.");
-        println!("+--------------------------------------------------------------------------------------+");
+        println!(
+            "  • Anthropic, OpenAI & Google treat per-inference energy & cluster hardware as trade secrets."
+        );
+        println!(
+            "  • Estimates use peer-reviewed GPU physics models (EcoLogits, ML.ENERGY, Luccioni et al. 2023)."
+        );
+        println!(
+            "  • Assumes tiered H100/A100 compute profiles, PUE {:.2}x, & {} grid.",
+            pue,
+            grid.display_name()
+        );
+        println!(
+            "  • 💡 Tip: Run 'tu carbon about' for full methodology, physics assumptions & term definitions."
+        );
+        println!(
+            "+--------------------------------------------------------------------------------------+"
+        );
         println!();
         Ok(())
     }
@@ -1678,47 +1743,79 @@ fn print_carbon_about(use_json: bool, jq: Option<&str>) -> Result<()> {
         emit_json(&out, jq)
     } else {
         println!();
-        println!("========================================================================================");
+        println!(
+            "========================================================================================"
+        );
         println!("             TOKENUSAGE (tu) - ENVIRONMENTAL IMPACT METRICS & METHODOLOGY GUIDE");
-        println!("========================================================================================");
+        println!(
+            "========================================================================================"
+        );
         println!();
         println!(" 🌿 1. PURPOSE & OVERVIEW");
-        println!("    As developer AI tooling (Claude Code, Antigravity, Codex, Grok, etc.) consumes millions");
-        println!("    of tokens daily, tokenusage calculates the physical electrical energy (kWh), carbon");
-        println!("    emissions (gCO2e), and cooling water draw (mL) associated with your LLM workloads.");
+        println!(
+            "    As developer AI tooling (Claude Code, Antigravity, Codex, Grok, etc.) consumes millions"
+        );
+        println!(
+            "    of tokens daily, tokenusage calculates the physical electrical energy (kWh), carbon"
+        );
+        println!(
+            "    emissions (gCO2e), and cooling water draw (mL) associated with your LLM workloads."
+        );
         println!();
         println!(" ⚡ 2. COMPUTATIONAL & ENERGY PHYSICS ASSUMPTIONS");
         println!("    LLM inference operates in distinct computational phases:");
         println!();
         println!("    • PREFILL (Input Tokens):");
-        println!("      Compute-bound matrix multiplication (2 * P * L FLOPs). Processed in parallel");
+        println!(
+            "      Compute-bound matrix multiplication (2 * P * L FLOPs). Processed in parallel"
+        );
         println!("      batches. Energy rate: ~0.03 - 0.15 kWh per 1 Million tokens.");
         println!();
         println!("    • AUTOREGRESSIVE DECODING (Output & Reasoning Tokens):");
-        println!("      Memory-bandwidth bound. Every generated token requires loading the full model weight");
+        println!(
+            "      Memory-bandwidth bound. Every generated token requires loading the full model weight"
+        );
         println!("      matrices (2 * P bytes) from GPU High-Bandwidth Memory (HBM).");
-        println!("      --> Energy rate: ~0.18 - 3.80 kWh per 1 Million tokens (4x - 6x MORE energy than input!).");
+        println!(
+            "      --> Energy rate: ~0.18 - 3.80 kWh per 1 Million tokens (4x - 6x MORE energy than input!)."
+        );
         println!();
         println!("    • PROMPT CACHE READS:");
         println!("      Reuses existing KV attention state, skipping model weight calculations.");
-        println!("      --> Energy rate: ~0.02 - 0.40 kWh per 1 Million tokens (~80% energy savings).");
+        println!(
+            "      --> Energy rate: ~0.02 - 0.40 kWh per 1 Million tokens (~80% energy savings)."
+        );
         println!();
         println!("    • REASONING / THINKING TOKENS:");
-        println!("      Chain-of-thought tokens produced during reasoning steps (e.g. Claude Opus 4.5/5, o1/o3).");
-        println!("      Billed at output decoding energy rates due to step-by-step HBM memory passes.");
+        println!(
+            "      Chain-of-thought tokens produced during reasoning steps (e.g. Claude Opus 4.5/5, o1/o3)."
+        );
+        println!(
+            "      Billed at output decoding energy rates due to step-by-step HBM memory passes."
+        );
         println!();
         println!(" 📊 3. TERMINOLOGY & JARGON GLOSSARY");
         println!("    • PUE (Power Usage Effectiveness):");
         println!("      Ratio of total datacenter facility energy to IT hardware energy.");
-        println!("      --> Default: 1.15x (Hyperscaler average: 1.0 kWh GPU compute + 0.15 kWh cooling/power).");
+        println!(
+            "      --> Default: 1.15x (Hyperscaler average: 1.0 kWh GPU compute + 0.15 kWh cooling/power)."
+        );
         println!();
         println!("    • WUE (Water Usage Effectiveness):");
-        println!("      Total water consumed per kWh generated (direct cooling evaporation + indirect power plant cooling).");
-        println!("      --> Default: 4.30 Liters / kWh (UC Riverside 'Making AI Less Thirsty' study).");
+        println!(
+            "      Total water consumed per kWh generated (direct cooling evaporation + indirect power plant cooling)."
+        );
+        println!(
+            "      --> Default: 4.30 Liters / kWh (UC Riverside 'Making AI Less Thirsty' study)."
+        );
         println!();
         println!("    • GRID CARBON INTENSITY (gCO2e / kWh):");
-        println!("      Carbon emissions produced per kilowatt-hour based on the regional electrical grid mix:");
-        println!("        - us-east    : 310 gCO2e/kWh (Virginia / AWS us-east-1 fossil + nuclear)");
+        println!(
+            "      Carbon emissions produced per kilowatt-hour based on the regional electrical grid mix:"
+        );
+        println!(
+            "        - us-east    : 310 gCO2e/kWh (Virginia / AWS us-east-1 fossil + nuclear)"
+        );
         println!("        - us-west    : 120 gCO2e/kWh (Oregon Hydroelectric)");
         println!("        - us-avg     : 368 gCO2e/kWh (US National Grid Average)");
         println!("        - eu-west    :  55 gCO2e/kWh (France Low-Carbon Nuclear)");
@@ -1727,26 +1824,46 @@ fn print_carbon_about(use_json: bool, jq: Option<&str>) -> Result<()> {
         println!("        - global     : 475 gCO2e/kWh (Global Grid Average)");
         println!();
         println!("    • EMBODIED CARBON:");
-        println!("      Emissions from GPU silicon manufacturing, server chassis, and datacenter construction,");
+        println!(
+            "      Emissions from GPU silicon manufacturing, server chassis, and datacenter construction,"
+        );
         println!("      amortized across lifetime token volume (~0.003 gCO2e per 1,000 tokens).");
         println!();
         println!(" ☕ 4. HUMAN-SCALE EQUIVALENCES & BENCHMARKS");
         println!("    • 📱 Smartphone Charge  : ~12 Watt-hours (Wh) full charge.");
-        println!("    • ☕ Cup of Tea / Coffee : ~15 Watt-hours (Wh) to boil 250ml water in an electric kettle.");
+        println!(
+            "    • ☕ Cup of Tea / Coffee : ~15 Watt-hours (Wh) to boil 250ml water in an electric kettle."
+        );
         println!("    • 🚗 EV Driving        : ~150 Wh per kilometer driven.");
         println!("    • 🚙 Gas Car Driving    : ~690 Wh energy equivalent (or ~240 gCO2 per km).");
-        println!("    • 💧 Bottled Water       : 400 mL drinking water bottle evaporated for datacenter cooling.");
+        println!(
+            "    • 💧 Bottled Water       : 400 mL drinking water bottle evaporated for datacenter cooling."
+        );
         println!();
         println!(" 🔍 5. PROVIDER TRANSPARENCY & DATA CONFIDENCE GRADES");
-        println!("    Anthropic, OpenAI, and Google treat specific accelerator hardware allocations, active parameter");
-        println!("    counts, and cluster PUEs as trade secrets. tokenusage assigns confidence grades:");
+        println!(
+            "    Anthropic, OpenAI, and Google treat specific accelerator hardware allocations, active parameter"
+        );
+        println!(
+            "    counts, and cluster PUEs as trade secrets. tokenusage assigns confidence grades:"
+        );
         println!();
-        println!("    🟢 Grade A (High Precision): Local M-Series Apple Silicon (MLX / Ollama direct SoC profiler).");
-        println!("    🟡 Grade B+ (Medium-High): Google Gemini (Google publishes annual 1.10 PUE & 24/7 CFE metrics).");
-        println!("    🟠 Grade B (Scientific Estimation): Anthropic Claude & OpenAI GPT (Peer-reviewed GPU models:");
-        println!("                                         EcoLogits, CodeCarbon, ML.ENERGY, Luccioni et al. 2023).");
+        println!(
+            "    🟢 Grade A (High Precision): Local M-Series Apple Silicon (MLX / Ollama direct SoC profiler)."
+        );
+        println!(
+            "    🟡 Grade B+ (Medium-High): Google Gemini (Google publishes annual 1.10 PUE & 24/7 CFE metrics)."
+        );
+        println!(
+            "    🟠 Grade B (Scientific Estimation): Anthropic Claude & OpenAI GPT (Peer-reviewed GPU models:"
+        );
+        println!(
+            "                                         EcoLogits, CodeCarbon, ML.ENERGY, Luccioni et al. 2023)."
+        );
         println!();
-        println!("========================================================================================");
+        println!(
+            "========================================================================================"
+        );
         println!();
         Ok(())
     }

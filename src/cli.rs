@@ -25,8 +25,8 @@ pub enum SortOrder {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum WeekStart {
-    #[default]
     Sunday,
+    #[default]
     Monday,
     Tuesday,
     Wednesday,
@@ -121,7 +121,10 @@ pub struct CommonArgs {
         arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")
     )]
     pub until: Option<String>,
-    #[cfg_attr(feature = "cli", arg(long, help = "Show environmental carbon/energy/water impact"))]
+    #[cfg_attr(
+        feature = "cli",
+        arg(long, help = "Show environmental carbon/energy/water impact")
+    )]
     pub carbon: bool,
     #[cfg_attr(feature = "cli", arg(long, short = 'j', help = "Output JSON report"))]
     pub json: bool,
@@ -200,7 +203,10 @@ pub struct CommonArgs {
     pub no_antigravity: bool,
     #[cfg_attr(
         feature = "cli",
-        arg(long, help = "Disable historical overrides from history_overrides.json")
+        arg(
+            long,
+            help = "Disable historical overrides from history_overrides.json"
+        )
     )]
     pub no_history_overrides: bool,
     #[cfg_attr(
@@ -682,7 +688,7 @@ pub(crate) struct MonthlyArgs {
 pub(crate) struct WeeklyArgs {
     #[command(flatten)]
     pub(crate) common: CommonArgs,
-    #[arg(long, short = 'w', value_enum, default_value_t = WeekStart::Sunday)]
+    #[arg(long, short = 'w', value_enum, default_value_t = WeekStart::Monday)]
     pub(crate) start_of_week: WeekStart,
 }
 
@@ -920,7 +926,7 @@ pub(crate) struct GuiArgs {
     pub(crate) instances: bool,
     #[arg(long, short = 'p', help = "Filter specific project (daily mode only)")]
     pub(crate) project: Option<String>,
-    #[arg(long, short = 'w', value_enum, default_value_t = WeekStart::Sunday)]
+    #[arg(long, short = 'w', value_enum, default_value_t = WeekStart::Monday)]
     pub(crate) start_of_week: WeekStart,
 }
 

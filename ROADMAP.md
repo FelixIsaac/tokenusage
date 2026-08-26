@@ -23,14 +23,18 @@ This document outlines the strategic roadmap for **tokenusage** as a real-time d
 - [ ] **Native OS Notifications:** Trigger desktop notifications (macOS Notification Center, Windows Toast, Linux `notify-send`) when quota falls below `--warn-threshold` (e.g. 15% remaining).
 - [ ] **Statusline Hooks:** Expand JSON & widget output for statusline hooks across `starship`, `oh-my-zsh`, and `ccstatusline`.
 
-### Phase 3: Expanded AI Agent Support (Q4 2026)
-- [ ] **Cursor & Windsurf Log Parsers:** Add parser engines for Cursor and Windsurf local session databases/transcripts.
-- [ ] **Aider & Continue.dev Support:** Parse local session history from Aider (`.aider.chat.history.md`) and Continue.dev logs.
+### Phase 3: Expanded AI Agent Support & Ecosystem Governance
+- [ ] **Cursor CLI (`cursor-agent`):** Add high-performance SQLite session parser for Cursor Agent mode (`~/.cursor/chats/<hash>/store.db`).
 - [ ] **Enhanced GUI Dashboard (`tu gui`):** Add interactive filtering, model cost comparison charts, and export tools to the `iced` desktop app.
+- [ ] **Community-Driven Providers (PRs Welcome):** Goose, Amp, Aider, GitHub Copilot CLI, Roo Code/Cline, Windsurf/Cascade.
 
 ---
 
-## 🤝 Community & Feedback
+## 🤝 Community Governance & Provider Policy
 
-If you have feature requests, new provider requests, or feedback, please open an issue on GitHub:
+We welcome community contributions! Because the maintainers focus primarily on tools in active daily rotation, new provider support follows these guidelines:
+1. **Core Providers:** Actively maintained by the core team (Claude Code, OpenAI Codex, Antigravity/AGY, Grok Build, OpenCode, and Cursor CLI).
+2. **Community Providers:** Welcomed via PR when accompanied by sample log fixtures and adhering to zero-telemetry offline parsing standards.
+
+If you have feature requests, new provider requests, or feedback, please open an issue or PR on GitHub:
 👉 [https://github.com/FelixIsaac/tokenusage/issues](https://github.com/FelixIsaac/tokenusage/issues)

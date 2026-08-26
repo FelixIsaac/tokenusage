@@ -93,15 +93,34 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 | Provider | Data Source | Local Parsing | Real-time TUI (`tu live`/`top`) | Quota / Balance Probe | Command Shortcut |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | Log / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | Log / JSON | ✅ | ✅ | — | `tu codex` |
+| **OpenAI Codex** | Log / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | Log / JSON | ✅ | ✅ | — | `tu gemini` |
-| **OpenCode** | Log / JSON | ✅ | ✅ | — | `tu opencode` |
-| **Grok (xAI)** | Log / OAuth Proxy | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
+| **OpenCode** | SQLite / JSON | ✅ | ✅ | — | `tu opencode` |
+| **Grok (xAI)** | Session / JSONL | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
 | **DeepSeek API** | API Balance | — | — | ✅ (`tu deepseek`) | `tu deepseek` |
 | **OpenRouter API** | API Balance | — | — | ✅ (`tu openrouter`) | `tu openrouter` |
 | **Kimi (Moonshot)** | API Balance | — | — | ✅ (`tu kimi`) | `tu kimi` |
 | **Anthropic API** | API Usage | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
+
+### 🗺️ Provider Landscape & Ecosystem Support Policy
+
+| Tool / Provider | Status | Priority / Path | Policy & Notes |
+| :--- | :---: | :---: | :--- |
+| **Claude Code** | Supported | Core | First-party daily maintainer support. |
+| **OpenAI Codex** | Supported | Core | Full session tracking and official OAuth quota probe. |
+| **Antigravity / AGY** | Supported | Core | Protobuf session parser + live plan tier / quota limits. |
+| **Grok Build (xAI)** | Supported | Core | Full session (`~/.grok/sessions`) + unified log parser. |
+| **OpenCode** | Supported | Core | Dual SQLite DB + legacy message directory parsing. |
+| **Cursor CLI (`cursor-agent`)** | Under Evaluation | High | Popular CLI agent mode (`~/.cursor/chats`); candidate for next core provider. |
+| **Goose (Block / AAIF)** | Community | PR Welcome | Welcomed via community PR when test fixtures and spec are provided. |
+| **Amp (Sourcegraph)** | Community | PR Welcome | Welcomed via community contribution. |
+| **Aider** | Community | PR Welcome | Welcomed via community contribution (`.aider.chat.history.md`). |
+| **GitHub Copilot CLI** | Community | PR Welcome | Welcomed via community contribution (`~/.copilot-cli`). |
+| **Cline / Roo Code** | Community | PR Welcome | Welcomed via community contribution. |
+| **Cascade / Windsurf** | Community | PR Welcome | Welcomed via community contribution. |
+
+> **Community Governance Note:** First-party maintainers focus on tools in active rotation. New provider contributions from the community are warmly reviewed and merged if they adhere to the zero-telemetry, offline-first, high-performance architecture.
 
 ---
 
@@ -193,6 +212,14 @@ tu top
 # Desktop GUI dashboard
 tu gui
 
+# Carbon footprint & environmental telemetry report (energy kWh, CO2e, water L)
+tu carbon                 # Today's carbon report
+tu carbon weekly          # Current week carbon report
+tu carbon monthly         # Current month carbon report
+tu carbon all             # Lifetime all-time carbon report
+tu carbon about           # Methodology physics equations & jargon glossary
+tu carbon --region nordic # Change grid region (us-east, us-west, eu-west, nordic, google-cfe)
+
 # Generate shareable card
 tu img day
 tu img week
@@ -229,6 +256,8 @@ tu img week
 | **Antigravity / Gemini** | `~/.gemini/antigravity-cli/conversations/*.db` & `~/.gemini/tmp` | `--gemini-data-dir` |
 | **OpenCode** | `$OPENCODE_DATA_DIR` (or `~/.local/share/opencode`) | `--opencode-data-dir` |
 | **Grok Build** | `~/.grok/logs` & `~/.grok/auth.json` | `--grok-log-dir` |
+| **History Overrides** | `~/.config/tokenusage/history_overrides.json` | `--no-history-overrides` |
+| **History Database** | `~/.config/tokenusage/history.db` | `--no-history-db` |
 
 ---
 

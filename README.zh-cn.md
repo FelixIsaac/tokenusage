@@ -93,15 +93,34 @@
 | 服务商 / 助手 | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | 日志 / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | — | `tu codex` |
+| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | 日志 / JSON | ✅ | ✅ | — | `tu gemini` |
-| **OpenCode** | 日志 / JSON | ✅ | ✅ | — | `tu opencode` |
-| **Grok (xAI)** | 日志 / OAuth 代理 | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
+| **OpenCode** | SQLite / JSON | ✅ | ✅ | — | `tu opencode` |
+| **Grok (xAI)** | 会话 / JSONL | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
 | **DeepSeek API** | API 余额 | — | — | ✅ (`tu deepseek`) | `tu deepseek` |
 | **OpenRouter API** | API 余额 | — | — | ✅ (`tu openrouter`) | `tu openrouter` |
 | **Kimi (Moonshot)** | API 余额 | — | — | ✅ (`tu kimi`) | `tu kimi` |
 | **Anthropic API** | API 用量 | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
+
+### 🗺️ 生态支持现状与社区治理策略
+
+| 工具 / 助手 | 支持状态 | 优先级 / 路径 | 策略与说明 |
+| :--- | :---: | :---: | :--- |
+| **Claude Code** | 已支持 | 核心 | 官方核心日常高频支持。 |
+| **OpenAI Codex** | 已支持 | 核心 | 完整本地日志解析 + 官方 OAuth 额度探测。 |
+| **Antigravity / AGY** | 已支持 | 核心 | Protobuf 会话解析 + 实时套餐计划配额探测。 |
+| **Grok Build (xAI)** | 已支持 | 核心 | 完整会话目录 (`~/.grok/sessions`) 与统一日志解析。 |
+| **OpenCode** | 已支持 | 核心 | 双 SQLite 数据库与历史消息目录解析。 |
+| **Cursor CLI (`cursor-agent`)** | 评估中 | 高 | 热门 CLI 模式 (`~/.cursor/chats`)，下一个核心候选。 |
+| **Goose (Block / AAIF)** | 社区驱动 | 欢迎 PR | 社区提交 PR 并附带测试用例即可合入。 |
+| **Amp (Sourcegraph)** | 社区驱动 | 欢迎 PR | 欢迎社区贡献解析器。 |
+| **Aider** | 社区驱动 | 欢迎 PR | 欢迎社区提交会话历史解析 (`.aider.chat.history.md`)。 |
+| **GitHub Copilot CLI** | 社区驱动 | 欢迎 PR | 欢迎社区提交 (`~/.copilot-cli`)。 |
+| **Cline / Roo Code** | 社区驱动 | 欢迎 PR | 欢迎社区提交贡献。 |
+| **Cascade / Windsurf** | 社区驱动 | 欢迎 PR | 欢迎社区提交贡献。 |
+
+> **社区治理原则：** 核心团队聚焦于日常高频使用的工具。对于生态中其他 AI 助手，非常欢迎社区提交 PR / Issue，只要符合零网络泄露、纯本地离线、高性能标准，团队将迅速审核并合并。
 
 ---
 

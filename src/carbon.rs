@@ -78,14 +78,22 @@ pub struct ModelCarbonCoefficients {
 impl ModelCarbonCoefficients {
     pub fn for_model(model_name: &str) -> Self {
         let name = model_name.to_lowercase();
-        if name.contains("haiku") || name.contains("flash") || name.contains("mini") || name.contains("8b") {
+        if name.contains("haiku")
+            || name.contains("flash")
+            || name.contains("mini")
+            || name.contains("8b")
+        {
             // Tier 1: Small / Fast (0.03 kWh / 1M input, 0.18 kWh / 1M output)
             Self {
                 input_joules_per_token: 0.108,
                 cache_read_joules_per_token: 0.020,
                 output_joules_per_token: 0.648,
             }
-        } else if name.contains("opus") || name.contains("405b") || name.contains("o1") || name.contains("o3") {
+        } else if name.contains("opus")
+            || name.contains("405b")
+            || name.contains("o1")
+            || name.contains("o3")
+        {
             // Tier 3: Heavy / Flagship / Reasoning (0.60 kWh / 1M input, 3.80 kWh / 1M output)
             Self {
                 input_joules_per_token: 2.160,
@@ -335,7 +343,10 @@ pub fn eco_rating(gco2e_per_1k: f64) -> (&'static str, &'static str) {
     } else if gco2e_per_1k < 1.00 {
         ("C", "Below average efficiency")
     } else {
-        ("D", "Resource intensive (Heavy flagship / reasoning models)")
+        (
+            "D",
+            "Resource intensive (Heavy flagship / reasoning models)",
+        )
     }
 }
 
@@ -345,7 +356,7 @@ pub fn format_commas_u64(val: u64) -> String {
     let mut result = String::new();
     let len = s.len();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -359,7 +370,11 @@ pub fn format_commas_f64(val: f64, decimals: usize) -> String {
     let parts: Vec<&str> = formatted.split('.').collect();
     let int_part = parts[0];
     let is_negative = int_part.starts_with('-');
-    let digits = if is_negative { &int_part[1..] } else { int_part };
+    let digits = if is_negative {
+        &int_part[1..]
+    } else {
+        int_part
+    };
 
     let mut formatted_int = String::new();
     let len = digits.len();

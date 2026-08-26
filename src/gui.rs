@@ -652,7 +652,7 @@ mod tests {
             period: ReportPeriod::Daily,
             instances: false,
             project: None,
-            start_of_week: crate::cli::WeekStart::Sunday,
+            start_of_week: crate::cli::WeekStart::Monday,
         }
     }
 

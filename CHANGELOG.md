@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.11.4] - 2026-08-13
+## [1.11.4] - 2026-08-27
 
 ### Added
 - **Environmental Telemetry & Carbon Footprint Report (`tu carbon`):** Calculates IT + datacenter electrical energy (kWh), grid operational carbon emissions (kg CO₂e), cooling water draw (Liters), and eco-efficiency ratings across LLM token workloads.
@@ -11,6 +11,12 @@ All notable changes to this project are documented in this file.
 - **Carbon Period Subcommands & All-Time Reporting:** `tu carbon today`, `tu carbon daily`, `tu carbon weekly`, `tu carbon monthly`, and `tu carbon all` (or `tu carbon all-time`).
 - **Regional Grid Intensity Selection (`--region`):** Support for `us-east` (Virginia), `us-west` (Oregon hydro), `us-avg`, `eu-west` (France nuclear), `nordic` (Iceland/Norway hydro), `google-cfe` (24/7 CFE matched), and `global` grid regions.
 - **Interactive TUI Menu Integration:** Added `carbon` directly to the interactive Ratatui command menu (`tu` bare launcher) and support for `--tui` interactive sticky header scrolling.
+- **Grok 4.6 Pricing Rate:** Added official pricing prefix and `-build` alias normalization for `grok-4.6-build` and `grok-4.5-build`.
+- **Ecosystem Roadmap & Governance Matrix:** Added comprehensive provider status, Cursor CLI priority roadmap, and community PR contribution policy.
+
+### Fixed
+- **Grok Build Session Discovery & Parsing:** Switched Grok source discovery from transient debug logs (`~/.grok/logs/unified.jsonl`) to persistent session directories (`~/.grok/sessions/*/*/updates.jsonl`), accurately capturing full multi-month history, exact model attributions, cached read tokens, and official `costUsdTicks`.
+- **Grok Project Decoding:** Added URL decoding for Grok's working directory folder names (e.g. `%2FUsers%2Ffelix%2FProjects` -> `Projects`).
 
 ## [1.11.3] - 2026-08-09
 

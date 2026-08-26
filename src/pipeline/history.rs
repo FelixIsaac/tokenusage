@@ -30,11 +30,17 @@ pub struct HistoryOverridesFile {
 /// Resolve the path to `history_overrides.json` in user's config directory.
 pub fn get_overrides_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    let p1 = home.join(".config").join("tokenusage").join("history_overrides.json");
+    let p1 = home
+        .join(".config")
+        .join("tokenusage")
+        .join("history_overrides.json");
     if p1.is_file() {
         return Some(p1);
     }
-    let p2 = home.join(".config").join("tu").join("history_overrides.json");
+    let p2 = home
+        .join(".config")
+        .join("tu")
+        .join("history_overrides.json");
     if p2.is_file() {
         return Some(p2);
     }
@@ -67,7 +73,10 @@ pub fn apply_monthly_overrides(rows: &mut Vec<DailyRow>) {
     apply_monthly_overrides_with_data(rows, &overrides);
 }
 
-pub fn apply_monthly_overrides_with_data(rows: &mut Vec<DailyRow>, overrides: &HistoryOverridesFile) {
+pub fn apply_monthly_overrides_with_data(
+    rows: &mut Vec<DailyRow>,
+    overrides: &HistoryOverridesFile,
+) {
     if overrides.monthly_overrides.is_empty() {
         return;
     }
@@ -88,10 +97,13 @@ pub fn apply_monthly_overrides_with_data(rows: &mut Vec<DailyRow>, overrides: &H
                     cost_usd: data.cost_usd,
                 };
                 for m in &data.models {
-                    row.models.entry(m.clone()).or_insert(TokenCounts::default());
+                    row.models
+                        .entry(m.clone())
+                        .or_insert(TokenCounts::default());
                 }
                 if row.sources.is_empty() {
-                    row.sources.insert("override".to_string(), row.totals.clone());
+                    row.sources
+                        .insert("override".to_string(), row.totals.clone());
                 }
             }
         } else {
@@ -238,4 +250,3 @@ mod tests {
         assert!(row_2026_03.sources.contains_key("override"));
     }
 }
-
