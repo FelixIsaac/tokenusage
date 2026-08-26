@@ -90,10 +90,10 @@
 
 ## 🤖 支持的 AI 助手与功能矩阵
 
-| 服务商 / 助手 | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
+| Provider | 数据源类型 | 本地日志解析 | 实时 TUI (`tu live`/`top`) | 配额/余额探测 | 快捷命令 |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | 日志 / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
+| **OpenAI Codex** | 日志 / JSON | ✅ | ✅ | ✅ (`tu codex status` / `tu blocks --official-limits-only`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | 日志 / JSON | ✅ | ✅ | — | `tu gemini` |
 | **OpenCode** | SQLite / JSON | ✅ | ✅ | — | `tu opencode` |
@@ -188,12 +188,13 @@ tu
 # 交互式 TUI 界面
 tu --tui
 
-# 指定 AI 助手报表
+# 指定 AI 助手报表与实时配额
 tu codex daily
-tu blocks --official-limits-only --json # 官方 Codex 配额，不读取本地历史
+tu codex status                         # 快速探测官方 Codex 配额（零历史扫描）
+tu blocks --official-limits-only --json  # 官方 Codex 配额 JSON 直出（<0.60s 极速）
 tu claude weekly
 tu antigravity
-tu antigravity status      # 实时套餐等级 + 会话/周配额百分比
+tu antigravity status                   # 实时套餐等级 + 会话/周配额百分比
 
 # 过滤特定数据源
 tu --only codex,gemini
@@ -213,10 +214,80 @@ tu top
 # 桌面 GUI 仪表盘
 tu gui
 
+# 碳足迹与能耗分析报表 (电能 kWh, 碳排放 CO2e, 冷却耗水 L)
+tu carbon                 # 今日碳足迹报表
+tu carbon weekly          # 本周碳足迹报表
+tu carbon monthly         # 本月碳足迹报表
+tu carbon all             # 历史全量碳足迹报表
+tu carbon about           # 物理学计算公式与名词解释
+tu carbon --region nordic # 切换电网区域 (us-east, us-west, eu-west, nordic, google-cfe 等)
+
 # 生成分享卡片
 tu img day
 tu img week
 ```
+
+---
+
+## 📋 完整命令速查表
+
+### 📊 周期性报表与用量聚合
+| 命令 | 说明 |
+| :--- | :--- |
+| `tu` / `tu daily` | 每日 Token 用量与成本报表（默认命令） |
+| `tu today` | 今日实时用量与模型消耗明细 |
+| `tu weekly` (或 `tu week`) | 按 ISO 8601 自然周聚合（周一开始） |
+| `tu monthly` | 按自然月聚合 |
+| `tu session` | 按会话 Session ID 独立聚合 |
+| `tu blocks` | 按 5 小时滚动限速窗口聚合 |
+| `tu activity` | 真实编码活跃时长、Tokens/小时与主力编程语言 |
+| `tu --tui` | 启用交互式 TUI 表格（固定表头、支持上下滚动） |
+| `tu -i` / `tu --instances` | 显示按会话实例拆分的子明细 |
+| `tu -p <项目名>` | 仅筛选特定项目路径的用量 |
+| `tu --brief` | 单行极简概要输出（时间范围 · 总 Token · 成本 · 主力模型） |
+
+### 🌱 碳足迹与能耗遥测
+| 命令 | 说明 |
+| :--- | :--- |
+| `tu carbon` | 今日环境影响报表（电能 kWh、等效碳排 kg CO₂e、冷却耗水 L） |
+| `tu carbon daily` | 每日碳足迹明细表 |
+| `tu carbon weekly` | 本周碳足迹明细表 |
+| `tu carbon monthly` | 本月碳足迹明细表 |
+| `tu carbon all` | 历史所有会话的全量环境遥测分析 |
+| `tu carbon about` | GPU 物理计算模型、能耗常数与 PUE/WUE 透明度声明 |
+| `tu carbon --region <区域>` | 设定算力电网区域 (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
+| `tu daily --carbon` | 在标准每日用量报表中附加碳排放与能耗数据列 |
+
+### ⚡ 配额探测与官方额度
+| 命令 | 说明 |
+| :--- | :--- |
+| `tu codex status` | **极速 OAuth 配额探测**（5小时/周限额、重置倒计时，零磁盘日志扫描） |
+| `tu blocks --official-limits-only --json` | 官方 Codex 配额 JSON 数据流直出（<0.60s 快速旁路） |
+| `tu antigravity status` | 实时探测 Antigravity 套餐等级与会话/周配额百分比 |
+| `tu antigravity status --warn-threshold 15` | 当剩余额度低于 15% 时触发黄色告警提示 |
+| `tu deepseek` | 查询 DeepSeek API 账户余额 (`DEEPSEEK_API_KEY`) |
+| `tu openrouter` | 查询 OpenRouter API 账户可用额度 (`OPENROUTER_API_KEY`) |
+| `tu grok` | 查询 Grok (xAI) API 额度与 CLI OAuth Proxy Token 状态 (`XAI_API_KEY`) |
+| `tu kimi` | 查询 Kimi (Moonshot) API 账户余额 (`MOONSHOT_API_KEY`) |
+| `tu anthropic-api` | 查询 Anthropic 官方 API 当日用量与费用 (`ANTHROPIC_API_KEY`) |
+
+### 🖥️ 实时监控、TUI 与桌面 GUI
+| 命令 | 说明 |
+| :--- | :--- |
+| `tu live` | 实时刷新交互式 TUI 监控仪表盘 |
+| `tu top` | Token 进程监视器（类似 htop 的按会话实时监视） |
+| `tu gui` | 原生桌面 GUI 客户端（基于 Iced 框架） |
+| `tu img day` | 生成今日编码战报的高清 PNG 分享卡片 |
+| `tu img week` | 生成本周编码战报的高清 PNG 分享卡片 |
+
+### 🔧 终端集成、补全与诊断工具
+| 命令 | 说明 |
+| :--- | :--- |
+| `tu statusline` | 为终端 Prompt / 状态栏挂钩输出单行状态组件 |
+| `tu statusline init` | 一键自动配置 Claude Code 状态栏（智能合并 `~/.claude/settings.json`） |
+| `tu completions <shell>` | 生成 Shell 自动补全脚本 (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `tu doctor` | 全面检查扫描路径、日志发现量、SQLite 缓存健康度与价格缓存 TTL |
+| `tu parity` | 自动比对 `tu` 与 `@ccusage` 官方工具的解析与计算一致性 |
 
 ---
 
@@ -237,6 +308,56 @@ tu img week
 | :--- | :---: | :---: | :---: |
 | **冷启动 (重建缓存)** | **0.73s** | 17.15s | **23.5x** |
 | **热启动 (5 次最佳)** | **0.08s** | 17.15s | **214x** |
+
+---
+
+## 📁 本地数据存储路径
+
+| 服务商 / 数据源 | 默认本地日志路径 | 自定义参数 |
+| :--- | :--- | :--- |
+| **Claude Code** | `~/.claude/projects` | `--claude-projects-dir` |
+| **OpenAI Codex** | `$CODEX_HOME/sessions` (或 `~/.codex/sessions`) | `--codex-sessions-dir` |
+| **Antigravity / Gemini** | `~/.gemini/antigravity-cli/conversations/*.db` & `~/.gemini/tmp` | `--gemini-data-dir` |
+| **OpenCode** | `$OPENCODE_DATA_DIR` (或 `~/.local/share/opencode`) | `--opencode-data-dir` |
+| **Grok Build** | `~/.grok/logs` & `~/.grok/auth.json` | `--grok-log-dir` |
+| **历史基准覆盖** | `~/.config/tokenusage/history_overrides.json` | `--no-history-overrides` |
+| **历史聚合数据库** | `~/.config/tokenusage/history.db` | `--no-history-db` |
+
+---
+
+## ⚙️ 配置文件 (`tu.json`)
+
+`tu` 会按如下顺序自动查找配置文件：
+1. `./.tu/tu.json`
+2. `~/.config/tu/tu.json`
+3. `~/.config/tokenusage/tokenusage.json`
+
+配置文件示例 (`~/.config/tu/tu.json`)：
+
+```json
+{
+  "defaults": {
+    "timezone": "Asia/Shanghai",
+    "workers": 16,
+    "compact": false
+  },
+  "commands": {
+    "daily": {
+      "instances": true
+    },
+    "live": {
+      "sessionLength": 5,
+      "refreshInterval": 1
+    },
+    "img": {
+      "period": "daily",
+      "bars": 24,
+      "brand": "tokenusage",
+      "brandUrl": "https://github.com/FelixIsaac/tokenusage"
+    }
+  }
+}
+```
 
 ---
 

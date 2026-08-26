@@ -42,42 +42,17 @@ All notable changes to this project are documented in this file.
 ## [1.11.2] - 2026-08-04
 
 ### Added
+- **Google Antigravity First-Class Provider:** `SourceKind::Gemini`'s display name changed to "Antigravity", and its real token/cost accounting is now parsed from Antigravity's own local SQLite conversation databases (`~/.gemini/antigravity-cli/conversations/*.db`, protobuf-encoded `gen_metadata` blobs) alongside existing transcript logs.
+- **Provider-First Antigravity Subcommands:** Added `tu antigravity` / `tu agy` provider-first subcommands (`tu antigravity monthly`, `tu agy daily`, etc.) and `--only antigravity` / `--only agy`.
+- **`tu antigravity status` Quota Probe:** Direct access to the live plan-tier and session/weekly quota-% probe with `--warn-threshold <PCT>` alerts.
+- **Gemini Model Pricing Aliasing:** Pricing for Gemini 2.5/3/3.1/3.6 Flash and Pro model variants with automatic reasoning-effort suffix stripping (`-low`/`-medium`/`-high`/`-xhigh`/`-none`).
 - **Shell Auto-Completions:** `tu completions <shell>` subcommands for `bash`, `zsh`, `fish`, `powershell`, and `elvish` via `clap_complete`.
-- **Low-Quota Warning Thresholds:** Added `--warn-threshold <PCT>` to `tu antigravity` and status probes to print warnings when remaining model quota drops below the specified threshold.
 - **Native Windows Antigravity Support:** Cross-platform Windows process and port detection using PowerShell `Get-CimInstance Win32_Process` and `netstat -ano` listening port discovery.
 - **Grok OAuth Proxy Token Fallback:** Auto-reads Grok CLI OAuth proxy tokens from `~/.grok/auth.json` with token auto-refresh when `XAI_API_KEY` is not set.
 - **Standalone Binary Installers:** Pre-compiled cross-platform shell (`tokenusage-installer.sh`) and PowerShell (`tokenusage-installer.ps1`) installer scripts hosted directly on GitHub Releases.
 
-## [Unreleased]
-
-### Added
-- `tu blocks --official-limits-only --json` returns official Codex plan,
-  usage percentages, reset times, and window durations without discovering
-  local usage history or touching the parse cache.
-- **Google Antigravity** is now a first-class provider, not just a quota
-  probe: `SourceKind::Gemini`'s display name changed to "Antigravity", and
-  its real token/cost accounting is now parsed from Antigravity's own
-  local SQLite conversation databases (`~/.gemini/antigravity-cli/conversations/*.db`,
-  protobuf-encoded `gen_metadata` blobs — no published schema, so the
-  field layout was reverse-engineered) alongside the existing
-  `~/.gemini/tmp` and `~/.gemini/antigravity-cli/brain` transcript logs.
-- `tu antigravity` / `tu agy` provider-first subcommands (`tu antigravity monthly`,
-  `tu agy daily`, etc.) and `--only antigravity` / `--only agy` — matching
-  the existing `tu claude` / `tu codex` / `tu opencode` UX.
-- `tu antigravity status` restores access to the live plan-tier +
-  session/weekly quota-% probe (previously the only thing `tu antigravity`
-  did; now that name defaults to the usage table like the other
-  providers, `status` reaches the same probe explicitly).
-- Pricing for Gemini 2.5/3/3.1/3.6 Flash and Pro model variants, plus an
-  alias fallback (`PricingTable::find_rate`) that strips Antigravity's
-  internal reasoning-effort suffixes (`-low`/`-medium`/`-high`/`-xhigh`/`-none`)
-  and maps known model bases to their public "-preview" pricing key — these
-  were previously priced at $0.00 with no pricing-debug warning surfaced.
-
 ### Fixed
-- `tu live`'s "Gemini" tab (renders the same Antigravity usage data as
-  everywhere else) now reads "Antigravity"; the separate live-quota tab
-  is now "Antigravity Quota" so the two don't collide.
+- **`tu live` Tab Naming:** Renamed "Gemini" tab to "Antigravity" and separate live-quota tab to "Antigravity Quota".
 
 ## [1.11.1] - 2026-07-18
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
+  <img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/assets/branding/tokenusage-logomark.svg" width="128" height="128" alt="tokenusage logo" />
 </p>
 
 <h1 align="center">tokenusage</h1>
@@ -38,13 +38,13 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" width="50%">
       <code>tu</code> — Daily Cost Report<br/>
       <p align="center">
-        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
+        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/cli-demo-padded.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/cli-demo-padded.png" alt="tu cli demo" height="220" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu gui</code> — Desktop Dashboard<br/>
       <p align="center">
-        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
+        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/gui-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/gui-demo.png" alt="tu gui demo" height="220" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -52,13 +52,13 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" width="50%">
       <code>tu img day</code> — Daily Social Card<br/>
       <p align="center">
-        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
+        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/share-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/share-demo.png" alt="tu img daily demo" height="260" loading="lazy" /></a>
       </p>
     </td>
     <td valign="top" width="50%">
       <code>tu img week</code> — Weekly Social Card<br/>
       <p align="center">
-        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
+        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/share-week-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/share-week-demo.png" alt="tu img weekly demo" height="260" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -66,7 +66,7 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
     <td valign="top" colspan="2">
       <code>tu live</code> — Real-time TUI Monitor<br/>
       <p align="center">
-        <a href="https://github.com/hanbu97/tokenusage/blob/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/hanbu97/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
+        <a href="https://github.com/FelixIsaac/tokenusage/blob/main/docs/images/live-demo.png"><img src="https://raw.githubusercontent.com/FelixIsaac/tokenusage/main/docs/images/thumbs/live-demo.png" alt="tu live demo" width="100%" loading="lazy" /></a>
       </p>
     </td>
   </tr>
@@ -93,7 +93,7 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 | Provider | Data Source | Local Parsing | Real-time TUI (`tu live`/`top`) | Quota / Balance Probe | Command Shortcut |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Claude Code** | Log / JSON | ✅ | ✅ | ✅ (`tu statusline`) | `tu claude` |
-| **OpenAI Codex** | Log / JSON | ✅ | ✅ | ✅ (`tu blocks --official-limits-only --json`) | `tu codex` |
+| **OpenAI Codex** | Log / JSON | ✅ | ✅ | ✅ (`tu codex status` / `tu blocks --official-limits-only`) | `tu codex` |
 | **Antigravity / AGY** | Protobuf (`*.db`) | ✅ | ✅ | ✅ (`tu antigravity status`) | `tu antigravity` / `tu agy` |
 | **Gemini CLI** | Log / JSON | ✅ | ✅ | — | `tu gemini` |
 | **OpenCode** | SQLite / JSON | ✅ | ✅ | — | `tu opencode` |
@@ -188,12 +188,13 @@ tu
 # Interactive TUI mode
 tu --tui
 
-# Provider-specific commands
+# Provider-specific commands & live quotas
 tu codex daily
-tu blocks --official-limits-only --json # Official Codex limits without local history
+tu codex status                         # Fast zero-history official Codex limits probe
+tu blocks --official-limits-only --json  # Official Codex limits without local history
 tu claude weekly
 tu antigravity
-tu antigravity status      # Live plan tier + session/weekly quota %
+tu antigravity status                   # Live plan tier + session/weekly quota %
 
 # Filter specific sources
 tu --only codex,gemini
@@ -225,6 +226,68 @@ tu carbon --region nordic # Change grid region (us-east, us-west, eu-west, nordi
 tu img day
 tu img week
 ```
+
+---
+
+## 📋 Command Cheat Sheet
+
+### 📊 Periodic Reports & Aggregations
+| Command | Description |
+| :--- | :--- |
+| `tu` / `tu daily` | Daily token usage and cost report (default) |
+| `tu today` | Today's active usage and model breakdown |
+| `tu weekly` (or `tu week`) | Usage grouped by ISO 8601 weeks (starts Monday) |
+| `tu monthly` | Usage grouped by calendar month |
+| `tu session` | Usage grouped by session ID |
+| `tu blocks` | Usage grouped by 5-hour rolling rate-limit windows |
+| `tu activity` | Coding activity duration, tokens/hour, and top languages |
+| `tu --tui` | Interactive scrollable TUI with sticky headers |
+| `tu -i` / `tu --instances` | Show per-instance / session breakdowns |
+| `tu -p <project>` | Filter by specific project name |
+| `tu --brief` | One-line headline summary (range, tokens, cost, top model) |
+
+### 🌱 Carbon Footprint & Environmental Telemetry
+| Command | Description |
+| :--- | :--- |
+| `tu carbon` | Today's environmental impact (kWh, kg CO₂e, water Liters) |
+| `tu carbon daily` | Daily carbon breakdown table |
+| `tu carbon weekly` | Current week carbon breakdown table |
+| `tu carbon monthly` | Current month carbon breakdown table |
+| `tu carbon all` | Lifetime all-time environmental telemetry |
+| `tu carbon about` | Physics formulas, GPU power constants, and PUE/WUE disclosures |
+| `tu carbon --region <region>` | Select grid region (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
+| `tu daily --carbon` | Append carbon metrics to standard daily report |
+
+### ⚡ Quotas, Balances & Official Limits
+| Command | Description |
+| :--- | :--- |
+| `tu codex status` | **Fast OAuth limits probe** (5h / weekly quota, reset timers, zero disk scan) |
+| `tu blocks --official-limits-only --json` | Direct JSON stream of official Codex limits (<0.60s bypass) |
+| `tu antigravity status` | Live Antigravity plan tier + session & weekly quota percentages |
+| `tu antigravity status --warn-threshold 15` | Low quota warning if remaining balance < 15% |
+| `tu deepseek` | DeepSeek API account credit balance (`DEEPSEEK_API_KEY`) |
+| `tu openrouter` | OpenRouter API account credit balance (`OPENROUTER_API_KEY`) |
+| `tu grok` | Grok (xAI) API balance / OAuth proxy token status (`XAI_API_KEY`) |
+| `tu kimi` | Kimi (Moonshot) API account credit balance (`MOONSHOT_API_KEY`) |
+| `tu anthropic-api` | Anthropic API direct usage and spend (`ANTHROPIC_API_KEY`) |
+
+### 🖥️ Live Telemetry, TUI & GUI
+| Command | Description |
+| :--- | :--- |
+| `tu live` | Real-time interactive TUI dashboard (auto-refresh) |
+| `tu top` | Token process monitor (htop-like real-time per-session viewer) |
+| `tu gui` | Desktop GUI application (native Iced dashboard) |
+| `tu img day` | Generate high-res PNG share card for today's coding stats |
+| `tu img week` | Generate high-res PNG share card for current week |
+
+### 🔧 Integrations, Shell & Diagnostics
+| Command | Description |
+| :--- | :--- |
+| `tu statusline` | Render one-line status widget for prompt / statusLine hooks |
+| `tu statusline init` | Automatically configure Claude Code statusLine in `~/.claude/settings.json` |
+| `tu completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `tu doctor` | Validate scan roots, discovered files, cache integrity, and pricing TTL |
+| `tu parity` | Run automated diff verification against `@ccusage` outputs |
 
 ---
 
@@ -308,4 +371,4 @@ All core credit for creating the initial tool belongs to the original author. Th
 
 ## 📄 License
 
-Distributed under the MIT License. See [`LICENSE`](https://github.com/hanbu97/tokenusage/blob/main/LICENSE) for details.
+Distributed under the MIT License. See [`LICENSE`](https://github.com/FelixIsaac/tokenusage/blob/main/LICENSE) for details.

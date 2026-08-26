@@ -50,7 +50,7 @@ use crate::types::{DailyReport, ParseStats, UsageEvent};
 /// This is the library-friendly equivalent of CLI arguments.
 /// All fields have sensible defaults; a `Config::default()` will discover
 /// usage logs from standard locations for Claude Code, Codex, Gemini CLI /
-/// Antigravity, and OpenCode.
+/// Antigravity, OpenCode, and Grok Build.
 ///
 /// # Default behaviour
 ///
@@ -61,6 +61,7 @@ use crate::types::{DailyReport, ParseStats, UsageEvent};
 ///     `~/.gemini/antigravity-cli/conversations/*.db` (Antigravity's real token/cost
 ///     accounting), `~/.gemini/antigravity-cli/brain/` (transcript logs)
 ///   - OpenCode: `~/.local/share/opencode/` (platform-dependent alternatives included)
+///   - Grok Build: `~/.grok/sessions/` (persistent session transcripts) and `~/.grok/logs/` (unified logs)
 /// - Uses the system local timezone for date grouping.
 /// - Fetches live model pricing from the OpenRouter API; falls back to
 ///   built-in estimates if the network is unavailable.
@@ -125,19 +126,34 @@ pub struct Config {
 
     /// Disable the Claude Code log source.
     ///
-    /// When `true`, only Codex logs are scanned.
+    /// When `true`, Claude Code logs are skipped.
     pub no_claude: bool,
 
     /// Disable the Codex log source.
     ///
-    /// When `true`, only Claude Code logs are scanned.
+    /// When `true`, OpenAI Codex logs are skipped.
     pub no_codex: bool,
-    /// Disable the Gemini CLI log source.
+
+    /// Disable the Gemini CLI / Antigravity log source.
+    ///
+    /// When `true`, Gemini CLI and Antigravity conversation databases are skipped.
     pub no_gemini: bool,
+
     /// Disable the OpenCode log source.
+    ///
+    /// When `true`, OpenCode logs and SQLite databases are skipped.
     pub no_opencode: bool,
+
     /// Disable the Grok Build log source.
+    ///
+    /// When `true`, Grok Build logs and session transcripts are skipped.
     pub no_grok: bool,
+
+    /// Disable historical baseline overrides from history_overrides.json.
+    pub no_history_overrides: bool,
+
+    /// Disable SQLite history auto-persistence to history.db.
+    pub no_history_db: bool,
 
     /// Custom Claude projects directory paths.
     ///
@@ -408,8 +424,8 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         no_opencode: config.no_opencode,
         no_grok: config.no_grok,
         no_antigravity: true,
-        no_history_overrides: false,
-        no_history_db: false,
+        no_history_overrides: config.no_history_overrides,
+        no_history_db: config.no_history_db,
         only: Vec::new(),
         sources: Vec::new(),
         claude_projects_dir: config.claude_projects_dir.clone(),
