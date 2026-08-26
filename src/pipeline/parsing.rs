@@ -1087,7 +1087,10 @@ pub(super) fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -
         return false;
     }
     let limit = 2048.min(line.len());
-    let boundary = line.floor_char_boundary(limit);
+    let mut boundary = limit;
+    while boundary > 0 && !line.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
     let scan_window = &line[..boundary];
     !markers.iter().any(|marker| scan_window.contains(marker))
 }
