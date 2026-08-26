@@ -88,3 +88,27 @@ When implementing new features or fixing bugs in this repository, strictly obser
 | **Check Build** | `cargo check` |
 | **Sync All Package Files** | `./scripts/sync-npm-readme.sh && ./scripts/sync-pypi-readme.sh && ./scripts/sync-npm-version.sh && ./scripts/sync-pypi-version.sh` |
 | **Dry Run npm Package** | `cd npm/tu && npm pack --dry-run` |
+
+---
+
+## 🤖 Specialist Sub-Agent Collective (`.agents/agents/`)
+
+This repository maintains persistent declarative sub-agent personas in `.agents/agents/`. When tackling specialized engineering tasks, Mission Control or developers can deploy these specialized agents:
+
+| Agent Name | Definition File | Focus Area |
+| :--- | :--- | :--- |
+| **`systems-perf-specialist`** | [systems-perf-specialist.md](file:///.agents/agents/systems-perf-specialist.md) | Zero-copy parsing, SIMD prefix matching, Rayon parallelism, SQLite WAL tuning. |
+| **`lib-ffi-architect`** | [lib-ffi-architect.md](file:///.agents/agents/lib-ffi-architect.md) | Library crate API, C-ABI bindings, Python (`PyO3`), Node.js (`napi-rs`), WASM. |
+| **`agent-harness-specialist`** | [agent-harness-specialist.md](file:///.agents/agents/agent-harness-specialist.md) | Reverse-engineering Cursor, Windsurf, Antigravity, Grok, Aider, Goose, Amp. |
+| **`pricing-economics-specialist`** | [pricing-economics-specialist.md](file:///.agents/agents/pricing-economics-specialist.md) | Multi-tier context threshold math, cache surcharge/discount models, catalog sync. |
+| **`ratatui-tui-specialist`** | [ratatui-tui-specialist.md](file:///.agents/agents/ratatui-tui-specialist.md) | Ratatui rendering, double-buffering, flicker-free live polling, TUI layout constraints. |
+| **`iced-gui-specialist`** | [iced-gui-specialist.md](file:///.agents/agents/iced-gui-specialist.md) | Native desktop Iced/Winit GUI, canvas rendering, async Tokio GUI bridging. |
+| **`carbon-physics-specialist`** | [carbon-physics-specialist.md](file:///.agents/agents/carbon-physics-specialist.md) | EcoLogits GPU physics formulas, datacenter PUE/WUE, grid carbon intensity. |
+| **`security-privacy-auditor`** | [security-privacy-auditor.md](file:///.agents/agents/security-privacy-auditor.md) | Zero-telemetry verification, secret/bearer-token redaction, path traversal safety. |
+| **`release-packaging-specialist`** | [release-packaging-specialist.md](file:///.agents/agents/release-packaging-specialist.md) | Cross-compilation CI/CD (macOS, Linux musl, Windows), Homebrew, npm, PyPI. |
+| **`fuzzing-qa-specialist`** | [fuzzing-qa-specialist.md](file:///.agents/agents/fuzzing-qa-specialist.md) | Property-based testing (`proptest`), `libFuzzer` harnesses, adversarial edge cases. |
+| **`shell-integration-specialist`** | [shell-integration-specialist.md](file:///.agents/agents/shell-integration-specialist.md) | Sub-5ms Starship modules, Zsh/Fish completions, Tmux/Waybar statusline widgets. |
+| **`benchmarking-profiler`** | [benchmarking-profiler.md](file:///.agents/agents/benchmarking-profiler.md) | Criterion micro-benchmarks, CPU flamegraphs, DHAT heap allocation tracking. |
+| **`docs-technical-writer`** | [docs-technical-writer.md](file:///.agents/agents/docs-technical-writer.md) | Bilingual docs (EN/ZH), man pages (`tu.1`), RFC architecture guides, docs.rs. |
+| **`community-governance-officer`** | [community-governance-officer.md](file:///.agents/agents/community-governance-officer.md) | Contributor standards (`CONTRIBUTING.md`), PR review templates, triage automation. |
+
