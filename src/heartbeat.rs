@@ -653,11 +653,13 @@ fn print_heartbeat_stats(out: &HeartbeatStatsOut) {
         println!("Heartbeat {} -> {}", out.start, out.end);
     }
     let active_days = out.daily.len();
-    let total_days = ((NaiveDate::parse_from_str(&out.end, "%Y-%m-%d").unwrap()
-        - NaiveDate::parse_from_str(&out.start, "%Y-%m-%d").unwrap())
-    .num_days()
-    .max(0) as usize)
-        + 1;
+    let total_days = match (
+        NaiveDate::parse_from_str(&out.end, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(&out.start, "%Y-%m-%d"),
+    ) {
+        (Ok(end), Ok(start)) => ((end - start).num_days().max(0) as usize) + 1,
+        _ => active_days.max(1),
+    };
     println!(
         "{:<12} {} {:>5.1}%  {}/{}",
         "Active days",

@@ -67,7 +67,10 @@ impl SourceKind {
     }
 
     pub const fn supports_official_limits(self) -> bool {
-        matches!(self, SourceKind::Claude | SourceKind::Codex)
+        matches!(
+            self,
+            SourceKind::Claude | SourceKind::Codex | SourceKind::Gemini
+        )
     }
 }
 
@@ -95,14 +98,8 @@ pub struct DiscoveredFile {
 /// # Token categories
 ///
 /// | Field | Meaning |
-/// |-------|---------|
-/// | `input_tokens` | Fresh (non-cached) input tokens |
-/// | `cache_creation_input_tokens` | Tokens written to the prompt cache |
-/// | `cache_read_input_tokens` | Tokens served from the prompt cache |
-/// | `output_tokens` | Model output tokens (includes reasoning unless split) |
-/// | `reasoning_output_tokens` | Reasoning/chain-of-thought tokens (subset of output when billed separately) |
-/// | `cost_usd` | Estimated USD cost based on model pricing |
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+/// Token metrics collected for a single usage record or aggregated bucket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageAccumulator {
     pub input_tokens: u64,
     pub cache_creation_input_tokens: u64,
@@ -123,16 +120,20 @@ impl UsageAccumulator {
         self.cost_usd += other.cost_usd;
     }
 
-    /// Sum of input + cache-creation + cache-read + output + reasoning tokens.
+    /// Add another accumulator's token counts and cost into this one.
+    pub fn merge(&mut self, other: UsageAccumulator) {
+        self.add(other);
+    }
+
+    /// Sum of input + cache-creation + cache-read + output tokens.
     ///
-    /// This counts every token that passed through the model, regardless of
-    /// billing tier.
+    /// Output tokens already encompass generated reasoning/thinking tokens
+    /// across model APIs (Anthropic, OpenAI, xAI, Gemini).
     pub fn total_tokens(self) -> u64 {
         self.input_tokens
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
             + self.output_tokens
-            + self.reasoning_output_tokens
     }
 
     /// Freeze this accumulator into a serialisable [`TokenCounts`] snapshot.
@@ -454,6 +455,127 @@ impl PricingTable {
             },
         ));
         table.prefixes.push((
+            "claude-3-7-sonnet".to_string(),
+            PricingRate {
+                input_per_million: 3.0,
+                output_per_million: 15.0,
+                cache_creation_per_million: 3.75,
+                cache_read_per_million: 0.3,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "claude-3-5-sonnet".to_string(),
+            PricingRate {
+                input_per_million: 3.0,
+                output_per_million: 15.0,
+                cache_creation_per_million: 3.75,
+                cache_read_per_million: 0.3,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "claude-3-5-haiku".to_string(),
+            PricingRate {
+                input_per_million: 0.8,
+                output_per_million: 4.0,
+                cache_creation_per_million: 1.0,
+                cache_read_per_million: 0.08,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "claude-3-haiku".to_string(),
+            PricingRate {
+                input_per_million: 0.25,
+                output_per_million: 1.25,
+                cache_creation_per_million: 0.30,
+                cache_read_per_million: 0.03,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "claude-3-opus".to_string(),
+            PricingRate {
+                input_per_million: 15.0,
+                output_per_million: 75.0,
+                cache_creation_per_million: 18.75,
+                cache_read_per_million: 1.5,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-3.1-pro".to_string(),
+            PricingRate {
+                input_per_million: 2.0,
+                output_per_million: 12.0,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.2,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-3-pro".to_string(),
+            PricingRate {
+                input_per_million: 1.25,
+                output_per_million: 5.0,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.3,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-3.6-flash".to_string(),
+            PricingRate {
+                input_per_million: 0.1,
+                output_per_million: 0.4,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.025,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-2.5-flash".to_string(),
+            PricingRate {
+                input_per_million: 0.1,
+                output_per_million: 0.4,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.025,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-flash".to_string(),
+            PricingRate {
+                input_per_million: 0.1,
+                output_per_million: 0.4,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.025,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
+            "gemini-pro".to_string(),
+            PricingRate {
+                input_per_million: 1.25,
+                output_per_million: 5.0,
+                cache_creation_per_million: 0.0,
+                cache_read_per_million: 0.3,
+                reasoning_output_per_million: 0.0,
+                ..PricingRate::default()
+            },
+        ));
+        table.prefixes.push((
             "gpt-5-codex".to_string(),
             PricingRate {
                 input_per_million: 1.5,
@@ -534,14 +656,14 @@ impl PricingTable {
     /// Tries exact match first, then longest prefix match.
     /// Returns `None` if no pricing is available for this model.
     pub fn find_rate(&self, model: &str) -> Option<&PricingRate> {
-        let model_key = canonical_model_key(model);
-        if let Some(rate) = self.exact.get(&model_key) {
+        let model_key = canonical_model_key_fast(model);
+        if let Some(rate) = self.exact.get(model_key.as_ref()) {
             return Some(rate);
         }
         if let Some(rate) = self
             .prefixes
             .iter()
-            .find_map(|(prefix, rate)| model_key.starts_with(prefix).then_some(rate))
+            .find_map(|(prefix, rate)| model_key.starts_with(prefix.as_str()).then_some(rate))
         {
             return Some(rate);
         }
@@ -549,15 +671,15 @@ impl PricingTable {
         // (-low/-medium/-high/-xhigh/-none) that Gemini's flat per-token
         // pricing doesn't vary by, but public catalogs (OpenRouter,
         // models.dev) only carry the base "-preview" public name.
-        let aliased = model_pricing_alias(&model_key);
-        if aliased != model_key {
+        let aliased = model_pricing_alias(model_key.as_ref());
+        if aliased != model_key.as_ref() {
             if let Some(rate) = self.exact.get(&aliased) {
                 return Some(rate);
             }
             return self
                 .prefixes
                 .iter()
-                .find_map(|(prefix, rate)| aliased.starts_with(prefix).then_some(rate));
+                .find_map(|(prefix, rate)| aliased.starts_with(prefix.as_str()).then_some(rate));
         }
         None
     }
@@ -570,9 +692,14 @@ impl PricingTable {
         let threshold = tier_threshold(rate);
         let separate_reasoning_pricing = has_separate_reasoning_pricing(rate);
         let (output_tokens, reasoning_tokens) = if separate_reasoning_pricing {
-            (usage.output_tokens, usage.reasoning_output_tokens)
+            (
+                usage
+                    .output_tokens
+                    .saturating_sub(usage.reasoning_output_tokens),
+                usage.reasoning_output_tokens,
+            )
         } else {
-            (usage.output_tokens + usage.reasoning_output_tokens, 0)
+            (usage.output_tokens, 0)
         };
 
         Some(
@@ -651,14 +778,24 @@ fn component_cost(
 }
 
 fn canonical_model_key(model: &str) -> String {
-    let mut s = model.trim().to_ascii_lowercase();
+    canonical_model_key_fast(model).into_owned()
+}
+
+fn canonical_model_key_fast(model: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = model.trim();
     for prefix in &["f16x/", "svr/", "nov/", "f16/"] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            s = rest.to_string();
-            break;
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            if rest.bytes().any(|b| b.is_ascii_uppercase()) {
+                return std::borrow::Cow::Owned(rest.to_ascii_lowercase());
+            }
+            return std::borrow::Cow::Borrowed(rest);
         }
     }
-    s
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(trimmed.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(trimmed)
+    }
 }
 
 fn model_pricing_alias(model_key: &str) -> String {

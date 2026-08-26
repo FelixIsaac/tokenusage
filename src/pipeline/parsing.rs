@@ -719,14 +719,14 @@ pub(super) fn discover_files_in_root(
 pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
     fn opencode_msg_id(file_path: &str) -> Option<String> {
         if let Some((_, suffix)) = file_path.rsplit_once('#')
-            && suffix.starts_with("msg_")
+            && !suffix.is_empty()
         {
             return Some(suffix.to_string());
         }
 
         let file_name = Path::new(file_path).file_name()?.to_str()?;
         let stem = file_name.strip_suffix(".json")?;
-        if stem.starts_with("msg_") {
+        if !stem.is_empty() {
             return Some(stem.to_string());
         }
 
@@ -780,13 +780,14 @@ pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
 }
 
 fn provider_accepts_extension(kind: SourceKind, ext: &str) -> bool {
-    let meta = provider_registry()
-        .into_iter()
-        .find(|spec| spec.kind == kind)
-        .expect("provider metadata must exist");
-    meta.accepted_exts
+    provider_registry()
         .iter()
-        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        .find(|spec| spec.kind == kind)
+        .is_some_and(|meta| {
+            meta.accepted_exts
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
 }
 
 pub(super) fn parse_files_concurrently(
@@ -872,7 +873,10 @@ pub(super) struct ClaudeGlobalDedupe {
 
 impl ClaudeGlobalDedupe {
     fn insert(&self, key: &str) -> bool {
-        let mut seen = self.seen_keys.lock().expect("claude dedupe mutex poisoned");
+        let mut seen = self
+            .seen_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         seen.insert(key.to_string())
     }
 }
@@ -896,18 +900,18 @@ pub(super) fn parse_single_file(
     let (session, project) = derive_session_meta(&job.file);
     let file_path = job.file.path.display().to_string();
 
-    let mut reader = BufReader::new(input);
+    let mut reader = BufReader::with_capacity(64 * 1024, input);
     let mut codex_state = CodexParseState::default();
     let mut claude_state = ClaudeDedupeState::default();
+
     let mut local_events = Vec::new();
     let mut cached_events = Vec::new();
-    let mut line = String::new();
     let mut lines_total = 0usize;
+    let mut lines_parsed = 0usize;
     let mut lines_invalid_json = 0usize;
     let mut lines_missing_usage = 0usize;
     let mut lines_unknown_pricing = 0usize;
     let mut lines_filtered = 0usize;
-    let mut lines_parsed = 0usize;
     let mut base_stats = CachedFileStats::default();
     let mut parsed_offset = 0u64;
 
@@ -965,6 +969,7 @@ pub(super) fn parse_single_file(
         return parse_opencode_message_file(job, filter, timezone, pricing, stats);
     }
 
+    let mut line = String::with_capacity(512);
     loop {
         line.clear();
         let bytes = match reader.read_line(&mut line) {
@@ -1018,14 +1023,13 @@ pub(super) fn parse_single_file(
             lines_unknown_pricing += 1;
         }
 
-        // Grok's unified.jsonl mixes every session/project into one file, so
-        // its per-line parser sets `session` directly from the `sid` field
-        // instead of deriving one session per file like the other sources.
-        if job.file.source != SourceKind::Grok {
-            parsed.event.session = session.clone();
+        if parsed.event.session.is_empty() {
+            parsed.event.session.clone_from(&session);
+        }
+        if parsed.event.project.is_none() {
             parsed.event.project = project.clone();
         }
-        parsed.event.file_path = file_path.clone();
+        parsed.event.file_path.clone_from(&file_path);
 
         cached_events.push(cached_usage_event(&parsed.event));
 
@@ -1079,7 +1083,13 @@ pub(super) fn parse_single_file(
 
 pub(super) fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -> bool {
     let markers = provider_fast_line_markers(source);
-    !markers.is_empty() && !markers.iter().any(|marker| line.contains(marker))
+    if markers.is_empty() {
+        return false;
+    }
+    let limit = 2048.min(line.len());
+    let boundary = line.floor_char_boundary(limit);
+    let scan_window = &line[..boundary];
+    !markers.iter().any(|marker| scan_window.contains(marker))
 }
 
 fn provider_fast_line_markers(source: SourceKind) -> &'static [&'static str] {
@@ -1424,8 +1434,10 @@ pub(super) fn parse_claude_usage_line(
     let request_id = get_value(&value, "requestId")
         .and_then(Value::as_str)
         .or_else(|| get_value(&value, "request_id").and_then(Value::as_str));
-    if let (Some(message_id), Some(request_id)) = (message_id, request_id) {
-        let key = format!("{message_id}:{request_id}");
+    if let Some(message_id) = message_id {
+        let key = request_id
+            .map(|r| format!("{message_id}:{r}"))
+            .unwrap_or_else(|| message_id.to_string());
         if !dedupe_state.insert(key.clone()) {
             return ParseLineResult::MissingUsage;
         }
@@ -1917,15 +1929,16 @@ fn decode_varint(data: &[u8], mut offset: usize) -> Option<(u64, usize)> {
     let mut shift = 0;
     while offset < data.len() {
         let b = data[offset];
-        res |= ((b & 0x7f) as u64) << shift;
+        let val = (b & 0x7f) as u64;
+        if shift >= 64 || (shift == 63 && val > 1) {
+            return None;
+        }
+        res |= val << shift;
         offset += 1;
         if (b & 0x80) == 0 {
             return Some((res, offset));
         }
         shift += 7;
-        if shift >= 64 {
-            return None;
-        }
     }
     None
 }
@@ -2119,7 +2132,12 @@ fn parse_antigravity_db_file(
             continue;
         }
 
-        let Some(timestamp) = DateTime::from_timestamp(gen_event.timestamp_secs, 0) else {
+        let timestamp = if gen_event.timestamp_secs > 10_000_000_000 {
+            DateTime::from_timestamp_millis(gen_event.timestamp_secs)
+        } else {
+            DateTime::from_timestamp(gen_event.timestamp_secs, 0)
+        };
+        let Some(timestamp) = timestamp else {
             lines_missing_usage += 1;
             continue;
         };
@@ -2228,8 +2246,8 @@ fn parse_opencode_db_file(
         (
             "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
-             JOIN session s ON m.session_id = s.id \
-             JOIN project p ON s.project_id = p.id \
+             LEFT JOIN session s ON m.session_id = s.id \
+             LEFT JOIN project p ON s.project_id = p.id \
              WHERE m.time_created >= ?1 AND m.time_created < ?2 \
              ORDER BY m.time_created ASC",
             vec![start_ms, end_ms],
@@ -2238,8 +2256,8 @@ fn parse_opencode_db_file(
         (
             "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
              FROM message m \
-             JOIN session s ON m.session_id = s.id \
-             JOIN project p ON s.project_id = p.id \
+             LEFT JOIN session s ON m.session_id = s.id \
+             LEFT JOIN project p ON s.project_id = p.id \
              ORDER BY m.time_created ASC",
             vec![],
         )
@@ -2280,8 +2298,8 @@ fn parse_opencode_db_file(
             lines_invalid_json += 1;
             continue;
         }
-        let session_dir: String = row.get(5).ok()?;
-        let project_worktree: String = row.get(6).ok()?;
+        let session_dir: Option<String> = row.get(5).ok();
+        let project_worktree: Option<String> = row.get(6).ok();
 
         let Some(timestamp) = DateTime::from_timestamp_millis(time_created) else {
             lines_missing_usage += 1;
@@ -2332,12 +2350,14 @@ fn parse_opencode_db_file(
             lines_unknown_pricing += 1;
         }
 
-        let mut project = Path::new(&session_dir)
-            .file_name()
+        let mut project = session_dir
+            .as_deref()
+            .and_then(|d| Path::new(d).file_name())
             .map(|n| n.to_string_lossy().to_string())
             .or_else(|| {
-                Path::new(&project_worktree)
-                    .file_name()
+                project_worktree
+                    .as_deref()
+                    .and_then(|w| Path::new(w).file_name())
                     .map(|n| n.to_string_lossy().to_string())
             });
 
@@ -2346,8 +2366,9 @@ fn parse_opencode_db_file(
         } else if !session_id.is_empty() {
             session_id
         } else {
-            Path::new(&session_dir)
-                .file_name()
+            session_dir
+                .as_deref()
+                .and_then(|d| Path::new(d).file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default()
         };
@@ -2794,7 +2815,13 @@ fn open_cache_db(path: &Path) -> rusqlite::Result<Connection> {
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     // WAL keeps concurrent readers (e.g. statusline alongside an interactive run)
     // from blocking; NORMAL sync is durable enough for a rebuildable cache.
-    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+    let _ = conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA mmap_size=268435456;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA cache_size=-64000;",
+    );
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS files (cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL);",
@@ -2901,12 +2928,11 @@ fn load_incremental_cache_inner(
     let mut files = HashMap::new();
     {
         let mut stmt = conn.prepare("SELECT cache_key, entry FROM files")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (key, entry_json) = row?;
-            if let Ok(entry) = serde_json::from_str::<CachedFileEntry>(&entry_json) {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let entry_bytes = row.get_ref(1)?.as_bytes()?;
+            if let Ok(entry) = serde_json::from_slice::<CachedFileEntry>(entry_bytes) {
                 files.insert(key, entry);
             }
         }

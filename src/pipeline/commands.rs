@@ -1870,8 +1870,11 @@ fn print_carbon_about(use_json: bool, jq: Option<&str>) -> Result<()> {
 }
 
 fn truncate_str_len(s: &str, max_len: usize) -> String {
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len - 3])
+    let char_count = s.chars().count();
+    if char_count > max_len {
+        let keep = max_len.saturating_sub(3);
+        let prefix: String = s.chars().take(keep).collect();
+        format!("{prefix}...")
     } else {
         s.to_string()
     }

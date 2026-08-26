@@ -172,34 +172,36 @@ pub fn persist_report_rows(rows: &[DailyRow]) -> Result<()> {
         return Ok(());
     };
 
+    let mut stmt = tx.prepare(
+        "INSERT INTO daily_history (date, input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, total_tokens, cost_usd, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(date) DO UPDATE SET
+            input_tokens = MAX(input_tokens, excluded.input_tokens),
+            cache_creation_tokens = MAX(cache_creation_tokens, excluded.cache_creation_tokens),
+            cache_read_tokens = MAX(cache_read_tokens, excluded.cache_read_tokens),
+            output_tokens = MAX(output_tokens, excluded.output_tokens),
+            total_tokens = MAX(total_tokens, excluded.total_tokens),
+            cost_usd = MAX(cost_usd, excluded.cost_usd),
+            updated_at = excluded.updated_at",
+    )?;
+
     for row in rows {
         // Skip instance-prefixed keys like "project | 2026-08-10" to keep daily_history clean
         if row.date.contains('|') {
             continue;
         }
-        let _ = tx.execute(
-            "INSERT INTO daily_history (date, input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, total_tokens, cost_usd, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(date) DO UPDATE SET
-                input_tokens = MAX(input_tokens, excluded.input_tokens),
-                cache_creation_tokens = MAX(cache_creation_tokens, excluded.cache_creation_tokens),
-                cache_read_tokens = MAX(cache_read_tokens, excluded.cache_read_tokens),
-                output_tokens = MAX(output_tokens, excluded.output_tokens),
-                total_tokens = MAX(total_tokens, excluded.total_tokens),
-                cost_usd = MAX(cost_usd, excluded.cost_usd),
-                updated_at = excluded.updated_at",
-            params![
-                row.date,
-                row.totals.input_tokens as i64,
-                row.totals.cache_creation_input_tokens as i64,
-                row.totals.cache_read_input_tokens as i64,
-                row.totals.output_tokens as i64,
-                row.totals.total_tokens as i64,
-                row.totals.cost_usd,
-                now
-            ],
-        );
+        let _ = stmt.execute(params![
+            row.date,
+            row.totals.input_tokens as i64,
+            row.totals.cache_creation_input_tokens as i64,
+            row.totals.cache_read_input_tokens as i64,
+            row.totals.output_tokens as i64,
+            row.totals.total_tokens as i64,
+            row.totals.cost_usd,
+            now
+        ]);
     }
+    drop(stmt);
     let _ = tx.commit();
     Ok(())
 }

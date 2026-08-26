@@ -983,11 +983,7 @@ pub(crate) fn normalize_cli_args(mut argv: Vec<String>) -> Vec<String> {
     let first = argv.get(1).map(String::as_str);
     let should_insert_daily = match first {
         None => true,
-        Some(
-            "-h" | "--help" | "-V" | "--version" | "help" | "daily" | "today" | "activity"
-            | "heartbeat" | "doctor" | "parity" | "monthly" | "weekly" | "week" | "img" | "session"
-            | "blocks" | "live" | "top" | "statusline" | "gui",
-        ) => false,
+        Some("-h" | "--help" | "-V" | "--version" | "help") => false,
         Some(arg) if arg.starts_with('-') => true,
         Some(_) => false,
     };
@@ -1089,6 +1085,21 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
     {
         argv.remove(2);
         argv[1] = "antigravity".to_string();
+        return;
+    }
+
+    // `tu codex status` reaches the zero-history official Codex limits fast path.
+    if provider == "codex"
+        && argv
+            .get(2)
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("status"))
+    {
+        argv.remove(2);
+        argv[1] = "blocks".to_string();
+        argv.insert(2, "--official-limits-only".to_string());
+        if !argv.iter().any(|arg| arg == "--json" || arg == "--jq") {
+            argv.insert(3, "--json".to_string());
+        }
         return;
     }
 
@@ -1318,6 +1329,21 @@ mod tests {
             vec![
                 "tu".to_string(),
                 "antigravity".to_string(),
+                "--json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_status_reaches_official_limits_only() {
+        let argv = vec!["tu".to_string(), "codex".to_string(), "status".to_string()];
+        let out = normalize_cli_args(argv);
+        assert_eq!(
+            out,
+            vec![
+                "tu".to_string(),
+                "blocks".to_string(),
+                "--official-limits-only".to_string(),
                 "--json".to_string()
             ]
         );
