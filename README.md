@@ -190,6 +190,7 @@ tu --tui
 
 # Provider-specific commands
 tu codex daily
+tu blocks --official-limits-only --json # Official Codex limits without local history
 tu claude weekly
 tu antigravity
 tu antigravity status      # Live plan tier + session/weekly quota %

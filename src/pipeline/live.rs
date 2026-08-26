@@ -35,6 +35,19 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     }
 
     let use_json = should_emit_json(&args.common);
+    if args.official_limits_only {
+        if args.common.no_codex {
+            bail!("--official-limits-only requires the Codex source");
+        }
+        if !use_json {
+            bail!("--official-limits-only requires --json or --jq");
+        }
+        return emit_json(
+            &serde_json::json!({ "official_codex": fetch_codex_official_limits().await? }),
+            args.common.jq.as_deref(),
+        );
+    }
+
     if args.live && use_json {
         bail!("--live cannot be used together with --json/--jq");
     }

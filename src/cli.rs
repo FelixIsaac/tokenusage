@@ -338,6 +338,7 @@ impl CommonArgs {
                   tu\n\
                   tu --since 2026-04-01 --until 2026-04-30\n\
                   tu codex daily\n\
+                  tu blocks --official-limits-only --json\n\
                   tu claude weekly --since 2026-04-01\n\
                   tu opencode doctor --json\n\
                   tu antigravity monthly\n\
@@ -729,6 +730,12 @@ pub(crate) struct BlocksArgs {
         help = "Fetch official Codex/Claude 5h/weekly usage + plan via OAuth APIs (with CLI fallback)"
     )]
     pub(crate) official_limits: bool,
+    #[arg(
+        long,
+        conflicts_with_all = ["live", "smoke_check"],
+        help = "Output only official Codex limits as JSON without loading local usage history"
+    )]
+    pub(crate) official_limits_only: bool,
 }
 
 #[cfg(feature = "cli")]
@@ -766,6 +773,7 @@ impl From<LiveArgs> for BlocksArgs {
             refresh_interval: value.refresh_interval,
             smoke_check: value.smoke_check,
             official_limits: true,
+            official_limits_only: false,
         }
     }
 }

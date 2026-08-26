@@ -36,6 +36,9 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- `tu blocks --official-limits-only --json` returns official Codex plan,
+  usage percentages, reset times, and window durations without discovering
+  local usage history or touching the parse cache.
 - **Google Antigravity** is now a first-class provider, not just a quota
   probe: `SourceKind::Gemini`'s display name changed to "Antigravity", and
   its real token/cost accounting is now parsed from Antigravity's own

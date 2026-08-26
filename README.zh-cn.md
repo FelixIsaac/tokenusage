@@ -190,6 +190,7 @@ tu --tui
 
 # 指定 AI 助手报表
 tu codex daily
+tu blocks --official-limits-only --json # 官方 Codex 配额，不读取本地历史
 tu claude weekly
 tu antigravity
 tu antigravity status      # 实时套餐等级 + 会话/周配额百分比
