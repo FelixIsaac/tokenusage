@@ -89,14 +89,16 @@ use crate::types::{DailyReport, ParseStats, UsageEvent};
 pub struct Config {
     /// Start date filter (inclusive).
     ///
-    /// Accepts `YYYYMMDD` or `YYYY-MM-DD`.  Events before this date are
-    /// excluded.  `None` means no lower bound.
+    /// Accepts `YYYYMMDD`, `YYYY-MM-DD`, `DD/MM/YYYY`, or relative dates
+    /// like `30d`, `7d`, `1w`, `1m`, `today`, `yesterday`, `this-month`.
+    /// Events before this date are excluded. `None` means no lower bound.
     pub since: Option<String>,
 
     /// End date filter (inclusive).
     ///
-    /// Accepts `YYYYMMDD` or `YYYY-MM-DD`.  Events after this date are
-    /// excluded.  `None` means no upper bound.
+    /// Accepts `YYYYMMDD`, `YYYY-MM-DD`, `DD/MM/YYYY`, or relative dates
+    /// like `today`, `yesterday`, `7d`. Events after this date are
+    /// excluded. `None` means no upper bound.
     pub until: Option<String>,
 
     /// Sort order for report rows.

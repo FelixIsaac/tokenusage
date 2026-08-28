@@ -196,6 +196,22 @@ fn test_cli_date_formats_and_filtering() {
     let res = run_filter("20260801", "20260831");
     assert!(res.status.success(), "YYYYMMDD format failed");
 
+    // Relative date formats
+    let res = run_filter("30d", "today");
+    assert!(res.status.success(), "30d/today format failed");
+
+    let res = run_filter("7d", "yesterday");
+    assert!(res.status.success(), "7d/yesterday format failed");
+
+    let res = run_filter("1w", "today");
+    assert!(res.status.success(), "1w/today format failed");
+
+    let res = run_filter("1m", "today");
+    assert!(res.status.success(), "1m/today format failed");
+
+    let res = run_filter("this-month", "today");
+    assert!(res.status.success(), "this-month/today format failed");
+
     // Inverted range should fail gracefully
     let res = run_filter("2026-08-31", "2026-08-01");
     assert!(!res.status.success(), "Inverted range must fail");

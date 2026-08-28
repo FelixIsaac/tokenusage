@@ -1186,7 +1186,123 @@ pub(crate) fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>
         }
     }
 
-    bail!("Invalid date format: {value}. Use YYYYMMDD, YYYY-MM-DD, or DD/MM/YYYY")
+    if let Some(date) = parse_relative_date(trimmed, Local::now().date_naive()) {
+        return Ok(Some(date));
+    }
+
+    bail!("Invalid date format: {value}. Use YYYYMMDD, YYYY-MM-DD, DD/MM/YYYY, or relative dates like 30d, 7d, 1w, 1m, today, yesterday")
+}
+
+pub(crate) fn parse_relative_date(input: &str, today: NaiveDate) -> Option<NaiveDate> {
+    let mut s = input.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Direct named aliases
+    match s.as_str() {
+        "today" | "now" => return Some(today),
+        "yesterday" => return today.pred_opt(),
+        "tomorrow" => return today.succ_opt(),
+        "this-week" | "this_week" | "thisweek" | "this week" => {
+            let days_from_mon = today.weekday().num_days_from_monday();
+            return today.checked_sub_signed(chrono::Duration::days(days_from_mon as i64));
+        }
+        "last-week" | "last_week" | "lastweek" | "last week" => {
+            let days_from_mon = today.weekday().num_days_from_monday();
+            let this_monday = today.checked_sub_signed(chrono::Duration::days(days_from_mon as i64))?;
+            return this_monday.checked_sub_signed(chrono::Duration::days(7));
+        }
+        "this-month" | "this_month" | "thismonth" | "this month" => {
+            return NaiveDate::from_ymd_opt(today.year(), today.month(), 1);
+        }
+        "last-month" | "last_month" | "lastmonth" | "last month" => {
+            let (y, m) = if today.month() == 1 {
+                (today.year() - 1, 12)
+            } else {
+                (today.year(), today.month() - 1)
+            };
+            return NaiveDate::from_ymd_opt(y, m, 1);
+        }
+        "this-year" | "this_year" | "thisyear" | "this year" => {
+            return NaiveDate::from_ymd_opt(today.year(), 1, 1);
+        }
+        "last-year" | "last_year" | "lastyear" | "last year" => {
+            return NaiveDate::from_ymd_opt(today.year() - 1, 1, 1);
+        }
+        _ => {}
+    }
+
+    // Strip common prefixes
+    for prefix in [
+        "last-", "last_", "last ", "past-", "past_", "past ", "since-", "since_", "since ",
+    ] {
+        if let Some(stripped) = s.strip_prefix(prefix) {
+            s = stripped.to_string();
+            break;
+        }
+    }
+
+    // Strip common suffixes
+    for suffix in ["-ago", "_ago", " ago", "-back", "_back", " back"] {
+        if let Some(stripped) = s.strip_suffix(suffix) {
+            s = stripped.to_string();
+            break;
+        }
+    }
+
+    // Strip leading minus or plus (e.g. -30d or +1d)
+    let s_str = s.trim();
+    let (is_future, s_str) = if let Some(rest) = s_str.strip_prefix('+') {
+        (true, rest.trim())
+    } else if let Some(rest) = s_str.strip_prefix('-') {
+        (false, rest.trim())
+    } else {
+        (false, s_str)
+    };
+
+    // Find boundary between number and unit (e.g., "30d", "30 days", "30-days", "1w", "3m", "1y")
+    let num_end = s_str.find(|c: char| !c.is_ascii_digit())?;
+    if num_end == 0 {
+        return None;
+    }
+    let num: u32 = s_str[..num_end].parse().ok()?;
+    let unit_raw = s_str[num_end..].trim().trim_start_matches(['-', '_', ' ']);
+
+    match unit_raw {
+        "d" | "day" | "days" => {
+            let dur = chrono::Duration::days(num as i64);
+            if is_future {
+                today.checked_add_signed(dur)
+            } else {
+                today.checked_sub_signed(dur)
+            }
+        }
+        "w" | "wk" | "wks" | "week" | "weeks" => {
+            let dur = chrono::Duration::weeks(num as i64);
+            if is_future {
+                today.checked_add_signed(dur)
+            } else {
+                today.checked_sub_signed(dur)
+            }
+        }
+        "m" | "mo" | "mon" | "mos" | "month" | "months" => {
+            if is_future {
+                today.checked_add_months(chrono::Months::new(num))
+            } else {
+                today.checked_sub_months(chrono::Months::new(num))
+            }
+        }
+        "y" | "yr" | "yrs" | "year" | "years" => {
+            let months = num.checked_mul(12)?;
+            if is_future {
+                today.checked_add_months(chrono::Months::new(months))
+            } else {
+                today.checked_sub_months(chrono::Months::new(months))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn expand_user_path(input: &str) -> PathBuf {

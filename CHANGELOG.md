@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.8] - 2026-08-29
+
+### Added
+- **Relative Date Filters:** Added full support for natural relative date syntax across `--since` and `--until` (`30d`, `7d`, `1w`, `2w`, `1m`, `3m`, `1y`, `today`, `yesterday`, `this-month`, `last-month`, `this-week`, `last-week`, `"last 30 days"`, `"past 2 weeks"`).
+- **Interactive Command Picker Polish:** Fixed description column alignment (`{name:<17}`) preventing command names like `statusline init` from running into their descriptions, and added `completions` directly to the interactive selector.
+
+### Refactored & Streamlined
+- **Unified Date Parsing:** Deduplicated custom date parsers across `src/share.rs`, `src/heartbeat.rs`, `src/activity.rs`, and `src/pipeline/commands.rs` into the centralized pipeline parser.
+
 ## [1.11.7] - 2026-08-28
 
 ### Added
@@ -29,10 +38,12 @@ All notable changes to this project are documented in this file.
   - `kimi`: `moonshot`
   - `anthropic-api`: `anthropic`, `claude-api`
   - `completions`: `completion`
-- **Flexible Date Formats:** Expanded `--since` and `--until` date parsing to support `%Y-%m-%d`, `%Y%m%d`, `%Y/%m/%d`, `%d/%m/%Y` (e.g. `28/07/2026`), `%m/%d/%Y`, and `%d-%m-%Y`.
+- **Relative Date Filters:** Added full support for natural relative date syntax across `--since` and `--until` (e.g., `30d`, `7d`, `1w`, `1m`, `3m`, `1y`, `today`, `yesterday`, `this-month`, `last-month`, `this-week`, `last-week`, `"last 30 days"`, `"past 2 weeks"`).
+- **Flexible Date Formats:** Expanded `--since` and `--until` date parsing to support `%Y-%m-%d`, `%Y%m%d`, `%Y/%m/%d`, `%d/%m/%Y` (e.g. `28/07/2026`), `%m/%d/%Y`, and `%d-%m-%Y`. Unified and streamlined date filtering across all subcommands (`daily`, `weekly`, `monthly`, `activity`, `carbon`, `img`, and `heartbeat`).
 - **Multi-Year In-Repo Testing Engine:** Added synthetic multi-year (2024–2026) fixture generation (`tests/common/mod.rs`), multi-year aggregation and leap-year tests (`tests/multi_year_simulation.rs`), multi-provider data synthesis test (`tests/provider_data_synthesis.rs`), CLI interaction tests (`tests/cli_user_interactions.rs`), and adversarial edge-case test suites (`tests/edge_cases_and_adversarial.rs`).
 
 ### Fixed
+- **Grok Subagent Deduplication & Tick Scaling:** Fixed Grok Build subagent sessions in `~/.grok/sessions/` being double-counted alongside coordinator turns by checking `summary.json` (`session_kind != "subagent"`), and corrected the `costUsdTicks` conversion divisor from `1e9` to `1e10` (1 USD = 10,000,000,000 ticks).
 - **History DB & Override Date Filtering:** Fixed `merge_history_db` and `apply_monthly_overrides` to strictly filter SQLite `history.db` records and monthly overrides against the active `--since` and `--until` date bounds, preventing historical records from leaking into filtered reports.
 
 ## [1.11.6] - 2026-08-27

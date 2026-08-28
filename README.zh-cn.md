@@ -244,8 +244,8 @@ tu img week
 | `tu --tui` | — | 启用交互式 TUI 表格（固定表头、支持上下滚动） |
 | `tu -i` / `tu --instances` | — | 显示按会话实例拆分的子明细 |
 | `tu -p <项目名>` | — | 仅筛选特定项目路径的用量 |
-| `tu --since <日期>` | — | 按起始日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`） |
-| `tu --until <日期>` | — | 按结束日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`） |
+| `tu --since <日期>` | — | 按起始日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD` 或相对日期 `30d`, `7d`, `1w`, `1m`, `today`, `yesterday`, `this-month`） |
+| `tu --until <日期>` | — | 按结束日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD` 或相对日期 `today`, `yesterday`, `7d`） |
 | `tu --brief` | — | 单行极简概要输出（时间范围 · 总 Token · 成本 · 主力模型） |
 
 ### 🌱 碳足迹与能耗遥测

@@ -654,6 +654,10 @@ fn menu_rows() -> Vec<MenuRow> {
             name: "parity",
             desc: "Compare tu totals against ccusage",
         },
+        Cmd {
+            name: "completions",
+            desc: "Generate shell completion scripts (bash, zsh, fish, etc.)",
+        },
     ];
 
     // Balances: only surface providers whose API key is actually configured, so
@@ -828,7 +832,7 @@ fn draw_menu(
                     .add_modifier(Modifier::BOLD),
             ))),
             MenuRow::Cmd { name, desc } => ListItem::new(Line::from(vec![
-                Span::styled(format!("{name:<14}"), Style::default().fg(TuiColor::White)),
+                Span::styled(format!("{name:<17}"), Style::default().fg(TuiColor::White)),
                 Span::styled((*desc).to_string(), Style::default().fg(TuiColor::DarkGray)),
             ])),
         })

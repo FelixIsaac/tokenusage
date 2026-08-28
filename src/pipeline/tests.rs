@@ -592,6 +592,87 @@ fn test_parse_date_filter_formats() {
 }
 
 #[test]
+fn test_parse_relative_dates() {
+    use crate::pipeline::parse_relative_date;
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 28).unwrap();
+
+    assert_eq!(parse_relative_date("today", today), Some(today));
+    assert_eq!(
+        parse_relative_date("yesterday", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("tomorrow", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("1d", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("7d", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 21).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("30d", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("30 days ago", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("last 30 days", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("past 30 days", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("-30d", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("1w", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 21).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("2 weeks", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 14).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("1m", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("1 month ago", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("1y", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2025, 8, 28).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("this-month", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("last-month", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("this-year", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap())
+    );
+    assert_eq!(
+        parse_relative_date("last-year", today),
+        Some(chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap())
+    );
+    assert_eq!(parse_relative_date("invalid-text", today), None);
+}
+
+#[test]
 fn test_parse_common_filter_validation() {
     let valid = crate::cli::CommonArgs {
         since: Some("2026-07-28".to_string()),

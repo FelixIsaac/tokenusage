@@ -1706,22 +1706,7 @@ fn parse_timezone_arg(input: Option<&str>) -> Result<crate::pipeline::TimeZoneMo
 }
 
 fn parse_date(input: Option<&str>) -> Result<Option<NaiveDate>> {
-    let Some(raw) = input.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    for fmt in [
-        "%Y-%m-%d",
-        "%Y%m%d",
-        "%Y/%m/%d",
-        "%d/%m/%Y",
-        "%m/%d/%Y",
-        "%d-%m-%Y",
-    ] {
-        if let Ok(date) = NaiveDate::parse_from_str(raw, fmt) {
-            return Ok(Some(date));
-        }
-    }
-    bail!("Invalid date: {raw} (expected YYYY-MM-DD, YYYYMMDD, or DD/MM/YYYY)");
+    crate::pipeline::parse_date_filter(input)
 }
 
 fn draw_logo_box(img: &mut RgbaImage, x: u32, y: u32, size: u32, args: &ImgArgs) -> Result<()> {

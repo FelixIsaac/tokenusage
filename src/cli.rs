@@ -113,12 +113,20 @@ pub enum CarbonPeriodArg {
 pub struct CommonArgs {
     #[cfg_attr(
         feature = "cli",
-        arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")
+        arg(
+            long,
+            short = 's',
+            help = "Start date filter (YYYY-MM-DD, DD/MM/YYYY, or relative: 30d, 7d, 1w, 1m, today, yesterday)"
+        )
     )]
     pub since: Option<String>,
     #[cfg_attr(
         feature = "cli",
-        arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")
+        arg(
+            long,
+            short = 'u',
+            help = "End date filter (YYYY-MM-DD, DD/MM/YYYY, or relative: today, yesterday, 7d)"
+        )
     )]
     pub until: Option<String>,
     #[cfg_attr(
@@ -645,9 +653,17 @@ pub(crate) struct HeartbeatWatchArgs {
 #[cfg(feature = "cli")]
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct HeartbeatStatsArgs {
-    #[arg(long, short = 's', help = "Start date filter (YYYYMMDD or YYYY-MM-DD)")]
+    #[arg(
+        long,
+        short = 's',
+        help = "Start date filter (YYYY-MM-DD, DD/MM/YYYY, or relative: 30d, 7d, 1w, 1m, today, yesterday)"
+    )]
     pub(crate) since: Option<String>,
-    #[arg(long, short = 'u', help = "End date filter (YYYYMMDD or YYYY-MM-DD)")]
+    #[arg(
+        long,
+        short = 'u',
+        help = "End date filter (YYYY-MM-DD, DD/MM/YYYY, or relative: today, yesterday, 7d)"
+    )]
     pub(crate) until: Option<String>,
     #[arg(
         long,

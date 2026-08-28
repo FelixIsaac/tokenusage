@@ -244,8 +244,8 @@ tu img week
 | `tu --tui` | — | Interactive scrollable TUI with sticky headers |
 | `tu -i` / `tu --instances` | — | Show per-instance / session breakdowns |
 | `tu -p <project>` | — | Filter by specific project name |
-| `tu --since <date>` | — | Filter by start date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`) |
-| `tu --until <date>` | — | Filter by end date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`) |
+| `tu --since <date>` | — | Filter by start date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`, or relative: `30d`, `7d`, `1w`, `1m`, `today`, `yesterday`, `this-month`) |
+| `tu --until <date>` | — | Filter by end date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`, or relative: `today`, `yesterday`, `7d`) |
 | `tu --brief` | — | One-line headline summary (range, tokens, cost, top model) |
 
 ### 🌱 Carbon Footprint & Environmental Telemetry

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, TimeDelta, Timelike, Utc};
 use serde::Serialize;
 
@@ -573,16 +573,7 @@ fn requested_activity_range(
 }
 
 fn parse_activity_date(input: Option<&str>) -> Result<Option<NaiveDate>> {
-    let Some(raw) = input.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
-        return Ok(Some(date));
-    }
-    if raw.len() == 8 {
-        return Ok(Some(NaiveDate::parse_from_str(raw, "%Y%m%d")?));
-    }
-    bail!("Invalid date: {raw}")
+    crate::pipeline::parse_date_filter(input)
 }
 
 fn event_date_bounds(events: &[UsageEvent], tz: &TimeZoneMode) -> Option<(NaiveDate, NaiveDate)> {
