@@ -67,22 +67,110 @@ pub fn load_overrides() -> HistoryOverridesFile {
     HistoryOverridesFile::default()
 }
 
-/// Apply monthly overrides to generated report rows.
-pub fn apply_monthly_overrides(rows: &mut Vec<DailyRow>) {
-    let overrides = load_overrides();
-    apply_monthly_overrides_with_data(rows, &overrides);
+use crate::cli::CommonArgs;
+use crate::types::SourceKind;
+
+pub fn infer_model_source(model: &str) -> Option<SourceKind> {
+    let lower = model.to_lowercase();
+    if lower.contains("claude") {
+        Some(SourceKind::Claude)
+    } else if lower.contains("gpt")
+        || lower.contains("codex")
+        || lower.contains("o1")
+        || lower.contains("o3")
+    {
+        Some(SourceKind::Codex)
+    } else if lower.contains("gemini") || lower.contains("gemma") {
+        Some(SourceKind::Gemini)
+    } else if lower.contains("grok") {
+        Some(SourceKind::Grok)
+    } else if lower.contains("opencode") {
+        Some(SourceKind::OpenCode)
+    } else {
+        None
+    }
 }
 
+/// Apply monthly overrides to generated report rows.
+pub fn apply_monthly_overrides(rows: &mut Vec<DailyRow>, common: &CommonArgs) {
+    let overrides = load_overrides();
+    apply_monthly_overrides_with_data_and_filter(rows, &overrides, common);
+}
+
+#[allow(dead_code)]
 pub fn apply_monthly_overrides_with_data(
     rows: &mut Vec<DailyRow>,
     overrides: &HistoryOverridesFile,
+) {
+    apply_monthly_overrides_with_data_and_filter(rows, overrides, &CommonArgs::default());
+}
+
+pub fn apply_monthly_overrides_with_data_and_filter(
+    rows: &mut Vec<DailyRow>,
+    overrides: &HistoryOverridesFile,
+    common: &CommonArgs,
 ) {
     if overrides.monthly_overrides.is_empty() {
         return;
     }
 
+    let selected = common.selected_sources();
+    let has_source_filter = !selected.is_empty();
+
     let mut added_any = false;
     for (month_key, data) in &overrides.monthly_overrides {
+        // If the user filtered by source, verify this override contains models from the selected sources
+        if has_source_filter {
+            let matches_source = data.models.iter().any(|m| {
+                infer_model_source(m).is_some_and(|src| selected.contains(&src))
+            });
+            if !matches_source {
+                continue;
+            }
+        }
+
+        // Check if specific source exclusion flags are set
+        if common.no_claude
+            && data
+                .models
+                .iter()
+                .all(|m| infer_model_source(m) == Some(SourceKind::Claude))
+        {
+            continue;
+        }
+        if common.no_codex
+            && data
+                .models
+                .iter()
+                .all(|m| infer_model_source(m) == Some(SourceKind::Codex))
+        {
+            continue;
+        }
+        if common.no_gemini
+            && data
+                .models
+                .iter()
+                .all(|m| infer_model_source(m) == Some(SourceKind::Gemini))
+        {
+            continue;
+        }
+        if common.no_grok
+            && data
+                .models
+                .iter()
+                .all(|m| infer_model_source(m) == Some(SourceKind::Grok))
+        {
+            continue;
+        }
+        if common.no_opencode
+            && data
+                .models
+                .iter()
+                .all(|m| infer_model_source(m) == Some(SourceKind::OpenCode))
+        {
+            continue;
+        }
+
         let existing = rows.iter_mut().find(|r| r.date == *month_key);
 
         if let Some(row) = existing {
@@ -132,6 +220,248 @@ pub fn apply_monthly_overrides_with_data(
                 activity: None,
             });
             added_any = true;
+        }
+    }
+
+    if added_any {
+        rows.sort_by(|a, b| a.date.cmp(&b.date));
+    }
+}
+
+/// Load recorded history from SQLite history.db.
+pub fn load_daily_history() -> BTreeMap<String, HistoryOverrideData> {
+    let mut map = BTreeMap::new();
+    let Ok(conn) = init_history_db() else {
+        return map;
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT date, input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, total_tokens, cost_usd FROM daily_history"
+    ) {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            HistoryOverrideData {
+                input_tokens: row.get::<_, i64>(1)? as u64,
+                cache_creation_input_tokens: row.get::<_, i64>(2)? as u64,
+                cache_read_input_tokens: row.get::<_, i64>(3)? as u64,
+                output_tokens: row.get::<_, i64>(4)? as u64,
+                total_tokens: row.get::<_, i64>(5)? as u64,
+                cost_usd: row.get::<_, f64>(6)?,
+                models: vec![],
+                note: None,
+            },
+        ))
+    }) {
+        Ok(r) => r,
+        Err(_) => return map,
+    };
+    for r in rows.flatten() {
+        map.insert(r.0, r.1);
+    }
+    map
+}
+
+use crate::ReportPeriod;
+use crate::pipeline::week_start;
+use crate::cli::WeekStart;
+
+/// Merge persisted daily history from SQLite history.db into current report rows.
+pub fn merge_history_db(
+    rows: &mut Vec<DailyRow>,
+    period: ReportPeriod,
+    common: &CommonArgs,
+) {
+    if common.no_history_db {
+        return;
+    }
+    let map = load_daily_history();
+    if map.is_empty() {
+        return;
+    }
+
+    let selected = common.selected_sources();
+    if !selected.is_empty() && selected.len() < SourceKind::all().len() {
+        return;
+    }
+    if common.no_claude || common.no_codex || common.no_gemini || common.no_grok || common.no_opencode {
+        return;
+    }
+
+    let mut added_any = false;
+    match period {
+        ReportPeriod::Daily => {
+            for (date_key, data) in map {
+                if date_key.len() != 10 || date_key.contains('|') {
+                    continue;
+                }
+                if let Some(row) = rows.iter_mut().find(|r| r.date == date_key) {
+                    if row.totals.total_tokens < data.total_tokens {
+                        row.totals.input_tokens = row.totals.input_tokens.max(data.input_tokens);
+                        row.totals.cache_creation_input_tokens =
+                            row.totals.cache_creation_input_tokens.max(data.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens =
+                            row.totals.cache_read_input_tokens.max(data.cache_read_input_tokens);
+                        row.totals.output_tokens = row.totals.output_tokens.max(data.output_tokens);
+                        row.totals.total_tokens = row.totals.total_tokens.max(data.total_tokens);
+                        row.totals.cost_usd = row.totals.cost_usd.max(data.cost_usd);
+                    }
+                } else {
+                    let totals = TokenCounts {
+                        input_tokens: data.input_tokens,
+                        cache_creation_input_tokens: data.cache_creation_input_tokens,
+                        cache_read_input_tokens: data.cache_read_input_tokens,
+                        output_tokens: data.output_tokens,
+                        reasoning_output_tokens: 0,
+                        total_tokens: data.total_tokens,
+                        cost_usd: data.cost_usd,
+                    };
+                    let mut sources = BTreeMap::new();
+                    sources.insert("history.db".to_string(), totals.clone());
+                    rows.push(DailyRow {
+                        date: date_key,
+                        totals,
+                        models: BTreeMap::new(),
+                        sources,
+                        models_by_source: BTreeMap::new(),
+                        activity: None,
+                    });
+                    added_any = true;
+                }
+            }
+        }
+        ReportPeriod::Monthly => {
+            let mut monthly_db_direct: BTreeMap<String, TokenCounts> = BTreeMap::new();
+            let mut monthly_db_daily_sums: BTreeMap<String, TokenCounts> = BTreeMap::new();
+
+            for (date_key, data) in map {
+                if date_key.contains('|') {
+                    continue;
+                }
+                if date_key.len() == 7 && date_key.contains('-') {
+                    // Direct monthly row in history.db
+                    let entry = monthly_db_direct.entry(date_key.clone()).or_default();
+                    entry.input_tokens = entry.input_tokens.max(data.input_tokens);
+                    entry.cache_creation_input_tokens =
+                        entry.cache_creation_input_tokens.max(data.cache_creation_input_tokens);
+                    entry.cache_read_input_tokens =
+                        entry.cache_read_input_tokens.max(data.cache_read_input_tokens);
+                    entry.output_tokens = entry.output_tokens.max(data.output_tokens);
+                    entry.total_tokens = entry.total_tokens.max(data.total_tokens);
+                    entry.cost_usd = entry.cost_usd.max(data.cost_usd);
+                } else if date_key.len() == 10 && date_key.contains('-') {
+                    // Daily row to be summed by month
+                    let month = date_key[..7].to_string();
+                    let entry = monthly_db_daily_sums.entry(month).or_default();
+                    entry.input_tokens += data.input_tokens;
+                    entry.cache_creation_input_tokens += data.cache_creation_input_tokens;
+                    entry.cache_read_input_tokens += data.cache_read_input_tokens;
+                    entry.output_tokens += data.output_tokens;
+                    entry.total_tokens += data.total_tokens;
+                    entry.cost_usd += data.cost_usd;
+                }
+            }
+
+            let mut all_months = monthly_db_direct.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+            for k in monthly_db_daily_sums.keys() {
+                all_months.insert(k.clone());
+            }
+
+            for month_key in all_months {
+                let direct = monthly_db_direct.get(&month_key);
+                let daily_sum = monthly_db_daily_sums.get(&month_key);
+
+                let mut db_totals = TokenCounts::default();
+                if let Some(d) = direct {
+                    db_totals.input_tokens = db_totals.input_tokens.max(d.input_tokens);
+                    db_totals.cache_creation_input_tokens =
+                        db_totals.cache_creation_input_tokens.max(d.cache_creation_input_tokens);
+                    db_totals.cache_read_input_tokens =
+                        db_totals.cache_read_input_tokens.max(d.cache_read_input_tokens);
+                    db_totals.output_tokens = db_totals.output_tokens.max(d.output_tokens);
+                    db_totals.total_tokens = db_totals.total_tokens.max(d.total_tokens);
+                    db_totals.cost_usd = db_totals.cost_usd.max(d.cost_usd);
+                }
+                if let Some(ds) = daily_sum {
+                    db_totals.input_tokens = db_totals.input_tokens.max(ds.input_tokens);
+                    db_totals.cache_creation_input_tokens =
+                        db_totals.cache_creation_input_tokens.max(ds.cache_creation_input_tokens);
+                    db_totals.cache_read_input_tokens =
+                        db_totals.cache_read_input_tokens.max(ds.cache_read_input_tokens);
+                    db_totals.output_tokens = db_totals.output_tokens.max(ds.output_tokens);
+                    db_totals.total_tokens = db_totals.total_tokens.max(ds.total_tokens);
+                    db_totals.cost_usd = db_totals.cost_usd.max(ds.cost_usd);
+                }
+
+                if let Some(row) = rows.iter_mut().find(|r| r.date == month_key) {
+                    if row.totals.total_tokens < db_totals.total_tokens {
+                        row.totals.input_tokens = row.totals.input_tokens.max(db_totals.input_tokens);
+                        row.totals.cache_creation_input_tokens =
+                            row.totals.cache_creation_input_tokens.max(db_totals.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens =
+                            row.totals.cache_read_input_tokens.max(db_totals.cache_read_input_tokens);
+                        row.totals.output_tokens = row.totals.output_tokens.max(db_totals.output_tokens);
+                        row.totals.total_tokens = row.totals.total_tokens.max(db_totals.total_tokens);
+                        row.totals.cost_usd = row.totals.cost_usd.max(db_totals.cost_usd);
+                    }
+                } else {
+                    let mut sources = BTreeMap::new();
+                    sources.insert("history.db".to_string(), db_totals.clone());
+                    rows.push(DailyRow {
+                        date: month_key,
+                        totals: db_totals,
+                        models: BTreeMap::new(),
+                        sources,
+                        models_by_source: BTreeMap::new(),
+                        activity: None,
+                    });
+                    added_any = true;
+                }
+            }
+        }
+        ReportPeriod::Weekly => {
+            let mut weekly_db: BTreeMap<String, TokenCounts> = BTreeMap::new();
+            for (date_key, data) in map {
+                if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_key, "%Y-%m-%d") {
+                    let w_start = week_start(d, WeekStart::default());
+                    let week_key = format!("{}", w_start.format("%Y-%m-%d"));
+                    let entry = weekly_db.entry(week_key).or_default();
+                    entry.input_tokens += data.input_tokens;
+                    entry.cache_creation_input_tokens += data.cache_creation_input_tokens;
+                    entry.cache_read_input_tokens += data.cache_read_input_tokens;
+                    entry.output_tokens += data.output_tokens;
+                    entry.total_tokens += data.total_tokens;
+                    entry.cost_usd += data.cost_usd;
+                }
+            }
+            for (week_key, db_totals) in weekly_db {
+                if let Some(row) = rows.iter_mut().find(|r| r.date == week_key) {
+                    if row.totals.total_tokens < db_totals.total_tokens {
+                        row.totals.input_tokens = row.totals.input_tokens.max(db_totals.input_tokens);
+                        row.totals.cache_creation_input_tokens =
+                            row.totals.cache_creation_input_tokens.max(db_totals.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens =
+                            row.totals.cache_read_input_tokens.max(db_totals.cache_read_input_tokens);
+                        row.totals.output_tokens = row.totals.output_tokens.max(db_totals.output_tokens);
+                        row.totals.total_tokens = row.totals.total_tokens.max(db_totals.total_tokens);
+                        row.totals.cost_usd = row.totals.cost_usd.max(db_totals.cost_usd);
+                    }
+                } else {
+                    let mut sources = BTreeMap::new();
+                    sources.insert("history.db".to_string(), db_totals.clone());
+                    rows.push(DailyRow {
+                        date: week_key,
+                        totals: db_totals,
+                        models: BTreeMap::new(),
+                        sources,
+                        models_by_source: BTreeMap::new(),
+                        activity: None,
+                    });
+                    added_any = true;
+                }
+            }
         }
     }
 

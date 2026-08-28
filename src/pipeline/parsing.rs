@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, bounded};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
@@ -516,8 +516,15 @@ fn gemini_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
         let base = home.join(".gemini");
         return vec![
             base.join("tmp"),
+            base.join("antigravity-cli").join("conversations"),
             base.join("antigravity-cli").join("brain"),
             base.join("antigravity-cli"),
+            base.join("antigravity").join("conversations"),
+            base.join("antigravity").join("brain"),
+            base.join("antigravity"),
+            base.join("antigravity-ide").join("conversations"),
+            base.join("antigravity-ide").join("brain"),
+            base.join("antigravity-ide"),
             base,
         ];
     }
@@ -908,6 +915,31 @@ pub(super) fn parse_single_file(
     stats: &ParseStatsAtomic,
     global_claude_dedupe: &ClaudeGlobalDedupe,
 ) -> Option<ParsedFileOutput> {
+    if job.file.source == SourceKind::Gemini {
+        let ext = job
+            .file
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if ext.eq_ignore_ascii_case("db") {
+            return parse_antigravity_db_file(job, filter, timezone, pricing, stats);
+        }
+    }
+
+    if job.file.source == SourceKind::OpenCode {
+        let ext = job
+            .file
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if ext.eq_ignore_ascii_case("db") {
+            return parse_opencode_db_file(job, filter, timezone, pricing, stats);
+        }
+        return parse_opencode_message_file(job, filter, timezone, pricing, stats);
+    }
+
     let input = match File::open(&job.file.path) {
         Ok(f) => f,
         Err(_) => {
@@ -961,31 +993,6 @@ pub(super) fn parse_single_file(
         } else {
             let _ = reader.seek(SeekFrom::Start(0));
         }
-    }
-
-    if job.file.source == SourceKind::Gemini {
-        let ext = job
-            .file
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if ext.eq_ignore_ascii_case("db") {
-            return parse_antigravity_db_file(job, filter, timezone, pricing, stats);
-        }
-    }
-
-    if job.file.source == SourceKind::OpenCode {
-        let ext = job
-            .file
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if ext.eq_ignore_ascii_case("db") {
-            return parse_opencode_db_file(job, filter, timezone, pricing, stats);
-        }
-        return parse_opencode_message_file(job, filter, timezone, pricing, stats);
     }
 
     let mut line = String::with_capacity(512);
@@ -1911,41 +1918,6 @@ fn parse_opencode_message_file(
     })
 }
 
-fn filter_bounds_utc_millis(filter: DateFilter, tz: &TimeZoneMode) -> Option<(i64, i64)> {
-    let since = filter.since?;
-    let until = filter.until?;
-
-    let start_local = since.and_hms_opt(0, 0, 0)?;
-    let end_local = until
-        .checked_add_days(chrono::Days::new(1))?
-        .and_hms_opt(0, 0, 0)?;
-
-    let start_utc = match tz {
-        TimeZoneMode::Utc => DateTime::<Utc>::from_naive_utc_and_offset(start_local, Utc),
-        TimeZoneMode::Local => Local
-            .from_local_datetime(&start_local)
-            .earliest()?
-            .with_timezone(&Utc),
-        TimeZoneMode::Named(tz) => tz
-            .from_local_datetime(&start_local)
-            .earliest()?
-            .with_timezone(&Utc),
-    };
-    let end_utc = match tz {
-        TimeZoneMode::Utc => DateTime::<Utc>::from_naive_utc_and_offset(end_local, Utc),
-        TimeZoneMode::Local => Local
-            .from_local_datetime(&end_local)
-            .earliest()?
-            .with_timezone(&Utc),
-        TimeZoneMode::Named(tz) => tz
-            .from_local_datetime(&end_local)
-            .earliest()?
-            .with_timezone(&Utc),
-    };
-
-    Some((start_utc.timestamp_millis(), end_utc.timestamp_millis()))
-}
-
 fn decode_varint(data: &[u8], mut offset: usize) -> Option<(u64, usize)> {
     let mut res: u64 = 0;
     let mut shift = 0;
@@ -2130,10 +2102,16 @@ fn parse_antigravity_db_file(
     })
     .ok()?;
 
+    let file_mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(DateTime::<Utc>::from);
+
     let mut stmt = conn.prepare("SELECT data FROM gen_metadata").ok()?;
     let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)).ok()?;
 
     let mut events = Vec::new();
+    let mut cached_events = Vec::new();
     let mut lines_total = 0usize;
     let mut lines_parsed = 0usize;
     let mut lines_missing_usage = 0usize;
@@ -2149,25 +2127,17 @@ fn parse_antigravity_db_file(
             continue;
         };
 
-        if gen_event.timestamp_secs <= 0 {
-            lines_missing_usage += 1;
-            continue;
-        }
-
         let timestamp = if gen_event.timestamp_secs > 10_000_000_000 {
             DateTime::from_timestamp_millis(gen_event.timestamp_secs)
-        } else {
+        } else if gen_event.timestamp_secs > 0 {
             DateTime::from_timestamp(gen_event.timestamp_secs, 0)
+        } else {
+            file_mtime
         };
         let Some(timestamp) = timestamp else {
             lines_missing_usage += 1;
             continue;
         };
-
-        if !filter.allows(local_date(timestamp, timezone)) {
-            lines_filtered += 1;
-            continue;
-        }
 
         let usage = UsageAccumulator {
             input_tokens: gen_event.input_tokens,
@@ -2200,8 +2170,14 @@ fn parse_antigravity_db_file(
             file_path: path.to_string_lossy().to_string(),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
-        events.push(event);
+        cached_events.push(cached_usage_event(&event));
 
+        if !filter.allows(local_date(timestamp, timezone)) {
+            lines_filtered += 1;
+            continue;
+        }
+
+        events.push(event);
         lines_parsed += 1;
     }
 
@@ -2218,8 +2194,6 @@ fn parse_antigravity_db_file(
     stats
         .lines_filtered
         .fetch_add(lines_filtered, Ordering::Relaxed);
-
-    let cached_events = events.iter().map(cached_usage_event).collect();
 
     Some(ParsedFileOutput {
         events,
@@ -2263,27 +2237,11 @@ fn parse_opencode_db_file(
     let mut events = Vec::new();
     let mut cached_events = Vec::new();
 
-    let bounds = filter_bounds_utc_millis(filter, timezone);
-    let (sql, params): (&str, Vec<i64>) = if let Some((start_ms, end_ms)) = bounds {
-        (
-            "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
-             FROM message m \
-             LEFT JOIN session s ON m.session_id = s.id \
-             LEFT JOIN project p ON s.project_id = p.id \
-             WHERE m.time_created >= ?1 AND m.time_created < ?2 \
-             ORDER BY m.time_created ASC",
-            vec![start_ms, end_ms],
-        )
-    } else {
-        (
-            "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
-             FROM message m \
-             LEFT JOIN session s ON m.session_id = s.id \
-             LEFT JOIN project p ON s.project_id = p.id \
-             ORDER BY m.time_created ASC",
-            vec![],
-        )
-    };
+    let sql = "SELECT m.id, m.session_id, s.id, m.time_created, m.data, s.directory, p.worktree \
+               FROM message m \
+               LEFT JOIN session s ON m.session_id = s.id \
+               LEFT JOIN project p ON s.project_id = p.id \
+               ORDER BY m.time_created ASC";
 
     let mut lines_total = 0usize;
     let mut lines_parsed = 0usize;
@@ -2293,11 +2251,7 @@ fn parse_opencode_db_file(
     let mut lines_filtered = 0usize;
 
     let mut stmt = conn.prepare(sql).ok()?;
-    let mut rows = if params.len() == 2 {
-        stmt.query([params[0], params[1]]).ok()?
-    } else {
-        stmt.query([]).ok()?
-    };
+    let mut rows = stmt.query([]).ok()?;
 
     while let Ok(Some(row)) = rows.next() {
         lines_total += 1;
@@ -2358,12 +2312,6 @@ fn parse_opencode_db_file(
             continue;
         }
 
-        let day = local_date(timestamp, timezone);
-        if !filter.allows(day) {
-            lines_filtered += 1;
-            continue;
-        }
-
         let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
             Some(v) => (v, false),
             None => (0.0, true),
@@ -2408,6 +2356,13 @@ fn parse_opencode_db_file(
             usage: UsageAccumulator { cost_usd, ..usage },
         };
         cached_events.push(cached_usage_event(&event));
+
+        let day = local_date(timestamp, timezone);
+        if !filter.allows(day) {
+            lines_filtered += 1;
+            continue;
+        }
+
         events.push(event);
         lines_parsed += 1;
     }
@@ -3327,6 +3282,45 @@ mod antigravity_proto_tests {
     fn extract_antigravity_gen_event_garbage_blob_returns_none() {
         let garbage = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         assert!(extract_antigravity_gen_event(&garbage).is_none());
+    }
+
+    #[test]
+    fn parse_real_antigravity_db_if_present() {
+        if let Some(home) = dirs::home_dir() {
+            let path = home.join(".gemini/antigravity-cli/conversations/71e85ab1-103f-438a-8717-0cdd4f47a167.db");
+            if path.exists() {
+                let job = FileParseJob {
+                    file: DiscoveredFile {
+                        source: SourceKind::Gemini,
+                        root: path.parent().unwrap().to_path_buf(),
+                        path: path.clone(),
+                    },
+                    cache_key: "test".to_string(),
+                    fingerprint: FileFingerprint {
+                        size: 100,
+                        modified_unix_secs: 1,
+                        modified_unix_nanos: 0,
+                    },
+                    strategy: ParseStrategy::Full,
+                };
+                let stats = ParseStatsAtomic::default();
+                let pricing = PricingTable::default();
+                let res = parse_antigravity_db_file(
+                    job,
+                    DateFilter {
+                        since: None,
+                        until: None,
+                    },
+                    &TimeZoneMode::Local,
+                    &pricing,
+                    &stats,
+                );
+                assert!(res.is_some(), "parse_antigravity_db_file should return Some");
+                let parsed = res.unwrap();
+                eprintln!("Parsed {} events from real DB", parsed.events.len());
+                assert!(!parsed.events.is_empty(), "Should parse events from real DB");
+            }
+        }
     }
 }
 

@@ -1516,9 +1516,9 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         .collect::<Vec<_>>();
 
     // Calculate overall metrics
-    let total_metrics = EnvironmentalMetrics::calculate_events(&events, grid, pue, wue);
-    let total_tokens: u64 = events.iter().map(|e| e.usage.total_tokens()).sum();
-    let total_cost: f64 = events.iter().map(|e| e.usage.cost_usd).sum();
+    let mut total_metrics = EnvironmentalMetrics::calculate_events(&events, grid, pue, wue);
+    let mut total_tokens: u64 = events.iter().map(|e| e.usage.total_tokens()).sum();
+    let mut total_cost: f64 = events.iter().map(|e| e.usage.cost_usd).sum();
 
     // Group events by model for per-model breakdown
     let mut model_events: BTreeMap<String, Vec<&UsageEvent>> = BTreeMap::new();
@@ -1556,6 +1556,103 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
             water_ml: m.water_ml,
         });
     }
+
+    // Apply history baseline and overrides if enabled
+    if !args.common.no_history_overrides || !args.common.no_history_db {
+        let monthly_rows = build_group_rows(
+            &events,
+            ReportPeriod::Monthly,
+            &args.common,
+            |event| {
+                let day = local_date(event.timestamp, &tz);
+                format!("{}", day.format("%Y-%m"))
+            },
+        );
+
+        for row in &monthly_rows {
+            // Check if month is in scope for the carbon period
+            let in_period = match args.period {
+                CarbonPeriodArg::All | CarbonPeriodArg::About => true,
+                CarbonPeriodArg::Monthly => {
+                    row.date == month_start_date.format("%Y-%m").to_string()
+                }
+                _ => false,
+            };
+            if !in_period {
+                continue;
+            }
+
+            let raw_month_tokens: u64 = events
+                .iter()
+                .filter(|e| {
+                    local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date
+                })
+                .map(|e| e.usage.total_tokens())
+                .sum();
+            let raw_month_cost: f64 = events
+                .iter()
+                .filter(|e| {
+                    local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date
+                })
+                .map(|e| e.usage.cost_usd)
+                .sum();
+
+            if row.totals.total_tokens > raw_month_tokens {
+                let delta_tokens = row.totals.total_tokens - raw_month_tokens;
+                let delta_cost = (row.totals.cost_usd - raw_month_cost).max(0.0);
+                total_tokens += delta_tokens;
+                total_cost += delta_cost;
+
+                let primary_model = row
+                    .models
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+                let delta_counts = crate::types::TokenCounts {
+                    input_tokens: row
+                        .totals
+                        .input_tokens
+                        .saturating_sub(raw_month_tokens / 10),
+                    cache_creation_input_tokens: row.totals.cache_creation_input_tokens,
+                    cache_read_input_tokens: row.totals.cache_read_input_tokens.saturating_sub(
+                        raw_month_tokens.saturating_sub(raw_month_tokens / 10),
+                    ),
+                    output_tokens: row.totals.output_tokens,
+                    reasoning_output_tokens: 0,
+                    total_tokens: delta_tokens,
+                    cost_usd: delta_cost,
+                };
+                let delta_metrics = EnvironmentalMetrics::calculate_counts(
+                    &delta_counts,
+                    &primary_model,
+                    grid,
+                    pue,
+                    wue,
+                );
+                total_metrics.add(&delta_metrics);
+
+                if let Some(m_row) = model_rows.iter_mut().find(|r| r.model == primary_model) {
+                    m_row.tokens += delta_tokens;
+                    m_row.cost_usd += delta_cost;
+                    m_row.energy_kwh += delta_metrics.energy_kwh;
+                    m_row.carbon_gco2e += delta_metrics.carbon_gco2e;
+                    m_row.water_ml += delta_metrics.water_ml;
+                } else {
+                    model_rows.push(CarbonModelRow {
+                        model: primary_model,
+                        events: 1,
+                        tokens: delta_tokens,
+                        cost_usd: delta_cost,
+                        energy_kwh: delta_metrics.energy_kwh,
+                        carbon_gco2e: delta_metrics.carbon_gco2e,
+                        water_ml: delta_metrics.water_ml,
+                    });
+                }
+            }
+        }
+    }
+
     model_rows.sort_by(|a, b| b.carbon_gco2e.partial_cmp(&a.carbon_gco2e).unwrap());
 
     let equiv = EnvironmentalEquivalences::from_metrics(&total_metrics);

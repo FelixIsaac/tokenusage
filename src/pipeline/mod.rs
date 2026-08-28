@@ -1037,8 +1037,10 @@ where
 
     rows.sort_by(|a, b| a.date.cmp(&b.date));
 
+    history::merge_history_db(&mut rows, period, common);
+
     if period == ReportPeriod::Monthly && !common.no_history_overrides {
-        history::apply_monthly_overrides(&mut rows);
+        history::apply_monthly_overrides(&mut rows, common);
     }
 
     if period == ReportPeriod::Daily && !common.no_history_db {
@@ -1087,7 +1089,7 @@ fn format_display_datetime(ts: DateTime<Utc>, tz: &TimeZoneMode) -> String {
     }
 }
 
-fn week_start(day: NaiveDate, start: WeekStart) -> NaiveDate {
+pub(crate) fn week_start(day: NaiveDate, start: WeekStart) -> NaiveDate {
     let week_start_num = match start {
         WeekStart::Sunday => 0,
         WeekStart::Monday => 1,
