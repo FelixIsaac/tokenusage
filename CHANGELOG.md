@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.11.7] - 2026-08-28
+
+### Added
+- **Subcommand Aliases:** Added comprehensive aliases across all subcommands:
+  - `monthly`: `months`, `month`, `m`
+  - `weekly`: `weeks`, `week`, `w`
+  - `daily`: `days`, `day`, `d`
+  - `today`: `now`, `t`
+  - `blocks`: `block`, `b`
+  - `session`: `sessions`, `sess`, `s`
+  - `activity`: `act`, `coding`
+  - `carbon`: `co2`, `energy`, `footprint`
+  - `live`: `watch`
+  - `top`: `htop`, `ps`
+  - `gui`: `ui`, `app`
+  - `statusline`: `sl`
+  - `img`: `image`, `share`, `card`, `png`
+  - `heartbeat`: `hb`
+  - `doctor`: `doc`, `check`, `health`
+  - `parity`: `diff`, `compare`
+  - `antigravity`: `ag`
+  - `deepseek`: `ds`
+  - `openrouter`: `or`
+  - `grok`: `xai`
+  - `kimi`: `moonshot`
+  - `anthropic-api`: `anthropic`, `claude-api`
+  - `completions`: `completion`
+- **Flexible Date Formats:** Expanded `--since` and `--until` date parsing to support `%Y-%m-%d`, `%Y%m%d`, `%Y/%m/%d`, `%d/%m/%Y` (e.g. `28/07/2026`), `%m/%d/%Y`, and `%d-%m-%Y`.
+- **Multi-Year In-Repo Testing Engine:** Added synthetic multi-year (2024–2026) fixture generation (`tests/common/mod.rs`), multi-year aggregation and leap-year tests (`tests/multi_year_simulation.rs`), multi-provider data synthesis test (`tests/provider_data_synthesis.rs`), CLI interaction tests (`tests/cli_user_interactions.rs`), and adversarial edge-case test suites (`tests/edge_cases_and_adversarial.rs`).
+
+### Fixed
+- **History DB & Override Date Filtering:** Fixed `merge_history_db` and `apply_monthly_overrides` to strictly filter SQLite `history.db` records and monthly overrides against the active `--since` and `--until` date bounds, preventing historical records from leaking into filtered reports.
+
 ## [1.11.6] - 2026-08-27
 
 ### Performance & Engine

@@ -1709,19 +1709,19 @@ fn parse_date(input: Option<&str>) -> Result<Option<NaiveDate>> {
     let Some(raw) = input.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    if raw.len() == 10 {
-        return Ok(Some(
-            NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-                .with_context(|| format!("Invalid date: {raw} (expected YYYY-MM-DD)"))?,
-        ));
+    for fmt in [
+        "%Y-%m-%d",
+        "%Y%m%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d-%m-%Y",
+    ] {
+        if let Ok(date) = NaiveDate::parse_from_str(raw, fmt) {
+            return Ok(Some(date));
+        }
     }
-    if raw.len() == 8 {
-        return Ok(Some(
-            NaiveDate::parse_from_str(raw, "%Y%m%d")
-                .with_context(|| format!("Invalid date: {raw} (expected YYYYMMDD)"))?,
-        ));
-    }
-    bail!("Invalid date: {raw} (expected YYYY-MM-DD or YYYYMMDD)");
+    bail!("Invalid date: {raw} (expected YYYY-MM-DD, YYYYMMDD, or DD/MM/YYYY)");
 }
 
 fn draw_logo_box(img: &mut RgbaImage, x: u32, y: u32, size: u32, args: &ImgArgs) -> Result<()> {

@@ -560,3 +560,58 @@ fn test_openrouter_parse() {
     let pct = data["usage"].as_f64().unwrap() / data["limit"].as_f64().unwrap() * 100.0;
     assert!((pct - 15.0).abs() < 0.001);
 }
+
+#[test]
+fn test_parse_date_filter_formats() {
+    assert_eq!(
+        parse_date_filter(Some("2026-07-28")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_date_filter(Some("20260728")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_date_filter(Some("2026/07/28")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_date_filter(Some("28/07/2026")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_date_filter(Some("28-07-2026")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        parse_date_filter(Some("07/28/2026")).unwrap(),
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(parse_date_filter(None).unwrap(), None);
+    assert!(parse_date_filter(Some("not-a-date")).is_err());
+}
+
+#[test]
+fn test_parse_common_filter_validation() {
+    let valid = crate::cli::CommonArgs {
+        since: Some("2026-07-28".to_string()),
+        until: Some("2026-08-28".to_string()),
+        ..Default::default()
+    };
+    let filter = parse_common_filter(&valid).unwrap();
+    assert_eq!(
+        filter.since,
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 28).unwrap())
+    );
+    assert_eq!(
+        filter.until,
+        Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 28).unwrap())
+    );
+
+    let invalid = crate::cli::CommonArgs {
+        since: Some("2026-08-28".to_string()),
+        until: Some("2026-07-28".to_string()),
+        ..Default::default()
+    };
+    assert!(parse_common_filter(&invalid).is_err());
+}

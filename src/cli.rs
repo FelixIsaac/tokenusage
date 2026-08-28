@@ -367,50 +367,91 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     // --- Reporting (display_order 1-7) ---
-    #[command(about = "Per-day token usage and cost", display_order = 2)]
+    #[command(
+        about = "Per-day token usage and cost",
+        aliases = ["days", "day", "d"],
+        display_order = 2
+    )]
     Daily(DailyArgs),
-    #[command(about = "Today's token usage and coding activity", display_order = 1)]
+    #[command(
+        about = "Today's token usage and coding activity",
+        aliases = ["now", "t"],
+        display_order = 1
+    )]
     Today(TodayArgs),
     #[command(
         about = "Coding-activity view with per-day breakdowns",
+        aliases = ["act", "coding"],
         display_order = 5
     )]
     Activity(ActivityArgs),
-    #[command(about = "Per-month token usage", display_order = 4)]
+    #[command(
+        about = "Per-month token usage",
+        aliases = ["months", "month", "m"],
+        display_order = 4
+    )]
     Monthly(MonthlyArgs),
-    #[command(about = "Per-week token usage", alias = "week", display_order = 3)]
+    #[command(
+        about = "Per-week token usage",
+        aliases = ["weeks", "week", "w"],
+        display_order = 3
+    )]
     Weekly(WeeklyArgs),
-    #[command(about = "Usage grouped by 5-hour billing blocks", display_order = 6)]
+    #[command(
+        about = "Usage grouped by 5-hour billing blocks",
+        aliases = ["block", "b"],
+        display_order = 6
+    )]
     Blocks(BlocksArgs),
-    #[command(about = "Per-session token usage", display_order = 7)]
+    #[command(
+        about = "Per-session token usage",
+        aliases = ["sessions", "sess", "s"],
+        display_order = 7
+    )]
     Session(SessionArgs),
     #[command(
         about = "Carbon footprint, energy (kWh), and water usage report",
+        aliases = ["co2", "energy", "footprint"],
         display_order = 8
     )]
     Carbon(CarbonArgs),
 
     // --- Live / interactive (display_order 10-12) ---
-    #[command(about = "Live-updating usage view", display_order = 10)]
+    #[command(
+        about = "Live-updating usage view",
+        alias = "watch",
+        display_order = 10
+    )]
     Live(LiveArgs),
     #[command(
         about = "Real-time per-session token viewer (htop for tokens)",
+        aliases = ["htop", "ps"],
         display_order = 11
     )]
     Top(TopArgs),
-    #[command(about = "Desktop GUI (Iced)", display_order = 12)]
+    #[command(
+        about = "Desktop GUI (Iced)",
+        aliases = ["ui", "app"],
+        display_order = 12
+    )]
     Gui(GuiArgs),
 
     // --- Integration (display_order 20-22) ---
     #[command(
         about = "One-line status for the Claude Code statusLine hook",
+        alias = "sl",
         display_order = 20
     )]
     Statusline(StatuslineArgs),
-    #[command(about = "Render a usage report as a PNG", display_order = 21)]
+    #[command(
+        about = "Render a usage report as a PNG",
+        aliases = ["image", "share", "card", "png"],
+        display_order = 21
+    )]
     Img(ImgArgs),
     #[command(
         about = "Local editor-activity heartbeat collector and stats",
+        alias = "hb",
         display_order = 22
     )]
     Heartbeat(HeartbeatArgs),
@@ -418,42 +459,57 @@ pub(crate) enum Commands {
     // --- Diagnostics (display_order 30-31) ---
     #[command(
         about = "Inspect roots, files, cache and pricing health",
+        aliases = ["doc", "check", "health"],
         display_order = 30
     )]
     Doctor(DailyArgs),
-    #[command(about = "Compare tu totals against ccusage", display_order = 31)]
+    #[command(
+        about = "Compare tu totals against ccusage",
+        aliases = ["diff", "compare"],
+        display_order = 31
+    )]
     Parity(ParityArgs),
 
     // --- Balances / quota (display_order 40-45) ---
-    #[command(about = "Show Antigravity plan and usage limits", display_order = 40)]
+    #[command(
+        about = "Show Antigravity plan and usage limits",
+        alias = "ag",
+        display_order = 40
+    )]
     Antigravity(AntigravityArgs),
     #[command(
         about = "Show DeepSeek API credit balance (DEEPSEEK_API_KEY)",
+        alias = "ds",
         display_order = 41
     )]
     Deepseek(DeepseekArgs),
     #[command(
         about = "Show OpenRouter API credit balance (OPENROUTER_API_KEY)",
+        alias = "or",
         display_order = 42
     )]
     Openrouter(OpenrouterArgs),
     #[command(
         about = "Show Grok (xAI) credit balance (XAI_API_KEY)",
+        alias = "xai",
         display_order = 43
     )]
     Grok(GrokArgs),
     #[command(
         about = "Show Kimi (Moonshot) credit balance (MOONSHOT_API_KEY)",
+        alias = "moonshot",
         display_order = 44
     )]
     Kimi(KimiArgs),
     #[command(
         about = "Show Anthropic API usage today (ANTHROPIC_API_KEY / ANTHROPIC_ADMIN_KEY)",
+        aliases = ["anthropic", "claude-api"],
         display_order = 45
     )]
     AnthropicApi(AnthropicApiArgs),
     #[command(
         about = "Generate shell completion scripts (bash, zsh, fish, powershell, elvish)",
+        alias = "completion",
         display_order = 50
     )]
     Completions(CompletionsArgs),

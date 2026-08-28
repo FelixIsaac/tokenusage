@@ -232,62 +232,64 @@ tu img week
 ## 📋 完整命令速查表
 
 ### 📊 周期性报表与用量聚合
-| 命令 | 说明 |
-| :--- | :--- |
-| `tu` / `tu daily` | 每日 Token 用量与成本报表（默认命令） |
-| `tu today` | 今日实时用量与模型消耗明细 |
-| `tu weekly` (或 `tu week`) | 按 ISO 8601 自然周聚合（周一开始） |
-| `tu monthly` | 按自然月聚合 |
-| `tu session` | 按会话 Session ID 独立聚合 |
-| `tu blocks` | 按 5 小时滚动限速窗口聚合 |
-| `tu activity` | 真实编码活跃时长、Tokens/小时与主力编程语言 |
-| `tu --tui` | 启用交互式 TUI 表格（固定表头、支持上下滚动） |
-| `tu -i` / `tu --instances` | 显示按会话实例拆分的子明细 |
-| `tu -p <项目名>` | 仅筛选特定项目路径的用量 |
-| `tu --brief` | 单行极简概要输出（时间范围 · 总 Token · 成本 · 主力模型） |
+| 命令 | 别名 (Aliases) | 说明 |
+| :--- | :--- | :--- |
+| `tu` / `tu daily` | `days`, `day`, `d` | 每日 Token 用量与成本报表（默认命令） |
+| `tu today` | `now`, `t` | 今日实时用量与模型消耗明细 |
+| `tu weekly` | `weeks`, `week`, `w` | 按 ISO 8601 自然周聚合（周一开始） |
+| `tu monthly` | `months`, `month`, `m` | 按自然月聚合 |
+| `tu session` | `sessions`, `sess`, `s` | 按会话 Session ID 独立聚合 |
+| `tu blocks` | `block`, `b` | 按 5 小时滚动限速窗口聚合 |
+| `tu activity` | `act`, `coding` | 真实编码活跃时长、Tokens/小时与主力编程语言 |
+| `tu --tui` | — | 启用交互式 TUI 表格（固定表头、支持上下滚动） |
+| `tu -i` / `tu --instances` | — | 显示按会话实例拆分的子明细 |
+| `tu -p <项目名>` | — | 仅筛选特定项目路径的用量 |
+| `tu --since <日期>` | — | 按起始日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`） |
+| `tu --until <日期>` | — | 按结束日期过滤（支持 `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`） |
+| `tu --brief` | — | 单行极简概要输出（时间范围 · 总 Token · 成本 · 主力模型） |
 
 ### 🌱 碳足迹与能耗遥测
-| 命令 | 说明 |
-| :--- | :--- |
-| `tu carbon` | 今日环境影响报表（电能 kWh、等效碳排 kg CO₂e、冷却耗水 L） |
-| `tu carbon daily` | 每日碳足迹明细表 |
-| `tu carbon weekly` | 本周碳足迹明细表 |
-| `tu carbon monthly` | 本月碳足迹明细表 |
-| `tu carbon all` | 历史所有会话的全量环境遥测分析 |
-| `tu carbon about` | GPU 物理计算模型、能耗常数与 PUE/WUE 透明度声明 |
-| `tu carbon --region <区域>` | 设定算力电网区域 (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
-| `tu daily --carbon` | 在标准每日用量报表中附加碳排放与能耗数据列 |
+| 命令 | 别名 (Aliases) | 说明 |
+| :--- | :--- | :--- |
+| `tu carbon` | `co2`, `energy`, `footprint` | 今日环境影响报表（电能 kWh、等效碳排 kg CO₂e、冷却耗水 L） |
+| `tu carbon daily` | — | 每日碳足迹明细表 |
+| `tu carbon weekly` | — | 本周碳足迹明细表 |
+| `tu carbon monthly` | — | 本月碳足迹明细表 |
+| `tu carbon all` | — | 历史所有会话的全量环境遥测分析 |
+| `tu carbon about` | — | GPU 物理计算模型、能耗常数与 PUE/WUE 透明度声明 |
+| `tu carbon --region <区域>` | — | 设定算力电网区域 (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
+| `tu daily --carbon` | — | 在标准每日用量报表中附加碳排放与能耗数据列 |
 
 ### ⚡ 配额探测与官方额度
-| 命令 | 说明 |
-| :--- | :--- |
-| `tu codex status` | **极速 OAuth 配额探测**（5小时/周限额、重置倒计时，零磁盘日志扫描） |
-| `tu blocks --official-limits-only --json` | 官方 Codex 配额 JSON 数据流直出（<0.60s 快速旁路） |
-| `tu antigravity status` | 实时探测 Antigravity 套餐等级与会话/周配额百分比 |
-| `tu antigravity status --warn-threshold 15` | 当剩余额度低于 15% 时触发黄色告警提示 |
-| `tu deepseek` | 查询 DeepSeek API 账户余额 (`DEEPSEEK_API_KEY`) |
-| `tu openrouter` | 查询 OpenRouter API 账户可用额度 (`OPENROUTER_API_KEY`) |
-| `tu grok` | 查询 Grok (xAI) API 额度与 CLI OAuth Proxy Token 状态 (`XAI_API_KEY`) |
-| `tu kimi` | 查询 Kimi (Moonshot) API 账户余额 (`MOONSHOT_API_KEY`) |
-| `tu anthropic-api` | 查询 Anthropic 官方 API 当日用量与费用 (`ANTHROPIC_API_KEY`) |
+| 命令 | 别名 (Aliases) | 说明 |
+| :--- | :--- | :--- |
+| `tu codex status` | — | **极速 OAuth 配额探测**（5小时/周限额、重置倒计时，零磁盘日志扫描） |
+| `tu blocks --official-limits-only --json` | — | 官方 Codex 配额 JSON 数据流直出（<0.60s 快速旁路） |
+| `tu antigravity status` | `tu ag status` | 实时探测 Antigravity 套餐等级与会话/周配额百分比 |
+| `tu antigravity status --warn-threshold 15` | — | 当剩余额度低于 15% 时触发黄色告警提示 |
+| `tu deepseek` | `ds` | 查询 DeepSeek API 账户余额 (`DEEPSEEK_API_KEY`) |
+| `tu openrouter` | `or` | 查询 OpenRouter API 账户可用额度 (`OPENROUTER_API_KEY`) |
+| `tu grok` | `xai` | 查询 Grok (xAI) API 额度与 CLI OAuth Proxy Token 状态 (`XAI_API_KEY`) |
+| `tu kimi` | `moonshot` | 查询 Kimi (Moonshot) API 账户余额 (`MOONSHOT_API_KEY`) |
+| `tu anthropic-api` | `anthropic`, `claude-api` | 查询 Anthropic 官方 API 当日用量与费用 (`ANTHROPIC_API_KEY`) |
 
 ### 🖥️ 实时监控、TUI 与桌面 GUI
-| 命令 | 说明 |
-| :--- | :--- |
-| `tu live` | 实时刷新交互式 TUI 监控仪表盘 |
-| `tu top` | Token 进程监视器（类似 htop 的按会话实时监视） |
-| `tu gui` | 原生桌面 GUI 客户端（基于 Iced 框架） |
-| `tu img day` | 生成今日编码战报的高清 PNG 分享卡片 |
-| `tu img week` | 生成本周编码战报的高清 PNG 分享卡片 |
+| 命令 | 别名 (Aliases) | 说明 |
+| :--- | :--- | :--- |
+| `tu live` | `watch` | 实时刷新交互式 TUI 监控仪表盘 |
+| `tu top` | `htop`, `ps` | Token 进程监视器（类似 htop 的按会话实时监视） |
+| `tu gui` | `ui`, `app` | 原生桌面 GUI 客户端（基于 Iced 框架） |
+| `tu img day` | `image`, `share`, `card`, `png` | 生成今日编码战报的高清 PNG 分享卡片 |
+| `tu img week` | — | 生成本周编码战报的高清 PNG 分享卡片 |
 
 ### 🔧 终端集成、补全与诊断工具
-| 命令 | 说明 |
-| :--- | :--- |
-| `tu statusline` | 为终端 Prompt / 状态栏挂钩输出单行状态组件 |
-| `tu statusline init` | 一键自动配置 Claude Code 状态栏（智能合并 `~/.claude/settings.json`） |
-| `tu completions <shell>` | 生成 Shell 自动补全脚本 (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
-| `tu doctor` | 全面检查扫描路径、日志发现量、SQLite 缓存健康度与价格缓存 TTL |
-| `tu parity` | 自动比对 `tu` 与 `@ccusage` 官方工具的解析与计算一致性 |
+| 命令 | 别名 (Aliases) | 说明 |
+| :--- | :--- | :--- |
+| `tu statusline` | `sl` | 为终端 Prompt / 状态栏挂钩输出单行状态组件 |
+| `tu statusline init` | — | 一键自动配置 Claude Code 状态栏（智能合并 `~/.claude/settings.json`） |
+| `tu completions <shell>` | `completion` | 生成 Shell 自动补全脚本 (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `tu doctor` | `doc`, `check`, `health` | 全面检查扫描路径、日志发现量、SQLite 缓存健康度与价格缓存 TTL |
+| `tu parity` | `diff`, `compare` | 自动比对 `tu` 与 `@ccusage` 官方工具的解析与计算一致性 |
 
 ---
 

@@ -1139,7 +1139,7 @@ fn format_usd(value: f64) -> String {
     format!("${value:.2}")
 }
 
-fn parse_common_filter(common: &CommonArgs) -> Result<DateFilter> {
+pub(crate) fn parse_common_filter(common: &CommonArgs) -> Result<DateFilter> {
     let filter = DateFilter {
         since: parse_date_filter(common.since.as_deref())?,
         until: parse_date_filter(common.until.as_deref())?,
@@ -1167,18 +1167,26 @@ pub(super) fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>> {
+pub(crate) fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>> {
     let Some(value) = input else {
         return Ok(None);
     };
 
-    for fmt in ["%Y%m%d", "%Y-%m-%d"] {
-        if let Ok(date) = NaiveDate::parse_from_str(value, fmt) {
+    let trimmed = value.trim();
+    for fmt in [
+        "%Y-%m-%d",
+        "%Y%m%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d-%m-%Y",
+    ] {
+        if let Ok(date) = NaiveDate::parse_from_str(trimmed, fmt) {
             return Ok(Some(date));
         }
     }
 
-    bail!("Invalid date format: {value}. Use YYYYMMDD or YYYY-MM-DD")
+    bail!("Invalid date format: {value}. Use YYYYMMDD, YYYY-MM-DD, or DD/MM/YYYY")
 }
 
 fn expand_user_path(input: &str) -> PathBuf {

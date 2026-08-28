@@ -863,16 +863,19 @@ fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>> {
     let Some(raw) = input.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
-        return Ok(Some(date));
+    for fmt in [
+        "%Y-%m-%d",
+        "%Y%m%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d-%m-%Y",
+    ] {
+        if let Ok(date) = NaiveDate::parse_from_str(raw, fmt) {
+            return Ok(Some(date));
+        }
     }
-    if raw.len() == 8 {
-        return Ok(Some(
-            NaiveDate::parse_from_str(raw, "%Y%m%d")
-                .with_context(|| format!("Invalid date: {raw}"))?,
-        ));
-    }
-    bail!("Invalid date: {raw}")
+    bail!("Invalid date: {raw} (expected YYYY-MM-DD, YYYYMMDD, or DD/MM/YYYY)")
 }
 
 fn heartbeat_record_from_path(

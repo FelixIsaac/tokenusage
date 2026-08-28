@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DailyRow, TokenCounts};
+use crate::types::{DailyRow, DateFilter, TokenCounts};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HistoryOverrideData {
@@ -105,6 +105,48 @@ pub fn apply_monthly_overrides_with_data(
     apply_monthly_overrides_with_data_and_filter(rows, overrides, &CommonArgs::default());
 }
 
+fn month_in_range(month_key: &str, filter: DateFilter) -> bool {
+    use chrono::Datelike;
+    let Ok(first_day) = chrono::NaiveDate::parse_from_str(&format!("{month_key}-01"), "%Y-%m-%d") else {
+        return true;
+    };
+    let next_month = if first_day.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(first_day.year() + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(first_day.year(), first_day.month() + 1, 1)
+    };
+    let last_day = next_month
+        .and_then(|nm| nm.pred_opt())
+        .unwrap_or(first_day);
+
+    if let Some(since) = filter.since {
+        if last_day < since {
+            return false;
+        }
+    }
+    if let Some(until) = filter.until {
+        if first_day > until {
+            return false;
+        }
+    }
+    true
+}
+
+fn week_in_range(w_start: chrono::NaiveDate, filter: DateFilter) -> bool {
+    let w_end = w_start + chrono::TimeDelta::days(6);
+    if let Some(since) = filter.since {
+        if w_end < since {
+            return false;
+        }
+    }
+    if let Some(until) = filter.until {
+        if w_start > until {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn apply_monthly_overrides_with_data_and_filter(
     rows: &mut Vec<DailyRow>,
     overrides: &HistoryOverridesFile,
@@ -114,11 +156,18 @@ pub fn apply_monthly_overrides_with_data_and_filter(
         return;
     }
 
+    let filter = crate::pipeline::parse_common_filter(common).ok();
     let selected = common.selected_sources();
     let has_source_filter = !selected.is_empty();
 
     let mut added_any = false;
     for (month_key, data) in &overrides.monthly_overrides {
+        if let Some(f) = filter {
+            if !month_in_range(month_key, f) {
+                continue;
+            }
+        }
+
         // If the user filtered by source, verify this override contains models from the selected sources
         if has_source_filter {
             let matches_source = data.models.iter().any(|m| {
@@ -281,6 +330,21 @@ pub fn merge_history_db(
     if map.is_empty() {
         return;
     }
+    merge_history_db_with_map(rows, period, common, map);
+}
+
+pub fn merge_history_db_with_map(
+    rows: &mut Vec<DailyRow>,
+    period: ReportPeriod,
+    common: &CommonArgs,
+    map: BTreeMap<String, HistoryOverrideData>,
+) {
+    if common.no_history_db {
+        return;
+    }
+    if map.is_empty() {
+        return;
+    }
 
     let selected = common.selected_sources();
     if !selected.is_empty() && selected.len() < SourceKind::all().len() {
@@ -290,12 +354,22 @@ pub fn merge_history_db(
         return;
     }
 
+    let filter = crate::pipeline::parse_common_filter(common).ok();
+
     let mut added_any = false;
     match period {
         ReportPeriod::Daily => {
             for (date_key, data) in map {
                 if date_key.len() != 10 || date_key.contains('|') {
                     continue;
+                }
+                let Ok(day) = chrono::NaiveDate::parse_from_str(&date_key, "%Y-%m-%d") else {
+                    continue;
+                };
+                if let Some(f) = filter {
+                    if !f.allows(day) {
+                        continue;
+                    }
                 }
                 if let Some(row) = rows.iter_mut().find(|r| r.date == date_key) {
                     if row.totals.total_tokens < data.total_tokens {
@@ -341,6 +415,11 @@ pub fn merge_history_db(
                     continue;
                 }
                 if date_key.len() == 7 && date_key.contains('-') {
+                    if let Some(f) = filter {
+                        if !month_in_range(&date_key, f) {
+                            continue;
+                        }
+                    }
                     // Direct monthly row in history.db
                     let entry = monthly_db_direct.entry(date_key.clone()).or_default();
                     entry.input_tokens = entry.input_tokens.max(data.input_tokens);
@@ -352,15 +431,22 @@ pub fn merge_history_db(
                     entry.total_tokens = entry.total_tokens.max(data.total_tokens);
                     entry.cost_usd = entry.cost_usd.max(data.cost_usd);
                 } else if date_key.len() == 10 && date_key.contains('-') {
-                    // Daily row to be summed by month
-                    let month = date_key[..7].to_string();
-                    let entry = monthly_db_daily_sums.entry(month).or_default();
-                    entry.input_tokens += data.input_tokens;
-                    entry.cache_creation_input_tokens += data.cache_creation_input_tokens;
-                    entry.cache_read_input_tokens += data.cache_read_input_tokens;
-                    entry.output_tokens += data.output_tokens;
-                    entry.total_tokens += data.total_tokens;
-                    entry.cost_usd += data.cost_usd;
+                    if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_key, "%Y-%m-%d") {
+                        if let Some(f) = filter {
+                            if !f.allows(d) {
+                                continue;
+                            }
+                        }
+                        // Daily row to be summed by month
+                        let month = date_key[..7].to_string();
+                        let entry = monthly_db_daily_sums.entry(month).or_default();
+                        entry.input_tokens += data.input_tokens;
+                        entry.cache_creation_input_tokens += data.cache_creation_input_tokens;
+                        entry.cache_read_input_tokens += data.cache_read_input_tokens;
+                        entry.output_tokens += data.output_tokens;
+                        entry.total_tokens += data.total_tokens;
+                        entry.cost_usd += data.cost_usd;
+                    }
                 }
             }
 
@@ -425,7 +511,17 @@ pub fn merge_history_db(
             let mut weekly_db: BTreeMap<String, TokenCounts> = BTreeMap::new();
             for (date_key, data) in map {
                 if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_key, "%Y-%m-%d") {
+                    if let Some(f) = filter {
+                        if !f.allows(d) {
+                            continue;
+                        }
+                    }
                     let w_start = week_start(d, WeekStart::default());
+                    if let Some(f) = filter {
+                        if !week_in_range(w_start, f) {
+                            continue;
+                        }
+                    }
                     let week_key = format!("{}", w_start.format("%Y-%m-%d"));
                     let entry = weekly_db.entry(week_key).or_default();
                     entry.input_tokens += data.input_tokens;
@@ -588,5 +684,153 @@ mod tests {
         assert_eq!(row_2026_03.totals.total_tokens, 1548396561);
         assert_eq!(row_2026_03.totals.cost_usd, 1255.63);
         assert!(row_2026_03.sources.contains_key("override"));
+    }
+
+    #[test]
+    fn test_merge_history_db_daily_respects_since_and_until() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "2026-01-09".to_string(),
+            HistoryOverrideData {
+                total_tokens: 1000,
+                cost_usd: 0.05,
+                input_tokens: 500,
+                output_tokens: 500,
+                ..Default::default()
+            },
+        );
+        map.insert(
+            "2026-07-28".to_string(),
+            HistoryOverrideData {
+                total_tokens: 2000,
+                cost_usd: 0.10,
+                input_tokens: 1000,
+                output_tokens: 1000,
+                ..Default::default()
+            },
+        );
+        map.insert(
+            "2026-08-15".to_string(),
+            HistoryOverrideData {
+                total_tokens: 3000,
+                cost_usd: 0.15,
+                input_tokens: 1500,
+                output_tokens: 1500,
+                ..Default::default()
+            },
+        );
+
+        let mut rows = Vec::new();
+        let common = CommonArgs {
+            since: Some("2026-07-28".to_string()),
+            until: Some("2026-08-01".to_string()),
+            ..Default::default()
+        };
+
+        merge_history_db_with_map(&mut rows, ReportPeriod::Daily, &common, map);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-07-28");
+        assert_eq!(rows[0].totals.total_tokens, 2000);
+    }
+
+    #[test]
+    fn test_merge_history_db_monthly_respects_since_and_until() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "2026-01-09".to_string(),
+            HistoryOverrideData {
+                total_tokens: 1000,
+                cost_usd: 0.05,
+                ..Default::default()
+            },
+        );
+        map.insert(
+            "2026-08-10".to_string(),
+            HistoryOverrideData {
+                total_tokens: 2000,
+                cost_usd: 0.10,
+                ..Default::default()
+            },
+        );
+
+        let mut rows = Vec::new();
+        let common = CommonArgs {
+            since: Some("2026-07-28".to_string()),
+            ..Default::default()
+        };
+
+        merge_history_db_with_map(&mut rows, ReportPeriod::Monthly, &common, map);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-08");
+        assert_eq!(rows[0].totals.total_tokens, 2000);
+    }
+
+    #[test]
+    fn test_merge_history_db_weekly_respects_since_and_until() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "2026-01-09".to_string(),
+            HistoryOverrideData {
+                total_tokens: 1000,
+                cost_usd: 0.05,
+                ..Default::default()
+            },
+        );
+        map.insert(
+            "2026-08-10".to_string(),
+            HistoryOverrideData {
+                total_tokens: 2000,
+                cost_usd: 0.10,
+                ..Default::default()
+            },
+        );
+
+        let mut rows = Vec::new();
+        let common = CommonArgs {
+            since: Some("2026-08-01".to_string()),
+            until: Some("2026-08-15".to_string()),
+            ..Default::default()
+        };
+
+        merge_history_db_with_map(&mut rows, ReportPeriod::Weekly, &common, map);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-08-10");
+        assert_eq!(rows[0].totals.total_tokens, 2000);
+    }
+
+    #[test]
+    fn test_apply_monthly_overrides_respects_since_and_until() {
+        let mut overrides = HistoryOverridesFile::default();
+        overrides.monthly_overrides.insert(
+            "2026-01".to_string(),
+            HistoryOverrideData {
+                total_tokens: 5000,
+                cost_usd: 10.0,
+                ..Default::default()
+            },
+        );
+        overrides.monthly_overrides.insert(
+            "2026-08".to_string(),
+            HistoryOverrideData {
+                total_tokens: 9000,
+                cost_usd: 20.0,
+                ..Default::default()
+            },
+        );
+
+        let mut rows = Vec::new();
+        let common = CommonArgs {
+            since: Some("2026-07-01".to_string()),
+            ..Default::default()
+        };
+
+        apply_monthly_overrides_with_data_and_filter(&mut rows, &overrides, &common);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-08");
+        assert_eq!(rows[0].totals.total_tokens, 9000);
     }
 }

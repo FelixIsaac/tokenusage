@@ -232,62 +232,64 @@ tu img week
 ## 📋 Command Cheat Sheet
 
 ### 📊 Periodic Reports & Aggregations
-| Command | Description |
-| :--- | :--- |
-| `tu` / `tu daily` | Daily token usage and cost report (default) |
-| `tu today` | Today's active usage and model breakdown |
-| `tu weekly` (or `tu week`) | Usage grouped by ISO 8601 weeks (starts Monday) |
-| `tu monthly` | Usage grouped by calendar month |
-| `tu session` | Usage grouped by session ID |
-| `tu blocks` | Usage grouped by 5-hour rolling rate-limit windows |
-| `tu activity` | Coding activity duration, tokens/hour, and top languages |
-| `tu --tui` | Interactive scrollable TUI with sticky headers |
-| `tu -i` / `tu --instances` | Show per-instance / session breakdowns |
-| `tu -p <project>` | Filter by specific project name |
-| `tu --brief` | One-line headline summary (range, tokens, cost, top model) |
+| Command | Aliases | Description |
+| :--- | :--- | :--- |
+| `tu` / `tu daily` | `days`, `day`, `d` | Daily token usage and cost report (default) |
+| `tu today` | `now`, `t` | Today's active usage and model breakdown |
+| `tu weekly` | `weeks`, `week`, `w` | Usage grouped by ISO 8601 weeks (starts Monday) |
+| `tu monthly` | `months`, `month`, `m` | Usage grouped by calendar month |
+| `tu session` | `sessions`, `sess`, `s` | Usage grouped by session ID |
+| `tu blocks` | `block`, `b` | Usage grouped by 5-hour rolling rate-limit windows |
+| `tu activity` | `act`, `coding` | Coding activity duration, tokens/hour, and top languages |
+| `tu --tui` | — | Interactive scrollable TUI with sticky headers |
+| `tu -i` / `tu --instances` | — | Show per-instance / session breakdowns |
+| `tu -p <project>` | — | Filter by specific project name |
+| `tu --since <date>` | — | Filter by start date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`) |
+| `tu --until <date>` | — | Filter by end date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`) |
+| `tu --brief` | — | One-line headline summary (range, tokens, cost, top model) |
 
 ### 🌱 Carbon Footprint & Environmental Telemetry
-| Command | Description |
-| :--- | :--- |
-| `tu carbon` | Today's environmental impact (kWh, kg CO₂e, water Liters) |
-| `tu carbon daily` | Daily carbon breakdown table |
-| `tu carbon weekly` | Current week carbon breakdown table |
-| `tu carbon monthly` | Current month carbon breakdown table |
-| `tu carbon all` | Lifetime all-time environmental telemetry |
-| `tu carbon about` | Physics formulas, GPU power constants, and PUE/WUE disclosures |
-| `tu carbon --region <region>` | Select grid region (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
-| `tu daily --carbon` | Append carbon metrics to standard daily report |
+| Command | Aliases | Description |
+| :--- | :--- | :--- |
+| `tu carbon` | `co2`, `energy`, `footprint` | Today's environmental impact (kWh, kg CO₂e, water Liters) |
+| `tu carbon daily` | — | Daily carbon breakdown table |
+| `tu carbon weekly` | — | Current week carbon breakdown table |
+| `tu carbon monthly` | — | Current month carbon breakdown table |
+| `tu carbon all` | — | Lifetime all-time environmental telemetry |
+| `tu carbon about` | — | Physics formulas, GPU power constants, and PUE/WUE disclosures |
+| `tu carbon --region <region>` | — | Select grid region (`us-east`, `us-west`, `us-avg`, `eu-west`, `nordic`, `google-cfe`, `global`) |
+| `tu daily --carbon` | — | Append carbon metrics to standard daily report |
 
 ### ⚡ Quotas, Balances & Official Limits
-| Command | Description |
-| :--- | :--- |
-| `tu codex status` | **Fast OAuth limits probe** (5h / weekly quota, reset timers, zero disk scan) |
-| `tu blocks --official-limits-only --json` | Direct JSON stream of official Codex limits (<0.60s bypass) |
-| `tu antigravity status` | Live Antigravity plan tier + session & weekly quota percentages |
-| `tu antigravity status --warn-threshold 15` | Low quota warning if remaining balance < 15% |
-| `tu deepseek` | DeepSeek API account credit balance (`DEEPSEEK_API_KEY`) |
-| `tu openrouter` | OpenRouter API account credit balance (`OPENROUTER_API_KEY`) |
-| `tu grok` | Grok (xAI) API balance / OAuth proxy token status (`XAI_API_KEY`) |
-| `tu kimi` | Kimi (Moonshot) API account credit balance (`MOONSHOT_API_KEY`) |
-| `tu anthropic-api` | Anthropic API direct usage and spend (`ANTHROPIC_API_KEY`) |
+| Command | Aliases | Description |
+| :--- | :--- | :--- |
+| `tu codex status` | — | **Fast OAuth limits probe** (5h / weekly quota, reset timers, zero disk scan) |
+| `tu blocks --official-limits-only --json` | — | Direct JSON stream of official Codex limits (<0.60s bypass) |
+| `tu antigravity status` | `tu ag status` | Live Antigravity plan tier + session & weekly quota percentages |
+| `tu antigravity status --warn-threshold 15` | — | Low quota warning if remaining balance < 15% |
+| `tu deepseek` | `ds` | DeepSeek API account credit balance (`DEEPSEEK_API_KEY`) |
+| `tu openrouter` | `or` | OpenRouter API account credit balance (`OPENROUTER_API_KEY`) |
+| `tu grok` | `xai` | Grok (xAI) API balance / OAuth proxy token status (`XAI_API_KEY`) |
+| `tu kimi` | `moonshot` | Kimi (Moonshot) API account credit balance (`MOONSHOT_API_KEY`) |
+| `tu anthropic-api` | `anthropic`, `claude-api` | Anthropic API direct usage and spend (`ANTHROPIC_API_KEY`) |
 
 ### 🖥️ Live Telemetry, TUI & GUI
-| Command | Description |
-| :--- | :--- |
-| `tu live` | Real-time interactive TUI dashboard (auto-refresh) |
-| `tu top` | Token process monitor (htop-like real-time per-session viewer) |
-| `tu gui` | Desktop GUI application (native Iced dashboard) |
-| `tu img day` | Generate high-res PNG share card for today's coding stats |
-| `tu img week` | Generate high-res PNG share card for current week |
+| Command | Aliases | Description |
+| :--- | :--- | :--- |
+| `tu live` | `watch` | Real-time interactive TUI dashboard (auto-refresh) |
+| `tu top` | `htop`, `ps` | Token process monitor (htop-like real-time per-session viewer) |
+| `tu gui` | `ui`, `app` | Desktop GUI application (native Iced dashboard) |
+| `tu img day` | `image`, `share`, `card`, `png` | Generate high-res PNG share card for today's coding stats |
+| `tu img week` | — | Generate high-res PNG share card for current week |
 
 ### 🔧 Integrations, Shell & Diagnostics
-| Command | Description |
-| :--- | :--- |
-| `tu statusline` | Render one-line status widget for prompt / statusLine hooks |
-| `tu statusline init` | Automatically configure Claude Code statusLine in `~/.claude/settings.json` |
-| `tu completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
-| `tu doctor` | Validate scan roots, discovered files, cache integrity, and pricing TTL |
-| `tu parity` | Run automated diff verification against `@ccusage` outputs |
+| Command | Aliases | Description |
+| :--- | :--- | :--- |
+| `tu statusline` | `sl` | Render one-line status widget for prompt / statusLine hooks |
+| `tu statusline init` | — | Automatically configure Claude Code statusLine in `~/.claude/settings.json` |
+| `tu completions <shell>` | `completion` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `tu doctor` | `doc`, `check`, `health` | Validate scan roots, discovered files, cache integrity, and pricing TTL |
+| `tu parity` | `diff`, `compare` | Run automated diff verification against `@ccusage` outputs |
 
 ---
 
