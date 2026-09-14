@@ -1,7 +1,7 @@
 #[cfg(feature = "cli")]
 mod activity_report;
 mod block_report;
-mod commands;
+pub(crate) mod commands;
 #[cfg(feature = "cli")]
 mod display;
 pub mod history;
@@ -12,7 +12,7 @@ mod membership;
 mod official;
 #[cfg(feature = "cli")]
 mod parity;
-mod parsing;
+pub(crate) mod parsing;
 mod pricing;
 #[cfg(feature = "cli")]
 mod statusline;
@@ -29,9 +29,9 @@ pub use commands::{collect_report, collect_usage_snapshot};
 // Re-exports: crate-internal (CLI commands)
 #[cfg(feature = "cli")]
 pub(crate) use commands::{
-    run_activity, run_anthropic_api, run_antigravity, run_carbon, run_daily, run_deepseek,
-    run_doctor, run_grok, run_kimi, run_monthly, run_openrouter, run_session, run_today,
-    run_weekly,
+    run_activity, run_anthropic_api, run_antigravity, run_breakdown, run_carbon, run_daily,
+    run_deepseek, run_doctor, run_grok, run_kimi, run_monthly, run_openrouter, run_rank, run_scale,
+    run_session, run_today, run_tui, run_weekly,
 };
 #[cfg(feature = "cli")]
 pub(crate) use live::run_blocks;
@@ -1174,12 +1174,7 @@ pub(crate) fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>
 
     let trimmed = value.trim();
     for fmt in [
-        "%Y-%m-%d",
-        "%Y%m%d",
-        "%Y/%m/%d",
-        "%d/%m/%Y",
-        "%m/%d/%Y",
-        "%d-%m-%Y",
+        "%Y-%m-%d", "%Y%m%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
     ] {
         if let Ok(date) = NaiveDate::parse_from_str(trimmed, fmt) {
             return Ok(Some(date));
@@ -1190,7 +1185,9 @@ pub(crate) fn parse_date_filter(input: Option<&str>) -> Result<Option<NaiveDate>
         return Ok(Some(date));
     }
 
-    bail!("Invalid date format: {value}. Use YYYYMMDD, YYYY-MM-DD, DD/MM/YYYY, or relative dates like 30d, 7d, 1w, 1m, today, yesterday")
+    bail!(
+        "Invalid date format: {value}. Use YYYYMMDD, YYYY-MM-DD, DD/MM/YYYY, or relative dates like 30d, 7d, 1w, 1m, today, yesterday"
+    )
 }
 
 pub(crate) fn parse_relative_date(input: &str, today: NaiveDate) -> Option<NaiveDate> {
@@ -1210,7 +1207,8 @@ pub(crate) fn parse_relative_date(input: &str, today: NaiveDate) -> Option<Naive
         }
         "last-week" | "last_week" | "lastweek" | "last week" => {
             let days_from_mon = today.weekday().num_days_from_monday();
-            let this_monday = today.checked_sub_signed(chrono::Duration::days(days_from_mon as i64))?;
+            let this_monday =
+                today.checked_sub_signed(chrono::Duration::days(days_from_mon as i64))?;
             return this_monday.checked_sub_signed(chrono::Duration::days(7));
         }
         "this-month" | "this_month" | "thismonth" | "this month" => {

@@ -5,8 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn make_adversarial_env(test_name: &str) -> (PathBuf, PathBuf) {
-    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("test-adv-{}-{}", test_name, std::process::id()));
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "test-adv-{}-{}",
+        test_name,
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
 
     let claude_dir = root.join("claude/projects/-Users-test-Projects-adversarial");
@@ -45,13 +48,19 @@ fn test_adversarial_corrupted_json_lines_skipped_gracefully() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "Parser must not crash on corrupt lines");
+    assert!(
+        output.status.success(),
+        "Parser must not crash on corrupt lines"
+    );
     let json_str = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
     // Valid lines should still be accumulated (1000 + 500 = 1500 input tokens)
     let total_input = parsed["totals"]["input_tokens"].as_u64().unwrap();
-    assert_eq!(total_input, 1500, "Valid lines should be preserved despite corrupt lines");
+    assert_eq!(
+        total_input, 1500,
+        "Valid lines should be preserved despite corrupt lines"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -78,7 +87,10 @@ fn test_empty_directory_returns_zero_or_handles_gracefully() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "Empty directory should succeed with empty/zero report");
+    assert!(
+        output.status.success(),
+        "Empty directory should succeed with empty/zero report"
+    );
     let json_str = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["totals"]["total_tokens"].as_u64().unwrap(), 0);
@@ -150,7 +162,11 @@ fn test_sqlite_history_db_date_filtering_end_to_end() {
 
     let daily_rows = parsed["daily"].as_array().unwrap();
     // Must contain ONLY 2026-07-28, not 2026-01-09 and not 2026-08-15!
-    assert_eq!(daily_rows.len(), 1, "Must contain exactly 1 row matching the since/until range");
+    assert_eq!(
+        daily_rows.len(),
+        1,
+        "Must contain exactly 1 row matching the since/until range"
+    );
     assert_eq!(daily_rows[0]["date"].as_str().unwrap(), "2026-07-28");
 
     let _ = fs::remove_dir_all(&root);

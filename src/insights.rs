@@ -26,6 +26,8 @@ pub struct ReportInsights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_period: Option<PeakPeriod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_spend: Option<PeakPeriod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub longest_streak_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_streak_days: Option<u32>,
@@ -53,6 +55,12 @@ pub struct ReportInsights {
     /// The source whose share of cost most exceeds its share of tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_concentration: Option<CostConcentration>,
+    /// Human scale concise summary (e.g. ~4.0x English Wikipedia · 1,250 books written)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_summary: Option<String>,
+    /// Full dual-lens information scale details
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<crate::scale::InformationScale>,
 }
 
 /// Where money concentrates relative to volume: a source whose cost share
@@ -150,6 +158,23 @@ pub fn compute_report_insights(
         })
         .filter(|peak| peak.total_tokens > 0);
 
+    let peak_spend = rows
+        .iter()
+        .max_by(|a, b| a.totals.cost_usd.total_cmp(&b.totals.cost_usd))
+        .map(|row| PeakPeriod {
+            date: row.date.clone(),
+            total_tokens: row.totals.total_tokens,
+            cost_usd: row.totals.cost_usd,
+        })
+        .filter(|peak| peak.cost_usd > 0.0);
+
+    let scale = if total_tokens > 0 {
+        Some(crate::scale::InformationScale::from_counts(totals))
+    } else {
+        None
+    };
+    let scale_summary = scale.as_ref().map(|s| s.compact_summary());
+
     let (longest_streak_days, current_streak_days, active_days) = streaks_if_daily(rows);
     let avg_tokens_per_active_day = if active_days > 0 && total_tokens > 0 {
         Some((total_tokens as f64 / active_days as f64).round().max(0.0) as u64)
@@ -178,6 +203,7 @@ pub fn compute_report_insights(
         top_source_share_pct,
         top_model_share_pct,
         peak_period,
+        peak_spend,
         longest_streak_days,
         current_streak_days,
         avg_tokens_per_active_day,
@@ -189,6 +215,8 @@ pub fn compute_report_insights(
         cache_savings_usd,
         cache_reuse_ratio,
         cost_concentration,
+        scale_summary,
+        scale,
     }
 }
 
@@ -551,6 +579,70 @@ fn provider_mix(rows: &[DailyRow]) -> (BTreeMap<String, f64>, BTreeMap<String, f
         }
     }
     (mix_tokens, mix_cost)
+}
+
+/// Clean and sanitize messy project paths, directory slugs, or hash encodings
+/// into human-readable project titles (e.g. "-Users-felix-Projects-crypto-trading" -> "crypto-trading").
+pub fn sanitize_project_label(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() || s == "-" {
+        return "-".to_string();
+    }
+    let normalized = s.replace('\\', "/");
+    let mut parts: Vec<&str> = if normalized.starts_with('-') && !normalized.contains('/') {
+        normalized.split('-').filter(|p| !p.is_empty()).collect()
+    } else {
+        normalized.split('/').filter(|p| !p.is_empty()).collect()
+    };
+
+    while parts.len() > 2 {
+        let first = parts[0].to_ascii_lowercase();
+        if first == "users" || first == "home" || first == "root" || first == "c:" || first == "d:"
+        {
+            parts.remove(0);
+            if !parts.is_empty() {
+                parts.remove(0); // username
+            }
+            continue;
+        }
+        if first == "projects"
+            || first == "repos"
+            || first == "dev"
+            || first == "work"
+            || first == "code"
+        {
+            parts.remove(0);
+            continue;
+        }
+        break;
+    }
+
+    if parts.is_empty() {
+        s.to_string()
+    } else if parts.len() >= 2 {
+        format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
+    } else {
+        parts[0].to_string()
+    }
+}
+
+/// Sanitize session identifiers or file paths to short, clean labels.
+pub fn sanitize_session_label(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() || s == "-" {
+        return "-".to_string();
+    }
+    let name = s.rsplit('/').next().unwrap_or(s);
+    let name = name.strip_suffix(".jsonl").unwrap_or(name);
+    let name = name.strip_suffix(".json").unwrap_or(name);
+    if name.len() >= 32 && name.contains('-') {
+        let prefix = &name[..8.min(name.len())];
+        format!("{prefix}..")
+    } else if name.len() > 16 {
+        format!("{}..", &name[..14])
+    } else {
+        name.to_string()
+    }
 }
 
 #[cfg(test)]

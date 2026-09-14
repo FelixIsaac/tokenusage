@@ -3287,7 +3287,9 @@ mod antigravity_proto_tests {
     #[test]
     fn parse_real_antigravity_db_if_present() {
         if let Some(home) = dirs::home_dir() {
-            let path = home.join(".gemini/antigravity-cli/conversations/71e85ab1-103f-438a-8717-0cdd4f47a167.db");
+            let path = home.join(
+                ".gemini/antigravity-cli/conversations/71e85ab1-103f-438a-8717-0cdd4f47a167.db",
+            );
             if path.exists() {
                 let job = FileParseJob {
                     file: DiscoveredFile {
@@ -3315,10 +3317,16 @@ mod antigravity_proto_tests {
                     &pricing,
                     &stats,
                 );
-                assert!(res.is_some(), "parse_antigravity_db_file should return Some");
+                assert!(
+                    res.is_some(),
+                    "parse_antigravity_db_file should return Some"
+                );
                 let parsed = res.unwrap();
                 eprintln!("Parsed {} events from real DB", parsed.events.len());
-                assert!(!parsed.events.is_empty(), "Should parse events from real DB");
+                assert!(
+                    !parsed.events.is_empty(),
+                    "Should parse events from real DB"
+                );
             }
         }
     }

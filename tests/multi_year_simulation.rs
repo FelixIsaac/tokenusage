@@ -19,7 +19,11 @@ fn test_multi_year_monthly_aggregation_and_ordering() {
         "--json",
     ]);
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     let rows = json["monthly"].as_array().expect("monthly rows array");
@@ -28,9 +32,18 @@ fn test_multi_year_monthly_aggregation_and_ordering() {
     let months: Vec<&str> = rows.iter().map(|r| r["date"].as_str().unwrap()).collect();
 
     // Must have records from 2024, 2025, and 2026
-    assert!(months.iter().any(|m| m.starts_with("2024-")), "missing 2024 data");
-    assert!(months.iter().any(|m| m.starts_with("2025-")), "missing 2025 data");
-    assert!(months.iter().any(|m| m.starts_with("2026-")), "missing 2026 data");
+    assert!(
+        months.iter().any(|m| m.starts_with("2024-")),
+        "missing 2024 data"
+    );
+    assert!(
+        months.iter().any(|m| m.starts_with("2025-")),
+        "missing 2025 data"
+    );
+    assert!(
+        months.iter().any(|m| m.starts_with("2026-")),
+        "missing 2026 data"
+    );
 
     // Chronological order verification
     let mut sorted = months.clone();
@@ -59,15 +72,26 @@ fn test_leap_year_handling_feb_29() {
         "--no-history-db",
     ]);
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     let rows = json["daily"].as_array().unwrap();
     let dates: Vec<&str> = rows.iter().map(|r| r["date"].as_str().unwrap()).collect();
 
-    assert!(dates.contains(&"2024-02-29"), "Leap day 2024-02-29 must be present in parsed results");
+    assert!(
+        dates.contains(&"2024-02-29"),
+        "Leap day 2024-02-29 must be present in parsed results"
+    );
     assert!(dates.contains(&"2024-03-01"), "2024-03-01 must be present");
-    assert_eq!(dates.len(), 2, "Only dates in the 2024-02-28..2024-03-01 range should be present");
+    assert_eq!(
+        dates.len(),
+        2,
+        "Only dates in the 2024-02-28..2024-03-01 range should be present"
+    );
 }
 
 #[test]
@@ -86,11 +110,18 @@ fn test_year_boundary_weekly_rollover() {
         "--no-history-db",
     ]);
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     let rows = json["weekly"].as_array().unwrap();
-    assert!(!rows.is_empty(), "Week crossing year boundary must be present");
+    assert!(
+        !rows.is_empty(),
+        "Week crossing year boundary must be present"
+    );
 
     // Both Dec 31 2025 and Jan 1 2026 events should be captured
     let total_tokens = json["totals"]["total_tokens"].as_u64().unwrap();
@@ -112,13 +143,20 @@ fn test_multi_year_history_db_range_isolation() {
         "--json",
     ]);
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     let rows = json["monthly"].as_array().unwrap();
     let months: Vec<&str> = rows.iter().map(|r| r["date"].as_str().unwrap()).collect();
 
     for m in &months {
-        assert!(m.starts_with("2025-"), "Found out-of-range month in 2025 query: {m}");
+        assert!(
+            m.starts_with("2025-"),
+            "Found out-of-range month in 2025 query: {m}"
+        );
     }
 }

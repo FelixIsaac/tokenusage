@@ -104,6 +104,19 @@ pub enum CarbonPeriodArg {
     About,
 }
 
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScalePeriodArg {
+    #[default]
+    #[serde(alias = "all-time", alias = "alltime")]
+    All,
+    Today,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
 // ---------------------------------------------------------------------------
 // CommonArgs — shared struct, clap attributes conditional on `cli` feature
 // ---------------------------------------------------------------------------
@@ -423,6 +436,30 @@ pub(crate) enum Commands {
         display_order = 8
     )]
     Carbon(CarbonArgs),
+    #[command(
+        about = "Human scale & information equivalences (words, books, Wikipedias, lifetimes)",
+        aliases = ["equiv", "words", "human"],
+        display_order = 9
+    )]
+    Scale(ScaleArgs),
+    #[command(
+        about = "Local leaderboard & Hall of Fame records (top models, projects, peak days, sessions)",
+        aliases = ["records", "top-records", "ranking", "leaderboard"],
+        display_order = 10
+    )]
+    Rank(RankArgs),
+    #[command(
+        about = "Cross-stratified breakdown (Projects × Models or Models × Projects)",
+        aliases = ["stratify", "matrix", "cross"],
+        display_order = 11
+    )]
+    Breakdown(BreakdownArgs),
+    #[command(
+        about = "Interactive unified TUI dashboard (Human Scale, Hall of Fame, Breakdown, Timeline)",
+        aliases = ["dashboard", "dash"],
+        display_order = 12
+    )]
+    Tui(TuiArgs),
 
     // --- Live / interactive (display_order 10-12) ---
     #[command(
@@ -549,6 +586,75 @@ pub(crate) struct CarbonArgs {
     pub(crate) region: String,
     #[arg(long, help = "Interactive TUI (sticky header + scroll)")]
     pub(crate) tui: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct ScaleArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        value_enum,
+        default_value_t = ScalePeriodArg::All,
+        help = "Period for scale report: all (default), today, daily, weekly, monthly"
+    )]
+    pub(crate) period: ScalePeriodArg,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+    #[arg(long, short = 'i', help = "Interactive TUI dashboard view")]
+    pub(crate) tui: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct RankArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        long,
+        short = 'n',
+        default_value_t = 5,
+        help = "Number of items per leaderboard section"
+    )]
+    pub(crate) limit: usize,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+    #[arg(long, short = 'i', help = "Interactive TUI dashboard view")]
+    pub(crate) tui: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct BreakdownArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        long,
+        short = 'm',
+        help = "Stratify by Models (Models × Projects) instead of Projects × Models"
+    )]
+    pub(crate) by_model: bool,
+    #[arg(long, short = 'n', default_value_t = 10, help = "Maximum rows to show")]
+    pub(crate) limit: usize,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
+    #[arg(long, short = 'i', help = "Interactive TUI dashboard view")]
+    pub(crate) tui: bool,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct TuiArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(
+        value_enum,
+        default_value_t = ScalePeriodArg::All,
+        help = "Initial period: all (default), today, daily, weekly, monthly"
+    )]
+    pub(crate) period: ScalePeriodArg,
+    #[arg(long, short = 'p', help = "Filter specific project")]
+    pub(crate) project: Option<String>,
 }
 
 #[cfg(feature = "cli")]

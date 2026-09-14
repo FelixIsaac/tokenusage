@@ -46,6 +46,7 @@ cli = [
     "dep:crossterm",
     "dep:ratatui",
     "dep:terminal_size",
+    "dep:unicode-width",
     "dep:iced",
     "dep:notify",
     "dep:ab_glyph",
@@ -86,6 +87,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["fs", "macros", "rt-multi-thread"] }
 terminal_size = { version = "0.4", optional = true }
+unicode-width = { version = "0.2", optional = true }
 cfg-if = "1.0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 

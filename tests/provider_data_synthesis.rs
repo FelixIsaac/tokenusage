@@ -5,8 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn make_test_env(test_name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("test-{}-{}", test_name, std::process::id()));
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "test-{}-{}",
+        test_name,
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
 
     let claude_dir = root.join("claude/projects");
@@ -21,7 +24,14 @@ fn make_test_env(test_name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBu
     fs::create_dir_all(&grok_dir).unwrap();
     fs::create_dir_all(&opencode_dir).unwrap();
 
-    (root, claude_dir, codex_dir, gemini_dir, grok_dir, opencode_dir)
+    (
+        root,
+        claude_dir,
+        codex_dir,
+        gemini_dir,
+        grok_dir,
+        opencode_dir,
+    )
 }
 
 fn write_claude_sample(claude_dir: &Path, project: &str, session_file: &str) {
@@ -118,7 +128,13 @@ fn test_all_five_providers_synthesized_and_parsed_accurately() {
             "--grok-log-dir",
             grok_dir.to_str().unwrap(),
             "--opencode-data-dir",
-            opencode_dir.parent().unwrap().parent().unwrap().to_str().unwrap(),
+            opencode_dir
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_str()
+                .unwrap(),
         ])
         .env("HOME", root.join("home"))
         .output()
@@ -134,14 +150,19 @@ fn test_all_five_providers_synthesized_and_parsed_accurately() {
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
         .unwrap_or_else(|e| panic!("Failed to parse JSON: {e}\nOutput was: {json_str}"));
 
-    println!("Parsed JSON:\n{}", serde_json::to_string_pretty(&parsed).unwrap());
+    println!(
+        "Parsed JSON:\n{}",
+        serde_json::to_string_pretty(&parsed).unwrap()
+    );
 
     let totals = &parsed["totals"];
     assert!(totals["total_tokens"].as_u64().unwrap() > 0);
     assert!(totals["input_tokens"].as_u64().unwrap() > 0);
     assert!(totals["output_tokens"].as_u64().unwrap() > 0);
 
-    let daily = parsed["daily"].as_array().expect("daily should be an array");
+    let daily = parsed["daily"]
+        .as_array()
+        .expect("daily should be an array");
     assert!(!daily.is_empty(), "daily array should not be empty");
 
     let mut all_sources = std::collections::BTreeSet::new();
@@ -153,11 +174,31 @@ fn test_all_five_providers_synthesized_and_parsed_accurately() {
         }
     }
 
-    assert!(all_sources.contains("claude"), "missing claude source, sources found: {:?}", all_sources);
-    assert!(all_sources.contains("codex"), "missing codex source, sources found: {:?}", all_sources);
-    assert!(all_sources.contains("gemini"), "missing gemini source, sources found: {:?}", all_sources);
-    assert!(all_sources.contains("grok"), "missing grok source, sources found: {:?}", all_sources);
-    assert!(all_sources.contains("opencode"), "missing opencode source, sources found: {:?}", all_sources);
+    assert!(
+        all_sources.contains("claude"),
+        "missing claude source, sources found: {:?}",
+        all_sources
+    );
+    assert!(
+        all_sources.contains("codex"),
+        "missing codex source, sources found: {:?}",
+        all_sources
+    );
+    assert!(
+        all_sources.contains("gemini"),
+        "missing gemini source, sources found: {:?}",
+        all_sources
+    );
+    assert!(
+        all_sources.contains("grok"),
+        "missing grok source, sources found: {:?}",
+        all_sources
+    );
+    assert!(
+        all_sources.contains("opencode"),
+        "missing opencode source, sources found: {:?}",
+        all_sources
+    );
 
     let _ = fs::remove_dir_all(&root);
 }

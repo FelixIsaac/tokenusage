@@ -11,13 +11,14 @@ use crate::carbon::{
 };
 #[cfg(feature = "cli")]
 use crate::cli::{
-    ActivityArgs, AnthropicApiArgs, AntigravityArgs, CarbonArgs, CarbonPeriodArg, DailyArgs,
-    DeepseekArgs, GrokArgs, KimiArgs, MonthlyArgs, OpenrouterArgs, SessionArgs, TodayArgs,
-    WeeklyArgs,
+    ActivityArgs, AnthropicApiArgs, AntigravityArgs, BreakdownArgs, CarbonArgs, CarbonPeriodArg,
+    DailyArgs, DeepseekArgs, GrokArgs, KimiArgs, MonthlyArgs, OpenrouterArgs, RankArgs, ScaleArgs,
+    ScalePeriodArg, SessionArgs, TodayArgs, TuiArgs, WeeklyArgs,
 };
 use crate::cli::{CommonArgs, SortOrder};
 #[cfg(feature = "cli")]
 use crate::output::{print_report_table_with_options, run_report_tui};
+use crate::scale::InformationScale;
 use crate::types::{ActivitySummary, DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent};
 
 #[cfg(feature = "cli")]
@@ -1559,15 +1560,11 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
 
     // Apply history baseline and overrides if enabled
     if !args.common.no_history_overrides || !args.common.no_history_db {
-        let monthly_rows = build_group_rows(
-            &events,
-            ReportPeriod::Monthly,
-            &args.common,
-            |event| {
+        let monthly_rows =
+            build_group_rows(&events, ReportPeriod::Monthly, &args.common, |event| {
                 let day = local_date(event.timestamp, &tz);
                 format!("{}", day.format("%Y-%m"))
-            },
-        );
+            });
 
         for row in &monthly_rows {
             // Check if month is in scope for the carbon period
@@ -1584,16 +1581,12 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
 
             let raw_month_tokens: u64 = events
                 .iter()
-                .filter(|e| {
-                    local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date
-                })
+                .filter(|e| local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date)
                 .map(|e| e.usage.total_tokens())
                 .sum();
             let raw_month_cost: f64 = events
                 .iter()
-                .filter(|e| {
-                    local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date
-                })
+                .filter(|e| local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date)
                 .map(|e| e.usage.cost_usd)
                 .sum();
 
@@ -1615,9 +1608,10 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
                         .input_tokens
                         .saturating_sub(raw_month_tokens / 10),
                     cache_creation_input_tokens: row.totals.cache_creation_input_tokens,
-                    cache_read_input_tokens: row.totals.cache_read_input_tokens.saturating_sub(
-                        raw_month_tokens.saturating_sub(raw_month_tokens / 10),
-                    ),
+                    cache_read_input_tokens: row
+                        .totals
+                        .cache_read_input_tokens
+                        .saturating_sub(raw_month_tokens.saturating_sub(raw_month_tokens / 10)),
                     output_tokens: row.totals.output_tokens,
                     reasoning_output_tokens: 0,
                     total_tokens: delta_tokens,
@@ -1975,4 +1969,686 @@ fn truncate_str_len(s: &str, max_len: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_scale(args: ScaleArgs) -> Result<()> {
+    use chrono::Datelike;
+
+    let use_json = should_emit_json(&args.common);
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let loaded = load_usage(&args.common, &tz).await?;
+
+    if args.tui {
+        return crate::dashboard_tui::run_dashboard_tui(
+            loaded.events,
+            tz,
+            args.common,
+            crate::dashboard_tui::DashboardTab::ScaleOverview,
+            args.period,
+            args.project,
+        );
+    }
+
+    let today_date = local_date(Utc::now(), &tz);
+    let monday_date = week_start(today_date, crate::cli::WeekStart::Monday);
+    let month_start_date =
+        chrono::NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1)
+            .unwrap_or(today_date);
+    let seven_days_ago = today_date - chrono::TimeDelta::days(7);
+
+    let events = loaded
+        .events
+        .into_iter()
+        .filter(|e| {
+            if let Some(project_filter) = args.project.as_deref() {
+                if !e
+                    .project
+                    .as_deref()
+                    .is_some_and(|p| p.contains(project_filter))
+                {
+                    return false;
+                }
+            }
+            let event_date = local_date(e.timestamp, &tz);
+            match args.period {
+                ScalePeriodArg::Today => {
+                    if event_date != today_date {
+                        return false;
+                    }
+                }
+                ScalePeriodArg::Daily => {
+                    if event_date < seven_days_ago {
+                        return false;
+                    }
+                }
+                ScalePeriodArg::Weekly => {
+                    if event_date < monday_date {
+                        return false;
+                    }
+                }
+                ScalePeriodArg::Monthly => {
+                    if event_date < month_start_date {
+                        return false;
+                    }
+                }
+                ScalePeriodArg::All => {}
+            }
+            if let Some(since) = &args.common.since {
+                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
+                    if event_date < dt {
+                        return false;
+                    }
+                }
+            }
+            if let Some(until) = &args.common.until {
+                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
+                    if event_date > dt {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect::<Vec<_>>();
+
+    let scale = InformationScale::from_events(&events);
+
+    if use_json {
+        emit_json(&scale, args.common.jq.as_deref())
+    } else {
+        let period_label = match args.period {
+            ScalePeriodArg::All => "All-Time Lifetime",
+            ScalePeriodArg::Today => "Today",
+            ScalePeriodArg::Daily => "Trailing 7 Days",
+            ScalePeriodArg::Weekly => "This Week",
+            ScalePeriodArg::Monthly => "This Month",
+        };
+        let title = format!(" 🌐 Human Scale & Information Equivalences ({period_label}) ");
+
+        let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
+
+        let create_header = format!(
+            "✍️  Active Generation ({} output tokens · ~{} words)",
+            crate::carbon::format_commas_u64(scale.output_tokens),
+            crate::carbon::format_commas_u64(scale.output_words)
+        );
+        let mut create_lines = Vec::new();
+        create_lines.push(format!(
+            "• Books Written:  ~{:.0} full-length novels (e.g. {:.1}× full 7-book Harry Potter series)",
+            scale.creation_books, scale.creation_hp_series
+        ));
+        create_lines.push(format!(
+            "• Typing Effort:  ~{:.1} years of non-stop human typing (24/7 @ 80 wpm without pause)",
+            scale.creation_typing_years_247
+        ));
+        sections.push((&create_header, create_lines));
+
+        let digest_header = format!(
+            "🧠  Total Context Digested ({} total tokens · ~{} words)",
+            crate::carbon::format_commas_u64(scale.total_tokens),
+            crate::carbon::format_commas_u64(scale.total_words)
+        );
+        let mut digest_lines = Vec::new();
+        digest_lines.push(format!(
+            "• World Knowledge:~{:.1}× the entirety of English Wikipedia (all 6.8M articles combined)",
+            scale.digestion_wikipedia_multiples
+        ));
+        digest_lines.push(format!(
+            "• Library Scope:  ~{:.1} public city libraries (40,000 full volumes read cover-to-cover)",
+            scale.digestion_public_libraries
+        ));
+        digest_lines.push(format!(
+            "• Human Reading:  ~{:.0} years of human reading time (8 hours/day @ 250 wpm)",
+            scale.digestion_reading_years_8h
+        ));
+        digest_lines.push(format!(
+            "• Physical Stack: ~{:.2} km tall printed double-sided on standard paper (higher than Burj Khalifa)",
+            scale.digestion_paper_stack_km
+        ));
+        sections.push((&digest_header, digest_lines));
+
+        crate::output::print_boxed_card(&title, &sections);
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+pub struct RankModelItem {
+    pub rank: usize,
+    pub model: String,
+    pub tokens: u64,
+    pub share_pct: f64,
+    pub cost_usd: f64,
+    pub cost_pct: f64,
+    pub tier: String,
+}
+
+#[derive(Serialize)]
+pub struct RankProjectItem {
+    pub rank: usize,
+    pub project: String,
+    pub tokens: u64,
+    pub share_pct: f64,
+    pub cost_usd: f64,
+    pub primary_model: String,
+}
+
+#[derive(Serialize)]
+pub struct RankDayItem {
+    pub rank: usize,
+    pub date: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    pub top_model: String,
+}
+
+#[derive(Serialize)]
+pub struct RankSessionItem {
+    pub rank: usize,
+    pub session: String,
+    pub date: String,
+    pub project: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Serialize)]
+pub struct RankLeaderboardOut {
+    pub total_tokens: u64,
+    pub total_cost_usd: f64,
+    pub top_models: Vec<RankModelItem>,
+    pub top_projects: Vec<RankProjectItem>,
+    pub peak_days: Vec<RankDayItem>,
+    pub top_sessions: Vec<RankSessionItem>,
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
+    let use_json = should_emit_json(&args.common);
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let loaded = load_usage(&args.common, &tz).await?;
+
+    if args.tui {
+        return crate::dashboard_tui::run_dashboard_tui(
+            loaded.events,
+            tz,
+            args.common,
+            crate::dashboard_tui::DashboardTab::Leaderboard,
+            ScalePeriodArg::All,
+            args.project,
+        );
+    }
+
+    let events = loaded
+        .events
+        .into_iter()
+        .filter(|e| {
+            if let Some(project_filter) = args.project.as_deref() {
+                if !e
+                    .project
+                    .as_deref()
+                    .is_some_and(|p| p.contains(project_filter))
+                {
+                    return false;
+                }
+            }
+            if let Some(since) = &args.common.since {
+                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
+                    let event_date = local_date(e.timestamp, &tz);
+                    if event_date < dt {
+                        return false;
+                    }
+                }
+            }
+            if let Some(until) = &args.common.until {
+                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
+                    let event_date = local_date(e.timestamp, &tz);
+                    if event_date > dt {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect::<Vec<_>>();
+
+    let mut total_tokens = 0u64;
+    let mut total_cost = 0.0;
+    let mut model_tokens: HashMap<String, u64> = HashMap::new();
+    let mut model_cost: HashMap<String, f64> = HashMap::new();
+    let mut project_tokens: HashMap<String, u64> = HashMap::new();
+    let mut project_cost: HashMap<String, f64> = HashMap::new();
+    let mut project_model_tokens: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    let mut day_tokens: HashMap<String, u64> = HashMap::new();
+    let mut day_cost: HashMap<String, f64> = HashMap::new();
+    let mut day_top_model: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    let mut session_tokens: HashMap<String, u64> = HashMap::new();
+    let mut session_cost: HashMap<String, f64> = HashMap::new();
+    let mut session_meta: HashMap<String, (String, String)> = HashMap::new();
+
+    for e in &events {
+        let tok = e.usage.total_tokens();
+        let cost = e.usage.cost_usd;
+        total_tokens += tok;
+        total_cost += cost;
+
+        *model_tokens.entry(e.model.clone()).or_insert(0) += tok;
+        *model_cost.entry(e.model.clone()).or_insert(0.0) += cost;
+
+        let proj = e.project.as_deref().unwrap_or("-").to_string();
+        *project_tokens.entry(proj.clone()).or_insert(0) += tok;
+        *project_cost.entry(proj.clone()).or_insert(0.0) += cost;
+        *project_model_tokens
+            .entry(proj)
+            .or_default()
+            .entry(e.model.clone())
+            .or_insert(0) += tok;
+
+        let day_str = local_date(e.timestamp, &tz).format("%Y-%m-%d").to_string();
+        *day_tokens.entry(day_str.clone()).or_insert(0) += tok;
+        *day_cost.entry(day_str.clone()).or_insert(0.0) += cost;
+        *day_top_model
+            .entry(day_str)
+            .or_default()
+            .entry(e.model.clone())
+            .or_insert(0) += tok;
+
+        if !e.session.trim().is_empty() {
+            *session_tokens.entry(e.session.clone()).or_insert(0) += tok;
+            *session_cost.entry(e.session.clone()).or_insert(0.0) += cost;
+            session_meta.entry(e.session.clone()).or_insert_with(|| {
+                let d = local_date(e.timestamp, &tz).format("%Y-%m-%d").to_string();
+                let p = e.project.as_deref().unwrap_or("-").to_string();
+                (d, p)
+            });
+        }
+    }
+
+    let mut sorted_models: Vec<(String, u64)> = model_tokens.into_iter().collect();
+    sorted_models.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let top_models: Vec<RankModelItem> = sorted_models
+        .into_iter()
+        .take(args.limit)
+        .enumerate()
+        .map(|(i, (model, tok))| {
+            let cost = model_cost.get(&model).copied().unwrap_or(0.0);
+            let share_pct = if total_tokens > 0 {
+                (tok as f64 / total_tokens as f64) * 100.0
+            } else {
+                0.0
+            };
+            let cost_pct = if total_cost > 0.0 {
+                (cost / total_cost) * 100.0
+            } else {
+                0.0
+            };
+            let tier = if tok >= 10_000_000_000 {
+                "Titan"
+            } else if tok >= 1_000_000_000 {
+                "Heavyweight"
+            } else if tok >= 100_000_000 {
+                "Workhorse"
+            } else if tok >= 10_000_000 {
+                "Regular"
+            } else {
+                "Lightweight"
+            }
+            .to_string();
+            RankModelItem {
+                rank: i + 1,
+                model,
+                tokens: tok,
+                share_pct,
+                cost_usd: cost,
+                cost_pct,
+                tier,
+            }
+        })
+        .collect();
+
+    let mut sorted_projects: Vec<(String, u64)> = project_tokens.into_iter().collect();
+    sorted_projects.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let top_projects: Vec<RankProjectItem> = sorted_projects
+        .into_iter()
+        .take(args.limit)
+        .enumerate()
+        .map(|(i, (proj, tok))| {
+            let cost = project_cost.get(&proj).copied().unwrap_or(0.0);
+            let share_pct = if total_tokens > 0 {
+                (tok as f64 / total_tokens as f64) * 100.0
+            } else {
+                0.0
+            };
+            let primary_model = project_model_tokens
+                .get(&proj)
+                .and_then(|m| m.iter().max_by_key(|(_, t)| **t).map(|(k, _)| k.clone()))
+                .unwrap_or_else(|| "-".to_string());
+            let clean_proj = crate::insights::sanitize_project_label(&proj);
+            RankProjectItem {
+                rank: i + 1,
+                project: clean_proj,
+                tokens: tok,
+                share_pct,
+                cost_usd: cost,
+                primary_model,
+            }
+        })
+        .collect();
+
+    let mut sorted_days: Vec<(String, u64)> = day_tokens.into_iter().collect();
+    sorted_days.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let peak_days: Vec<RankDayItem> = sorted_days
+        .into_iter()
+        .take(args.limit)
+        .enumerate()
+        .map(|(i, (date, tok))| {
+            let cost = day_cost.get(&date).copied().unwrap_or(0.0);
+            let top_model = day_top_model
+                .get(&date)
+                .and_then(|m| m.iter().max_by_key(|(_, t)| **t).map(|(k, _)| k.clone()))
+                .unwrap_or_else(|| "-".to_string());
+            RankDayItem {
+                rank: i + 1,
+                date,
+                tokens: tok,
+                cost_usd: cost,
+                top_model,
+            }
+        })
+        .collect();
+
+    let mut sorted_sessions: Vec<(String, u64)> = session_tokens.into_iter().collect();
+    sorted_sessions.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let top_sessions: Vec<RankSessionItem> = sorted_sessions
+        .into_iter()
+        .take(args.limit)
+        .enumerate()
+        .map(|(i, (session, tok))| {
+            let cost = session_cost.get(&session).copied().unwrap_or(0.0);
+            let (date, proj) = session_meta
+                .get(&session)
+                .cloned()
+                .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+            let clean_session = crate::insights::sanitize_session_label(&session);
+            let clean_proj = crate::insights::sanitize_project_label(&proj);
+            RankSessionItem {
+                rank: i + 1,
+                session: clean_session,
+                date,
+                project: clean_proj,
+                tokens: tok,
+                cost_usd: cost,
+            }
+        })
+        .collect();
+
+    let out = RankLeaderboardOut {
+        total_tokens,
+        total_cost_usd: total_cost,
+        top_models,
+        top_projects,
+        peak_days,
+        top_sessions,
+    };
+
+    if use_json {
+        emit_json(&out, args.common.jq.as_deref())
+    } else {
+        print_rank_leaderboard(&out);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cli")]
+fn print_rank_leaderboard(out: &RankLeaderboardOut) {
+    let rank_badge = |rank: usize| match rank {
+        1 => "🥇 1".to_string(),
+        2 => "🥈 2".to_string(),
+        3 => "🥉 3".to_string(),
+        n => format!("   {n}"),
+    };
+
+    println!();
+    println!(
+        "🏆 \x1b[1mLOCAL USAGE LEADERBOARD & HALL OF FAME\x1b[0m ({} tokens · ${:.2})",
+        format_commas_u64(out.total_tokens),
+        out.total_cost_usd
+    );
+    println!();
+
+    // 1. Top Models
+    println!("  🤖 \x1b[1mTOP MODELS (BY VOLUME & SPEND)\x1b[0m");
+    for item in &out.top_models {
+        println!(
+            "    {} {:<26} {:>12} tok ({:>4.1}%)   ${:>8.2} ({:>4.1}%)   [\x1b[36m{}\x1b[0m]",
+            rank_badge(item.rank),
+            truncate_str_len(&item.model, 26),
+            format_commas_u64(item.tokens),
+            item.share_pct,
+            item.cost_usd,
+            item.cost_pct,
+            item.tier
+        );
+    }
+    println!();
+
+    // 2. Top Projects
+    println!("  🏗️ \x1b[1mTOP PROJECTS (BY CONSUMPTION)\x1b[0m");
+    for item in &out.top_projects {
+        println!(
+            "    {} {:<26} {:>12} tok ({:>4.1}%)   ${:>8.2}   top {}",
+            rank_badge(item.rank),
+            truncate_str_len(&item.project, 26),
+            format_commas_u64(item.tokens),
+            item.share_pct,
+            item.cost_usd,
+            item.primary_model
+        );
+    }
+    println!();
+
+    // 3. Peak Days
+    println!("  ⚡ \x1b[1mALL-TIME PEAK DAYS (SINGLE-DAY RECORDS)\x1b[0m");
+    for item in &out.peak_days {
+        println!(
+            "    {} {:<12} {:>14} tok   ${:>8.2}   ({})",
+            rank_badge(item.rank),
+            item.date,
+            format_commas_u64(item.tokens),
+            item.cost_usd,
+            item.top_model
+        );
+    }
+    println!();
+
+    // 4. Monster Sessions
+    if !out.top_sessions.is_empty() {
+        println!("  🔥 \x1b[1mMONSTER SESSIONS (LARGEST CONVERSATIONS)\x1b[0m");
+        for item in &out.top_sessions {
+            println!(
+                "    {} {:<12} ({:<10} · {:<16}) {:>12} tok   ${:>7.2}",
+                rank_badge(item.rank),
+                item.session,
+                item.date,
+                truncate_str_len(&item.project, 16),
+                format_commas_u64(item.tokens),
+                item.cost_usd
+            );
+        }
+        println!();
+    }
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
+    let use_json = should_emit_json(&args.common);
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let loaded = load_usage(&args.common, &tz).await?;
+
+    if args.tui {
+        return crate::dashboard_tui::run_dashboard_tui(
+            loaded.events,
+            tz,
+            args.common,
+            crate::dashboard_tui::DashboardTab::Breakdown,
+            ScalePeriodArg::All,
+            args.project,
+        );
+    }
+
+    let events = loaded
+        .events
+        .into_iter()
+        .filter(|e| {
+            if let Some(project_filter) = args.project.as_deref() {
+                if !e
+                    .project
+                    .as_deref()
+                    .is_some_and(|p| p.contains(project_filter))
+                {
+                    return false;
+                }
+            }
+            if let Some(since) = &args.common.since {
+                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
+                    let event_date = local_date(e.timestamp, &tz);
+                    if event_date < dt {
+                        return false;
+                    }
+                }
+            }
+            if let Some(until) = &args.common.until {
+                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
+                    let event_date = local_date(e.timestamp, &tz);
+                    if event_date > dt {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect::<Vec<_>>();
+
+    if args.by_model {
+        // Group by Model -> Projects
+        let mut model_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
+            HashMap::new();
+        for e in &events {
+            let tok = e.usage.total_tokens();
+            let cost = e.usage.cost_usd;
+            let proj = crate::insights::sanitize_project_label(e.project.as_deref().unwrap_or("-"));
+            let entry = model_map
+                .entry(e.model.clone())
+                .or_insert_with(|| (0, 0.0, HashMap::new()));
+            entry.0 += tok;
+            entry.1 += cost;
+            let sub = entry.2.entry(proj).or_insert((0, 0.0));
+            sub.0 += tok;
+            sub.1 += cost;
+        }
+
+        if use_json {
+            emit_json(&model_map, args.common.jq.as_deref())
+        } else {
+            print_stratified_view(
+                "Models × Projects Breakdown",
+                "Model / Project",
+                model_map,
+                args.limit,
+            );
+            Ok(())
+        }
+    } else {
+        // Group by Project -> Models
+        let mut project_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
+            HashMap::new();
+        for e in &events {
+            let tok = e.usage.total_tokens();
+            let cost = e.usage.cost_usd;
+            let proj = crate::insights::sanitize_project_label(e.project.as_deref().unwrap_or("-"));
+            let entry = project_map
+                .entry(proj)
+                .or_insert_with(|| (0, 0.0, HashMap::new()));
+            entry.0 += tok;
+            entry.1 += cost;
+            let sub = entry.2.entry(e.model.clone()).or_insert((0, 0.0));
+            sub.0 += tok;
+            sub.1 += cost;
+        }
+
+        if use_json {
+            emit_json(&project_map, args.common.jq.as_deref())
+        } else {
+            print_stratified_view(
+                "Projects × Models Breakdown",
+                "Project / Model",
+                project_map,
+                args.limit,
+            );
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+fn print_stratified_view(
+    title: &str,
+    _header_label: &str,
+    groups: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)>,
+    limit: usize,
+) {
+    let mut sorted_groups: Vec<(String, (u64, f64, HashMap<String, (u64, f64)>))> =
+        groups.into_iter().collect();
+    sorted_groups.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+
+    println!();
+    println!("📊 \x1b[1m{title}\x1b[0m");
+    println!();
+
+    for (group_name, (grp_tokens, grp_cost, sub_map)) in sorted_groups.into_iter().take(limit) {
+        println!(
+            "  📦 \x1b[1m{:<32}\x1b[0m {:>14} tok   ${:>8.2}",
+            truncate_str_len(&group_name, 32),
+            format_commas_u64(grp_tokens),
+            grp_cost
+        );
+
+        let mut sub_items: Vec<(String, (u64, f64))> = sub_map.into_iter().collect();
+        sub_items.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+
+        for (sub_name, (sub_tokens, sub_cost)) in sub_items {
+            let pct = if grp_tokens > 0 {
+                (sub_tokens as f64 / grp_tokens as f64) * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "     └─ {:<28} {:>12} tok ({:>4.1}%)   ${:>7.2}",
+                truncate_str_len(&sub_name, 28),
+                format_commas_u64(sub_tokens),
+                pct,
+                sub_cost
+            );
+        }
+        println!();
+    }
+}
+
+#[cfg(feature = "cli")]
+pub(crate) async fn run_tui(args: TuiArgs) -> Result<()> {
+    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
+    let loaded = load_usage(&args.common, &tz).await?;
+    crate::dashboard_tui::run_dashboard_tui(
+        loaded.events,
+        tz,
+        args.common,
+        crate::dashboard_tui::DashboardTab::ScaleOverview,
+        args.period,
+        args.project,
+    )
 }

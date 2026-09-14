@@ -107,7 +107,8 @@ pub fn apply_monthly_overrides_with_data(
 
 fn month_in_range(month_key: &str, filter: DateFilter) -> bool {
     use chrono::Datelike;
-    let Ok(first_day) = chrono::NaiveDate::parse_from_str(&format!("{month_key}-01"), "%Y-%m-%d") else {
+    let Ok(first_day) = chrono::NaiveDate::parse_from_str(&format!("{month_key}-01"), "%Y-%m-%d")
+    else {
         return true;
     };
     let next_month = if first_day.month() == 12 {
@@ -115,9 +116,7 @@ fn month_in_range(month_key: &str, filter: DateFilter) -> bool {
     } else {
         chrono::NaiveDate::from_ymd_opt(first_day.year(), first_day.month() + 1, 1)
     };
-    let last_day = next_month
-        .and_then(|nm| nm.pred_opt())
-        .unwrap_or(first_day);
+    let last_day = next_month.and_then(|nm| nm.pred_opt()).unwrap_or(first_day);
 
     if let Some(since) = filter.since {
         if last_day < since {
@@ -170,9 +169,10 @@ pub fn apply_monthly_overrides_with_data_and_filter(
 
         // If the user filtered by source, verify this override contains models from the selected sources
         if has_source_filter {
-            let matches_source = data.models.iter().any(|m| {
-                infer_model_source(m).is_some_and(|src| selected.contains(&src))
-            });
+            let matches_source = data
+                .models
+                .iter()
+                .any(|m| infer_model_source(m).is_some_and(|src| selected.contains(&src)));
             if !matches_source {
                 continue;
             }
@@ -314,15 +314,11 @@ pub fn load_daily_history() -> BTreeMap<String, HistoryOverrideData> {
 }
 
 use crate::ReportPeriod;
-use crate::pipeline::week_start;
 use crate::cli::WeekStart;
+use crate::pipeline::week_start;
 
 /// Merge persisted daily history from SQLite history.db into current report rows.
-pub fn merge_history_db(
-    rows: &mut Vec<DailyRow>,
-    period: ReportPeriod,
-    common: &CommonArgs,
-) {
+pub fn merge_history_db(rows: &mut Vec<DailyRow>, period: ReportPeriod, common: &CommonArgs) {
     if common.no_history_db {
         return;
     }
@@ -350,7 +346,12 @@ pub fn merge_history_db_with_map(
     if !selected.is_empty() && selected.len() < SourceKind::all().len() {
         return;
     }
-    if common.no_claude || common.no_codex || common.no_gemini || common.no_grok || common.no_opencode {
+    if common.no_claude
+        || common.no_codex
+        || common.no_gemini
+        || common.no_grok
+        || common.no_opencode
+    {
         return;
     }
 
@@ -374,10 +375,14 @@ pub fn merge_history_db_with_map(
                 if let Some(row) = rows.iter_mut().find(|r| r.date == date_key) {
                     if row.totals.total_tokens < data.total_tokens {
                         row.totals.input_tokens = row.totals.input_tokens.max(data.input_tokens);
-                        row.totals.cache_creation_input_tokens =
-                            row.totals.cache_creation_input_tokens.max(data.cache_creation_input_tokens);
-                        row.totals.cache_read_input_tokens =
-                            row.totals.cache_read_input_tokens.max(data.cache_read_input_tokens);
+                        row.totals.cache_creation_input_tokens = row
+                            .totals
+                            .cache_creation_input_tokens
+                            .max(data.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens = row
+                            .totals
+                            .cache_read_input_tokens
+                            .max(data.cache_read_input_tokens);
                         row.totals.output_tokens = row.totals.output_tokens.max(data.output_tokens);
                         row.totals.total_tokens = row.totals.total_tokens.max(data.total_tokens);
                         row.totals.cost_usd = row.totals.cost_usd.max(data.cost_usd);
@@ -423,10 +428,12 @@ pub fn merge_history_db_with_map(
                     // Direct monthly row in history.db
                     let entry = monthly_db_direct.entry(date_key.clone()).or_default();
                     entry.input_tokens = entry.input_tokens.max(data.input_tokens);
-                    entry.cache_creation_input_tokens =
-                        entry.cache_creation_input_tokens.max(data.cache_creation_input_tokens);
-                    entry.cache_read_input_tokens =
-                        entry.cache_read_input_tokens.max(data.cache_read_input_tokens);
+                    entry.cache_creation_input_tokens = entry
+                        .cache_creation_input_tokens
+                        .max(data.cache_creation_input_tokens);
+                    entry.cache_read_input_tokens = entry
+                        .cache_read_input_tokens
+                        .max(data.cache_read_input_tokens);
                     entry.output_tokens = entry.output_tokens.max(data.output_tokens);
                     entry.total_tokens = entry.total_tokens.max(data.total_tokens);
                     entry.cost_usd = entry.cost_usd.max(data.cost_usd);
@@ -450,7 +457,10 @@ pub fn merge_history_db_with_map(
                 }
             }
 
-            let mut all_months = monthly_db_direct.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+            let mut all_months = monthly_db_direct
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
             for k in monthly_db_daily_sums.keys() {
                 all_months.insert(k.clone());
             }
@@ -462,20 +472,24 @@ pub fn merge_history_db_with_map(
                 let mut db_totals = TokenCounts::default();
                 if let Some(d) = direct {
                     db_totals.input_tokens = db_totals.input_tokens.max(d.input_tokens);
-                    db_totals.cache_creation_input_tokens =
-                        db_totals.cache_creation_input_tokens.max(d.cache_creation_input_tokens);
-                    db_totals.cache_read_input_tokens =
-                        db_totals.cache_read_input_tokens.max(d.cache_read_input_tokens);
+                    db_totals.cache_creation_input_tokens = db_totals
+                        .cache_creation_input_tokens
+                        .max(d.cache_creation_input_tokens);
+                    db_totals.cache_read_input_tokens = db_totals
+                        .cache_read_input_tokens
+                        .max(d.cache_read_input_tokens);
                     db_totals.output_tokens = db_totals.output_tokens.max(d.output_tokens);
                     db_totals.total_tokens = db_totals.total_tokens.max(d.total_tokens);
                     db_totals.cost_usd = db_totals.cost_usd.max(d.cost_usd);
                 }
                 if let Some(ds) = daily_sum {
                     db_totals.input_tokens = db_totals.input_tokens.max(ds.input_tokens);
-                    db_totals.cache_creation_input_tokens =
-                        db_totals.cache_creation_input_tokens.max(ds.cache_creation_input_tokens);
-                    db_totals.cache_read_input_tokens =
-                        db_totals.cache_read_input_tokens.max(ds.cache_read_input_tokens);
+                    db_totals.cache_creation_input_tokens = db_totals
+                        .cache_creation_input_tokens
+                        .max(ds.cache_creation_input_tokens);
+                    db_totals.cache_read_input_tokens = db_totals
+                        .cache_read_input_tokens
+                        .max(ds.cache_read_input_tokens);
                     db_totals.output_tokens = db_totals.output_tokens.max(ds.output_tokens);
                     db_totals.total_tokens = db_totals.total_tokens.max(ds.total_tokens);
                     db_totals.cost_usd = db_totals.cost_usd.max(ds.cost_usd);
@@ -483,13 +497,20 @@ pub fn merge_history_db_with_map(
 
                 if let Some(row) = rows.iter_mut().find(|r| r.date == month_key) {
                     if row.totals.total_tokens < db_totals.total_tokens {
-                        row.totals.input_tokens = row.totals.input_tokens.max(db_totals.input_tokens);
-                        row.totals.cache_creation_input_tokens =
-                            row.totals.cache_creation_input_tokens.max(db_totals.cache_creation_input_tokens);
-                        row.totals.cache_read_input_tokens =
-                            row.totals.cache_read_input_tokens.max(db_totals.cache_read_input_tokens);
-                        row.totals.output_tokens = row.totals.output_tokens.max(db_totals.output_tokens);
-                        row.totals.total_tokens = row.totals.total_tokens.max(db_totals.total_tokens);
+                        row.totals.input_tokens =
+                            row.totals.input_tokens.max(db_totals.input_tokens);
+                        row.totals.cache_creation_input_tokens = row
+                            .totals
+                            .cache_creation_input_tokens
+                            .max(db_totals.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens = row
+                            .totals
+                            .cache_read_input_tokens
+                            .max(db_totals.cache_read_input_tokens);
+                        row.totals.output_tokens =
+                            row.totals.output_tokens.max(db_totals.output_tokens);
+                        row.totals.total_tokens =
+                            row.totals.total_tokens.max(db_totals.total_tokens);
                         row.totals.cost_usd = row.totals.cost_usd.max(db_totals.cost_usd);
                     }
                 } else {
@@ -535,13 +556,20 @@ pub fn merge_history_db_with_map(
             for (week_key, db_totals) in weekly_db {
                 if let Some(row) = rows.iter_mut().find(|r| r.date == week_key) {
                     if row.totals.total_tokens < db_totals.total_tokens {
-                        row.totals.input_tokens = row.totals.input_tokens.max(db_totals.input_tokens);
-                        row.totals.cache_creation_input_tokens =
-                            row.totals.cache_creation_input_tokens.max(db_totals.cache_creation_input_tokens);
-                        row.totals.cache_read_input_tokens =
-                            row.totals.cache_read_input_tokens.max(db_totals.cache_read_input_tokens);
-                        row.totals.output_tokens = row.totals.output_tokens.max(db_totals.output_tokens);
-                        row.totals.total_tokens = row.totals.total_tokens.max(db_totals.total_tokens);
+                        row.totals.input_tokens =
+                            row.totals.input_tokens.max(db_totals.input_tokens);
+                        row.totals.cache_creation_input_tokens = row
+                            .totals
+                            .cache_creation_input_tokens
+                            .max(db_totals.cache_creation_input_tokens);
+                        row.totals.cache_read_input_tokens = row
+                            .totals
+                            .cache_read_input_tokens
+                            .max(db_totals.cache_read_input_tokens);
+                        row.totals.output_tokens =
+                            row.totals.output_tokens.max(db_totals.output_tokens);
+                        row.totals.total_tokens =
+                            row.totals.total_tokens.max(db_totals.total_tokens);
                         row.totals.cost_usd = row.totals.cost_usd.max(db_totals.cost_usd);
                     }
                 } else {

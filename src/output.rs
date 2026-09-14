@@ -21,6 +21,7 @@ use ratatui::widgets::{
     Block, Borders, List, ListItem, ListState, Paragraph, Row as TuiRow, Table as TuiTable, Wrap,
 };
 use terminal_size::{Width, terminal_size};
+use unicode_width::UnicodeWidthStr;
 
 use crate::ReportInsights;
 use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
@@ -82,10 +83,16 @@ pub(crate) fn print_report_table_with_options(
         show_activity,
         &total_models_cell,
     ));
-    println!("{daily_table}");
+    let rendered_table = daily_table.to_string();
+    let table_width = rendered_table
+        .lines()
+        .next()
+        .map(|line| strip_ansi_codes(line).as_str().width())
+        .unwrap_or(terminal_width);
+    println!("{rendered_table}");
 
     if let Some(insights) = report.insights.as_ref() {
-        print_report_insights(insights);
+        print_report_insights(insights, Some(table_width));
     }
 }
 
@@ -230,129 +237,349 @@ fn choose_layout(
     TableLayout::Compact
 }
 
-fn print_report_insights(insights: &ReportInsights) {
-    let mut parts = Vec::new();
-    if let Some(cache_share) = insights.cache_share_pct {
-        parts.push(format!("cache share {:.1}%", cache_share));
-    }
-    if let Some(output_share) = insights.output_share_pct {
-        parts.push(format!("output share {:.1}%", output_share));
-    }
-    if let Some(cost_per_mtoken) = insights.cost_per_mtoken {
-        parts.push(format!("${:.2}/1M tok", cost_per_mtoken));
-    }
-    if let Some(tokens_per_usd) = insights.tokens_per_usd {
-        parts.push(format!("{} tok/$", format_u64(tokens_per_usd)));
-    }
-    // Cache savings: only surface when the counterfactual is material (>= $1).
-    if let Some(savings) = insights.cache_savings_usd
-        && savings.abs() >= 1.0
-    {
-        if savings >= 0.0 {
-            parts.push(format!("cache saved ~{}", format_usd(savings)));
-        } else {
-            parts.push(format!("cache cost ~{} extra", format_usd(-savings)));
+pub fn print_boxed_card(title: &str, sections: &[(&str, Vec<String>)]) {
+    print_boxed_card_with_width(title, sections, None);
+}
+
+pub fn print_boxed_card_with_width(
+    title: &str,
+    sections: &[(&str, Vec<String>)],
+    target_width: Option<usize>,
+) {
+    println!();
+    println!(
+        "{}",
+        render_boxed_card_with_width(title, sections, target_width)
+    );
+}
+
+pub fn render_boxed_card_with_width(
+    title: &str,
+    sections: &[(&str, Vec<String>)],
+    target_width: Option<usize>,
+) -> String {
+    let term_width = detect_terminal_width();
+    let title_plain = strip_ansi_codes(title);
+    let title_len = title_plain.as_str().width();
+    let min_width = (title_len + 4).min(term_width);
+
+    let width = match target_width {
+        Some(tw) => tw.clamp(min_width, term_width),
+        None => term_width.clamp(72.min(term_width), 100.min(term_width)),
+    };
+    let inner_width = width.saturating_sub(4);
+    let border_color = "\x1b[36m";
+    let reset = "\x1b[0m";
+
+    let header_fill = width.saturating_sub(title_len + 3);
+    let mut lines_out = Vec::new();
+
+    lines_out.push(format!(
+        "{}╭─{}{}╮{}",
+        border_color,
+        title,
+        "─".repeat(header_fill),
+        reset
+    ));
+
+    for (sec_idx, (sec_title, lines)) in sections.iter().enumerate() {
+        if sec_idx > 0 {
+            lines_out.push(format!(
+                "{}│{}│{}",
+                border_color,
+                " ".repeat(width.saturating_sub(2)),
+                reset
+            ));
+        }
+        let sec_header = format!("  \x1b[1m{}\x1b[0m", sec_title);
+        lines_out.push(format_card_line_exact(
+            &sec_header,
+            width,
+            border_color,
+            reset,
+        ));
+
+        for line in lines {
+            let plain = strip_ansi_codes(line);
+            let display_w = plain.as_str().width();
+            if display_w + 5 <= width.saturating_sub(2) {
+                let item = format!("     {}", line);
+                lines_out.push(format_card_line_exact(&item, width, border_color, reset));
+            } else {
+                // Word wrap long line
+                let words: Vec<&str> = line.split_whitespace().collect();
+                let mut current = String::new();
+                let mut is_first = true;
+                let continuation_indent = "       ";
+
+                for word in words {
+                    let candidate = if current.is_empty() {
+                        word.to_string()
+                    } else {
+                        format!("{} {}", current, word)
+                    };
+                    let candidate_plain = strip_ansi_codes(&candidate);
+                    let target_max = if is_first {
+                        inner_width.saturating_sub(4)
+                    } else {
+                        inner_width.saturating_sub(continuation_indent.len())
+                    };
+
+                    if candidate_plain.as_str().width() <= target_max {
+                        current = candidate;
+                    } else {
+                        if !current.is_empty() {
+                            let formatted = if is_first {
+                                format!("     {}", current)
+                            } else {
+                                format!("{}{}", continuation_indent, current)
+                            };
+                            lines_out.push(format_card_line_exact(
+                                &formatted,
+                                width,
+                                border_color,
+                                reset,
+                            ));
+                            is_first = false;
+                        }
+                        current = word.to_string();
+                    }
+                }
+                if !current.is_empty() {
+                    let formatted = if is_first {
+                        format!("     {}", current)
+                    } else {
+                        format!("{}{}", continuation_indent, current)
+                    };
+                    lines_out.push(format_card_line_exact(
+                        &formatted,
+                        width,
+                        border_color,
+                        reset,
+                    ));
+                }
+            }
         }
     }
-    // Cache reuse: only warn when writes outrun reads (churn).
-    if let Some(reuse) = insights.cache_reuse_ratio
-        && reuse < 1.0
-    {
-        parts.push(format!("low cache reuse {reuse:.1}×"));
+
+    lines_out.push(format!(
+        "{}╰{}╯{}",
+        border_color,
+        "─".repeat(width.saturating_sub(2)),
+        reset
+    ));
+
+    lines_out.join("\n")
+}
+
+fn print_report_insights(insights: &ReportInsights, target_width: Option<usize>) {
+    let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
+
+    // 1. Spending & Efficiency
+    let mut spend_lines = Vec::new();
+    if let Some(cache_share) = insights.cache_share_pct {
+        let mut text = format!("• Cache Efficiency: {:.1}% hit rate", cache_share);
+        if let Some(savings) = insights.cache_savings_usd
+            && savings.abs() >= 1.0
+        {
+            if savings >= 0.0 {
+                text.push_str(&format!(
+                    " · Saved ~{} vs uncached rates",
+                    format_usd(savings)
+                ));
+            } else {
+                text.push_str(&format!(
+                    " · Premium ~{} paid for cache writes",
+                    format_usd(-savings)
+                ));
+            }
+        }
+        if let Some(reuse) = insights.cache_reuse_ratio
+            && reuse < 1.0
+        {
+            text.push_str(&format!(" (low reuse {:.1}×)", reuse));
+        }
+        spend_lines.push(text);
     }
-    // Cost concentration: only when cost share outruns token share by >= 15pp.
-    if let Some(conc) = insights.cost_concentration.as_ref()
+    if let Some(cost_m) = insights.cost_per_mtoken {
+        let mut text = format!("• Effective Rate:   ${:.2} / 1M tokens", cost_m);
+        if let Some(tok_per_usd) = insights.tokens_per_usd {
+            text.push_str(&format!(" (avg {} tok/$)", format_u64(tok_per_usd)));
+        }
+        spend_lines.push(text);
+    }
+    if let Some(conc) = &insights.cost_concentration
         && conc.cost_pct - conc.token_pct >= 15.0
     {
-        parts.push(format!(
-            "{} {:.0}% tok→{:.0}% cost",
+        spend_lines.push(format!(
+            "• Cost Divergence:  {} {:.0}% tok → {:.0}% cost",
             conc.label, conc.token_pct, conc.cost_pct
         ));
     }
-    if let Some(top_source) = insights.top_source.as_deref() {
-        if let Some(share) = insights.top_source_share_pct {
-            parts.push(format!("top source {top_source} ({share:.1}%)"));
+    if !spend_lines.is_empty() {
+        sections.push(("💰 Spending & Efficiency", spend_lines));
+    }
+
+    // 2. Top Drivers
+    let mut driver_lines = Vec::new();
+    if let Some(top_src) = insights.top_source.as_deref() {
+        let mut text = if let Some(share) = insights.top_source_share_pct {
+            format!("• Primary Provider: {top_src} ({share:.1}% tokens)")
         } else {
-            parts.push(format!("top source {top_source}"));
+            format!("• Primary Provider: {top_src}")
+        };
+        if !insights.mix_tokens_pct.is_empty() {
+            let mut top = insights
+                .mix_tokens_pct
+                .iter()
+                .map(|(k, v)| (k.as_str(), *v))
+                .collect::<Vec<_>>();
+            top.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let mix_str = top
+                .iter()
+                .take(3)
+                .map(|(k, v)| format!("{k} {v:.0}%"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!(" · Mix: {mix_str}"));
         }
+        driver_lines.push(text);
     }
-    if let Some(top_model) = insights.top_model.as_deref() {
-        if let Some(share) = insights.top_model_share_pct {
-            parts.push(format!("top model {top_model} ({share:.1}%)"));
+    if let Some(top_mod) = insights.top_model.as_deref() {
+        let text = if let Some(share) = insights.top_model_share_pct {
+            format!("• Dominant Model:   {top_mod} ({share:.1}% of all tokens)")
         } else {
-            parts.push(format!("top model {top_model}"));
-        }
+            format!("• Dominant Model:   {top_mod}")
+        };
+        driver_lines.push(text);
     }
-    if let Some(avg) = insights.avg_tokens_per_active_day {
-        parts.push(format!("avg {} tok/active day", format_u64(avg)));
+    if !driver_lines.is_empty() {
+        sections.push(("🏆 Top Drivers", driver_lines));
     }
-    if let Some(avg) = insights.avg_cost_per_active_day {
-        parts.push(format!("avg {}/active day", format_usd(avg)));
-    }
-    if let Some(streak) = insights.current_streak_days {
-        parts.push(format!("streak {}d", streak));
-    }
-    if let Some(peak) = insights.peak_period.as_ref() {
-        parts.push(format!(
-            "peak {} ({} tok, {})",
-            peak.date,
-            format_u64(peak.total_tokens),
-            format_usd(peak.cost_usd)
+
+    // 3. Records & Milestones
+    let mut record_lines = Vec::new();
+    if let Some(spend) = &insights.peak_spend {
+        record_lines.push(format!(
+            "• Peak Spend:       {} ({} · {} tok)",
+            spend.date,
+            format_usd(spend.cost_usd),
+            format_u64(spend.total_tokens)
         ));
+    }
+    if let Some(vol) = &insights.peak_period {
+        let show_vol = match &insights.peak_spend {
+            Some(spend) => spend.date != vol.date,
+            None => true,
+        };
+        if show_vol {
+            record_lines.push(format!(
+                "• Peak Volume:      {} ({} tok · {})",
+                vol.date,
+                format_u64(vol.total_tokens),
+                format_usd(vol.cost_usd)
+            ));
+        }
     }
     if !insights.spikes.is_empty() {
         let spike = &insights.spikes[0];
-        let mut text = format!(
-            "spike {} ({} tok; med {})",
+        let ratio = if spike.baseline_median > 0 {
+            spike.total_tokens as f64 / spike.baseline_median as f64
+        } else {
+            1.0
+        };
+        let mut meta = Vec::new();
+        if let Some(src) = &spike.top_source {
+            meta.push(src.clone());
+        }
+        if let Some(m) = &spike.top_model {
+            meta.push(m.clone());
+        }
+        if let Some(p) = &spike.top_project {
+            meta.push(crate::insights::sanitize_project_label(p));
+        }
+        let meta_str = if !meta.is_empty() {
+            format!(" [{}]", meta.join(" / "))
+        } else {
+            String::new()
+        };
+        record_lines.push(format!(
+            "• Volume Spike:     {} was {:.1}× baseline median ({} tok){}",
             spike.date,
-            format_u64(spike.total_tokens),
-            format_u64(spike.baseline_median)
-        );
-        if spike.top_source.is_some() || spike.top_model.is_some() {
-            let src = spike.top_source.as_deref().unwrap_or("-");
-            let model = spike.top_model.as_deref().unwrap_or("-");
-            text.push_str(&format!(" [{src} / {model}]"));
-        }
-        if spike.top_project.is_some() || spike.top_session.is_some() {
-            let project = spike.top_project.as_deref().unwrap_or("-");
-            let session = spike.top_session.as_deref().unwrap_or("-");
-            text.push_str(&format!(" {{{project} / {session}}}"));
-        }
-        parts.push(text);
+            ratio,
+            format_u64(spike.baseline_median),
+            meta_str
+        ));
     }
-    if !insights.anomalies.is_empty() {
-        let a = &insights.anomalies[0];
-        let mut text = format!("anomaly {} (z={:.1})", a.date, a.robust_z.max(0.0));
-        if a.top_source.is_some() || a.top_model.is_some() {
-            let src = a.top_source.as_deref().unwrap_or("-");
-            let model = a.top_model.as_deref().unwrap_or("-");
-            text.push_str(&format!(" [{src} / {model}]"));
+    if let Some(streak) = insights.current_streak_days {
+        let mut text = format!("• Active Streak:    {} days", streak);
+        if let Some(avg) = insights.avg_tokens_per_active_day {
+            text.push_str(&format!(" (avg {} tok/day)", format_u64(avg)));
         }
-        if a.top_project.is_some() || a.top_session.is_some() {
-            let project = a.top_project.as_deref().unwrap_or("-");
-            let session = a.top_session.as_deref().unwrap_or("-");
-            text.push_str(&format!(" {{{project} / {session}}}"));
-        }
-        parts.push(text);
+        record_lines.push(text);
     }
-    if !insights.mix_tokens_pct.is_empty() {
-        let mut top = insights
-            .mix_tokens_pct
-            .iter()
-            .map(|(k, v)| (k.as_str(), *v))
-            .collect::<Vec<_>>();
-        top.sort_by(|a, b| b.1.total_cmp(&a.1));
-        top.truncate(2);
-        let mix = top
-            .into_iter()
-            .map(|(k, v)| format!("{k} {v:.0}%"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!("mix {mix}"));
+    if !record_lines.is_empty() {
+        sections.push(("📈 Records & Milestones", record_lines));
     }
 
-    if !parts.is_empty() {
-        println!("Insights: {}", parts.join(" · "));
+    // 4. Human Scale & Equivalences
+    if let Some(scale) = &insights.scale {
+        let mut scale_lines = Vec::new();
+        scale_lines.push(format!(
+            "• Context Digested: {}",
+            scale.digestion_headline()
+        ));
+        scale_lines.push(format!("• Active Written:   {}", scale.creation_headline()));
+        sections.push(("🌐 Human Scale & Equivalences", scale_lines));
+    }
+
+    if sections.is_empty() {
+        return;
+    }
+
+    print_boxed_card_with_width(" Insights & Highlights ", &sections, target_width);
+}
+
+pub fn strip_ansi_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn format_card_line_exact(
+    content: &str,
+    total_width: usize,
+    border_color: &str,
+    reset: &str,
+) -> String {
+    let plain = strip_ansi_codes(content);
+    let plain_len = plain.as_str().width();
+    let inner_width = total_width.saturating_sub(2);
+    if plain_len > inner_width {
+        let truncated = truncate_text(&plain, inner_width);
+        let trunc_len = truncated.as_str().width();
+        let padding = " ".repeat(inner_width.saturating_sub(trunc_len));
+        format!(
+            "{}│{}{}{}{}│{}",
+            border_color, reset, truncated, padding, border_color, reset
+        )
+    } else {
+        let padding = " ".repeat(inner_width - plain_len);
+        format!(
+            "{}│{}{}{}{}│{}",
+            border_color, reset, content, padding, border_color, reset
+        )
     }
 }
 
@@ -614,6 +841,22 @@ fn menu_rows() -> Vec<MenuRow> {
         Cmd {
             name: "carbon",
             desc: "Carbon footprint, energy (kWh), and water report",
+        },
+        Cmd {
+            name: "scale",
+            desc: "Human scale & information equivalences (words, books, Wikipedias)",
+        },
+        Cmd {
+            name: "rank",
+            desc: "Local leaderboard & Hall of Fame records",
+        },
+        Cmd {
+            name: "breakdown",
+            desc: "Cross-stratified breakdown (Projects × Models)",
+        },
+        Cmd {
+            name: "tui",
+            desc: "Interactive unified TUI dashboard (Scale, Hall of Fame, Matrix, Timeline)",
         },
         Header("Live"),
         Cmd {
@@ -1427,4 +1670,42 @@ fn detect_terminal_width() -> usize {
         return usize::from(cols);
     }
     160
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_boxed_card_exact_target_width() {
+        let sections = vec![
+            (
+                "💰 Spending & Efficiency",
+                vec![
+                    "• Cache Efficiency: 98.7% hit rate · Saved ~$147481.80 vs uncached rates"
+                        .to_string(),
+                    "• Effective Rate:   $0.68 / 1M tokens (avg 1,469,422 tok/$)".to_string(),
+                ],
+            ),
+            (
+                "🏆 Top Drivers",
+                vec!["• Dominant Model:   claude-sonnet-5 (32.0% of all tokens)".to_string()],
+            ),
+        ];
+
+        for target in [65, 72, 80, 95] {
+            let rendered =
+                render_boxed_card_with_width(" Insights & Highlights ", &sections, Some(target));
+            for line in rendered.lines() {
+                let plain = strip_ansi_codes(line);
+                assert_eq!(
+                    plain.as_str().width(),
+                    target,
+                    "Line {:?} does not match target width {}",
+                    plain,
+                    target
+                );
+            }
+        }
+    }
 }

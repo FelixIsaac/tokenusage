@@ -5,15 +5,22 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn setup_fixture(test_name: &str) -> (PathBuf, PathBuf) {
-    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("test-cli-{}-{}", test_name, std::process::id()));
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "test-cli-{}-{}",
+        test_name,
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
 
     let claude_dir = root.join("claude/projects/-Users-test-Projects-core");
     fs::create_dir_all(&claude_dir).unwrap();
 
     let sample_line = r#"{"type":"assistant","timestamp":"2026-08-28T10:00:00.000Z","messageId":"m1","requestId":"r1","message":{"model":"claude-3-7-sonnet-20250219","usage":{"input_tokens":1000,"cache_creation_input_tokens":200,"cache_read_input_tokens":500,"output_tokens":150}}}"#;
-    fs::write(claude_dir.join("session.jsonl"), format!("{}\n", sample_line)).unwrap();
+    fs::write(
+        claude_dir.join("session.jsonl"),
+        format!("{}\n", sample_line),
+    )
+    .unwrap();
 
     (root.clone(), root.join("claude/projects"))
 }

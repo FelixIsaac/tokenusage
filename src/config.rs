@@ -354,6 +354,22 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             Commands::Carbon(args)
         }
+        Commands::Scale(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Scale(args)
+        }
+        Commands::Rank(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Rank(args)
+        }
+        Commands::Breakdown(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Breakdown(args)
+        }
+        Commands::Tui(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Tui(args)
+        }
     };
 
     Ok(merged)
@@ -377,6 +393,10 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Monthly(args) => args.common.config.as_deref(),
         Commands::Weekly(args) => args.common.config.as_deref(),
         Commands::Carbon(args) => args.common.config.as_deref(),
+        Commands::Scale(args) => args.common.config.as_deref(),
+        Commands::Rank(args) => args.common.config.as_deref(),
+        Commands::Breakdown(args) => args.common.config.as_deref(),
+        Commands::Tui(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),
         Commands::Session(args) => args.common.config.as_deref(),
         Commands::Blocks(args) => args.common.config.as_deref(),

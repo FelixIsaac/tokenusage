@@ -16,8 +16,11 @@ pub struct MultiYearFixture {
 
 impl MultiYearFixture {
     pub fn new(test_name: &str) -> Self {
-        let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("fixture-multiyear-{}-{}", test_name, std::process::id()));
+        let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "fixture-multiyear-{}-{}",
+            test_name,
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
 
         let home_dir = root.join("home");
@@ -60,21 +63,86 @@ impl MultiYearFixture {
         let projects = ["backend-service", "frontend-ui", "data-pipeline"];
         let dates = [
             // 2024 leap year date
-            ("2024-02-29T10:00:00Z", "claude-3-opus-20240229", 1500, 200, 800, 300),
-            ("2024-07-15T14:30:00Z", "claude-3-5-sonnet-20240620", 2500, 500, 1200, 450),
-            ("2024-11-20T09:15:00Z", "claude-3-5-sonnet-20241022", 3000, 600, 1500, 600),
+            (
+                "2024-02-29T10:00:00Z",
+                "claude-3-opus-20240229",
+                1500,
+                200,
+                800,
+                300,
+            ),
+            (
+                "2024-07-15T14:30:00Z",
+                "claude-3-5-sonnet-20240620",
+                2500,
+                500,
+                1200,
+                450,
+            ),
+            (
+                "2024-11-20T09:15:00Z",
+                "claude-3-5-sonnet-20241022",
+                3000,
+                600,
+                1500,
+                600,
+            ),
             // 2025 dates
-            ("2025-01-10T11:00:00Z", "claude-3-5-sonnet-20241022", 2000, 400, 1000, 400),
-            ("2025-06-01T16:45:00Z", "claude-3-5-haiku-20241022", 1200, 100, 600, 250),
-            ("2025-12-31T23:50:00Z", "claude-3-5-sonnet-20241022", 4000, 800, 2000, 800),
+            (
+                "2025-01-10T11:00:00Z",
+                "claude-3-5-sonnet-20241022",
+                2000,
+                400,
+                1000,
+                400,
+            ),
+            (
+                "2025-06-01T16:45:00Z",
+                "claude-3-5-haiku-20241022",
+                1200,
+                100,
+                600,
+                250,
+            ),
+            (
+                "2025-12-31T23:50:00Z",
+                "claude-3-5-sonnet-20241022",
+                4000,
+                800,
+                2000,
+                800,
+            ),
             // 2026 dates
-            ("2026-01-01T00:10:00Z", "claude-3-7-sonnet-20250219", 3500, 700, 1800, 700),
-            ("2026-04-15T12:00:00Z", "claude-3-7-sonnet-20250219", 2800, 600, 1400, 550),
-            ("2026-08-28T08:00:00Z", "claude-sonnet-5", 5000, 1000, 3000, 1000),
+            (
+                "2026-01-01T00:10:00Z",
+                "claude-3-7-sonnet-20250219",
+                3500,
+                700,
+                1800,
+                700,
+            ),
+            (
+                "2026-04-15T12:00:00Z",
+                "claude-3-7-sonnet-20250219",
+                2800,
+                600,
+                1400,
+                550,
+            ),
+            (
+                "2026-08-28T08:00:00Z",
+                "claude-sonnet-5",
+                5000,
+                1000,
+                3000,
+                1000,
+            ),
         ];
 
         for (p_idx, proj) in projects.iter().enumerate() {
-            let proj_dir = self.claude_dir.join(format!("-Users-felix-Projects-{}", proj));
+            let proj_dir = self
+                .claude_dir
+                .join(format!("-Users-felix-Projects-{}", proj));
             fs::create_dir_all(&proj_dir).unwrap();
 
             for (d_idx, (ts, model, in_tok, cw_tok, cr_tok, out_tok)) in dates.iter().enumerate() {
@@ -82,7 +150,17 @@ impl MultiYearFixture {
                 let line1 = r#"{"type":"user","message":{"content":"Implement new feature"}}"#;
                 let line2 = format!(
                     r#"{{"type":"assistant","timestamp":"{}","messageId":"msg-{}-{}","requestId":"req-{}-{}","message":{{"model":"{}","usage":{{"input_tokens":{},"cache_creation_input_tokens":{},"cache_read_input_tokens":{},"output_tokens":{},"reasoning_output_tokens":{}}}}}}}"#,
-                    ts, p_idx, d_idx, p_idx, d_idx, model, in_tok, cw_tok, cr_tok, out_tok, out_tok / 3
+                    ts,
+                    p_idx,
+                    d_idx,
+                    p_idx,
+                    d_idx,
+                    model,
+                    in_tok,
+                    cw_tok,
+                    cr_tok,
+                    out_tok,
+                    out_tok / 3
                 );
                 fs::write(session_file, format!("{}\n{}\n", line1, line2)).unwrap();
             }
@@ -91,12 +169,54 @@ impl MultiYearFixture {
 
     fn populate_codex_multi_year(&self) {
         let sessions = [
-            ("2024-03-01", "2024-03-01T15:00:00Z", "gpt-4o", 2000, 1200, 350),
-            ("2024-08-10", "2024-08-10T18:00:00Z", "gpt-4o-mini", 1000, 500, 200),
-            ("2025-03-15", "2025-03-15T09:00:00Z", "gpt-4.5-preview", 3000, 1500, 500),
-            ("2025-09-22", "2025-09-22T14:20:00Z", "gpt-5", 4000, 2500, 800),
-            ("2026-02-14", "2026-02-14T11:30:00Z", "gpt-5-codex", 3500, 2000, 600),
-            ("2026-08-28", "2026-08-28T07:15:00Z", "gpt-5.6-terra", 6000, 4000, 1200),
+            (
+                "2024-03-01",
+                "2024-03-01T15:00:00Z",
+                "gpt-4o",
+                2000,
+                1200,
+                350,
+            ),
+            (
+                "2024-08-10",
+                "2024-08-10T18:00:00Z",
+                "gpt-4o-mini",
+                1000,
+                500,
+                200,
+            ),
+            (
+                "2025-03-15",
+                "2025-03-15T09:00:00Z",
+                "gpt-4.5-preview",
+                3000,
+                1500,
+                500,
+            ),
+            (
+                "2025-09-22",
+                "2025-09-22T14:20:00Z",
+                "gpt-5",
+                4000,
+                2500,
+                800,
+            ),
+            (
+                "2026-02-14",
+                "2026-02-14T11:30:00Z",
+                "gpt-5-codex",
+                3500,
+                2000,
+                600,
+            ),
+            (
+                "2026-08-28",
+                "2026-08-28T07:15:00Z",
+                "gpt-5.6-terra",
+                6000,
+                4000,
+                1200,
+            ),
         ];
 
         for (idx, (folder, ts, model, in_tok, cr_tok, out_tok)) in sessions.iter().enumerate() {
@@ -104,11 +224,20 @@ impl MultiYearFixture {
             fs::create_dir_all(&sess_dir).unwrap();
 
             let file_path = sess_dir.join(format!("session-{}.jsonl", idx));
-            let meta = r#"{"type":"session_meta","payload":{"cwd":"/Users/felix/Projects/codex-core"}}"#;
-            let turn = format!(r#"{{"type":"turn_context","payload":{{"model":"{}"}}}}"#, model);
+            let meta =
+                r#"{"type":"session_meta","payload":{"cwd":"/Users/felix/Projects/codex-core"}}"#;
+            let turn = format!(
+                r#"{{"type":"turn_context","payload":{{"model":"{}"}}}}"#,
+                model
+            );
             let event = format!(
                 r#"{{"type":"event_msg","timestamp":"{}","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{},"cached_input_tokens":{},"output_tokens":{},"reasoning_output_tokens":{},"total_tokens":{}}}}}}}}}"#,
-                ts, in_tok, cr_tok, out_tok, out_tok / 4, in_tok + out_tok
+                ts,
+                in_tok,
+                cr_tok,
+                out_tok,
+                out_tok / 4,
+                in_tok + out_tok
             );
             fs::write(file_path, format!("{}\n{}\n{}\n", meta, turn, event)).unwrap();
         }
@@ -127,7 +256,12 @@ impl MultiYearFixture {
             let file_path = self.gemini_dir.join(format!("gemini-{}.jsonl", idx));
             let content = format!(
                 r#"{{"type":"gemini","timestamp":"{}","model":"{}","tokens":{{"input":{},"cached":{},"output":{},"thoughts":{}}}}}"#,
-                ts, model, in_tok, cr_tok, out_tok, out_tok / 3
+                ts,
+                model,
+                in_tok,
+                cr_tok,
+                out_tok,
+                out_tok / 3
             );
             fs::write(file_path, format!("{}\n", content)).unwrap();
         }
@@ -135,14 +269,49 @@ impl MultiYearFixture {
 
     fn populate_grok_multi_year(&self) {
         let sessions = [
-            ("2025-04-12", "019fa4ff-0001-7000-0000-000000000001", 1744459200i64, "grok-2", 4000, 3000, 300),
-            ("2025-10-05", "019fa4ff-0002-7000-0000-000000000002", 1759665600i64, "grok-3", 5000, 4000, 500),
-            ("2026-05-18", "019fa4ff-0003-7000-0000-000000000003", 1779105600i64, "grok-4.5-build", 8000, 6500, 800),
-            ("2026-08-28", "019fa4ff-0004-7000-0000-000000000004", 1787983200i64, "grok-4.6-build", 10000, 8500, 1100),
+            (
+                "2025-04-12",
+                "019fa4ff-0001-7000-0000-000000000001",
+                1744459200i64,
+                "grok-2",
+                4000,
+                3000,
+                300,
+            ),
+            (
+                "2025-10-05",
+                "019fa4ff-0002-7000-0000-000000000002",
+                1759665600i64,
+                "grok-3",
+                5000,
+                4000,
+                500,
+            ),
+            (
+                "2026-05-18",
+                "019fa4ff-0003-7000-0000-000000000003",
+                1779105600i64,
+                "grok-4.5-build",
+                8000,
+                6500,
+                800,
+            ),
+            (
+                "2026-08-28",
+                "019fa4ff-0004-7000-0000-000000000004",
+                1787983200i64,
+                "grok-4.6-build",
+                10000,
+                8500,
+                1100,
+            ),
         ];
 
         for (_date, sid, ts_sec, model, in_tok, cr_tok, out_tok) in sessions {
-            let sess_dir = self.grok_dir.join("%2FUsers%2Ffelix%2FProjects%2Fai-lab").join(sid);
+            let sess_dir = self
+                .grok_dir
+                .join("%2FUsers%2Ffelix%2FProjects%2Fai-lab")
+                .join(sid);
             fs::create_dir_all(&sess_dir).unwrap();
 
             let payload = serde_json::json!({
@@ -169,15 +338,46 @@ impl MultiYearFixture {
                     }
                 }
             });
-            fs::write(sess_dir.join("updates.jsonl"), format!("{}\n", payload.to_string())).unwrap();
+            fs::write(
+                sess_dir.join("updates.jsonl"),
+                format!("{}\n", payload.to_string()),
+            )
+            .unwrap();
         }
     }
 
     fn populate_opencode_multi_year(&self) {
         let messages = [
-            ("session-2024", "msg-101", 1716206400000i64, "claude-3-opus", 2000, 1000, 300, 100),
-            ("session-2025", "msg-201", 1747828800000i64, "claude-3-5-sonnet", 3500, 2000, 500, 200),
-            ("session-2026", "msg-301", 1787983200000i64, "claude-3-7-sonnet", 6000, 4000, 900, 300),
+            (
+                "session-2024",
+                "msg-101",
+                1716206400000i64,
+                "claude-3-opus",
+                2000,
+                1000,
+                300,
+                100,
+            ),
+            (
+                "session-2025",
+                "msg-201",
+                1747828800000i64,
+                "claude-3-5-sonnet",
+                3500,
+                2000,
+                500,
+                200,
+            ),
+            (
+                "session-2026",
+                "msg-301",
+                1787983200000i64,
+                "claude-3-7-sonnet",
+                6000,
+                4000,
+                900,
+                300,
+            ),
         ];
 
         for (sid, mid, ts_ms, model, in_tok, cr_tok, out_tok, cw_tok) in messages {
@@ -236,7 +436,11 @@ impl MultiYearFixture {
                 }
             }
         });
-        fs::write(self.config_dir.join("history_overrides.json"), overrides_content.to_string()).unwrap();
+        fs::write(
+            self.config_dir.join("history_overrides.json"),
+            overrides_content.to_string(),
+        )
+        .unwrap();
     }
 
     pub fn cli_cmd(&self, args: &[&str]) -> std::process::Output {
@@ -252,7 +456,13 @@ impl MultiYearFixture {
                 "--grok-log-dir",
                 self.grok_dir.to_str().unwrap(),
                 "--opencode-data-dir",
-                self.opencode_dir.parent().unwrap().parent().unwrap().to_str().unwrap(),
+                self.opencode_dir
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
             ])
             .env("HOME", &self.home_dir)
             .output()

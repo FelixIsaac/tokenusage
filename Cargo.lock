@@ -4345,6 +4345,7 @@ dependencies = [
  "serde_json",
  "terminal_size",
  "tokio",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
