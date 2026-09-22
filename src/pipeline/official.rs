@@ -81,6 +81,16 @@ pub(super) struct ClaudeCredentialsFile {
     claude_ai_oauth: Option<ClaudeOAuthTokens>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) enum ClaudeCredentialSource {
+    Keychain {
+        service: String,
+        account: String,
+        raw_json: serde_json::Value,
+    },
+    File(PathBuf),
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ClaudeOAuthTokens {
     #[serde(rename = "accessToken", alias = "access_token")]
@@ -117,10 +127,11 @@ pub(super) struct ClaudeOAuthWindow {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ClaudeRefreshResponse {
+    #[serde(alias = "accessToken")]
     access_token: String,
-    #[serde(default)]
+    #[serde(default, alias = "refreshToken")]
     refresh_token: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "expiresIn")]
     expires_in: Option<i64>,
 }
 
@@ -492,46 +503,66 @@ pub(super) async fn refresh_codex_access_token(
 }
 
 pub(super) async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnapshot> {
-    // Primary approach: CLI PTY probe (run `claude`, send `/usage`, parse output).
-    match fetch_claude_limits_via_cli().await {
-        Ok(snapshot) => {
-            save_claude_snapshot_cache(&snapshot);
-            return Ok(snapshot);
-        }
-        Err(_cli_err) => {
-            // Silently fall through to OAuth fallback.
-        }
-    }
-
-    // Fallback: OAuth via ~/.claude/.credentials.json (may not exist on newer installs).
+    // 1. Primary approach: Fast direct OAuth API (Keychain or credentials file)
     let oauth_result: Result<OfficialClaudeSnapshot> = async {
-        let (credentials_path, mut tokens) = load_claude_oauth_tokens()?;
-        let current_access_token = tokens.access_token.clone().unwrap_or_default();
-        match fetch_claude_usage_with_access_token(
-            &current_access_token,
+        let (credentials_source, mut tokens) = load_claude_oauth_tokens()?;
+        let now_ms = Utc::now().timestamp_millis() as f64;
+        let should_refresh_proactively = match (tokens.access_token.as_deref(), tokens.expires_at) {
+            (None, _) => true,
+            (Some(acc), _) if acc.trim().is_empty() => true,
+            (_, Some(exp)) => {
+                let exp_ms = if exp > 1e11 { exp } else { exp * 1000.0 };
+                exp_ms <= (now_ms + 300_000.0)
+            }
+            _ => false,
+        };
+
+        if should_refresh_proactively {
+            if let Some(refresh_token) = tokens
+                .refresh_token
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                if let Ok(refreshed) = refresh_claude_access_token(refresh_token).await {
+                    tokens.access_token = Some(refreshed.0);
+                    if let Some(new_refresh) = refreshed.1 {
+                        tokens.refresh_token = Some(new_refresh);
+                    }
+                    if let Some(expires_at) = refreshed.2 {
+                        tokens.expires_at = Some(expires_at as f64);
+                    }
+                    let _ = save_claude_oauth_tokens(&credentials_source, &tokens);
+                }
+            }
+        }
+
+        let access_token = tokens.access_token.clone().unwrap_or_default();
+        let fetch_res = fetch_claude_usage_with_access_token(
+            &access_token,
             tokens.rate_limit_tier.as_deref(),
         )
-        .await
-        {
-            Ok(snapshot) => Ok(snapshot),
+        .await;
+
+        match fetch_res {
+            Ok(snap) => Ok(snap),
             Err(ClaudeOAuthFetchError::Unauthorized) => {
-                let refresh = tokens
+                let refresh_token = tokens
                     .refresh_token
                     .as_deref()
-                    .filter(|v| !v.is_empty())
+                    .filter(|v| !v.trim().is_empty())
                     .context("Claude OAuth token unauthorized and no refresh token available")?;
-                let refreshed = refresh_claude_access_token(refresh).await?;
+                let refreshed = refresh_claude_access_token(refresh_token).await?;
                 tokens.access_token = Some(refreshed.0);
-                if let Some(refresh_token) = refreshed.1 {
-                    tokens.refresh_token = Some(refresh_token);
+                if let Some(new_refresh) = refreshed.1 {
+                    tokens.refresh_token = Some(new_refresh);
                 }
                 if let Some(expires_at) = refreshed.2 {
                     tokens.expires_at = Some(expires_at as f64);
                 }
-                let _ = save_claude_oauth_tokens(&credentials_path, &tokens);
-                let refreshed_access_token = tokens.access_token.clone().unwrap_or_default();
+                let _ = save_claude_oauth_tokens(&credentials_source, &tokens);
+                let refreshed_access = tokens.access_token.clone().unwrap_or_default();
                 fetch_claude_usage_with_access_token(
-                    &refreshed_access_token,
+                    &refreshed_access,
                     tokens.rate_limit_tier.as_deref(),
                 )
                 .await
@@ -539,10 +570,10 @@ pub(super) async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnaps
                     ClaudeOAuthFetchError::Unauthorized => {
                         anyhow::anyhow!("Claude OAuth remained unauthorized after refresh")
                     }
-                    ClaudeOAuthFetchError::Other(error) => error,
+                    ClaudeOAuthFetchError::Other(e) => e,
                 })
             }
-            Err(ClaudeOAuthFetchError::Other(error)) => Err(error),
+            Err(ClaudeOAuthFetchError::Other(e)) => Err(e),
         }
     }
     .await;
@@ -552,12 +583,21 @@ pub(super) async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnaps
             save_claude_snapshot_cache(&snapshot);
             Ok(snapshot)
         }
-        Err(err) => {
-            // Both CLI and OAuth failed — try the local cache as last resort.
-            if let Some(cached) = load_claude_snapshot_cache() {
-                Ok(cached)
-            } else {
-                Err(err)
+        Err(oauth_err) => {
+            // 2. Fallback: CLI PTY probe (run `claude`, send `/usage`, parse output)
+            match fetch_claude_limits_via_cli().await {
+                Ok(snapshot) => {
+                    save_claude_snapshot_cache(&snapshot);
+                    Ok(snapshot)
+                }
+                Err(cli_err) => {
+                    // 3. Fallback: Local snapshot cache
+                    if let Some(cached) = load_claude_snapshot_cache() {
+                        Ok(cached)
+                    } else {
+                        Err(cli_err.context(format!("Direct Claude OAuth also failed: {oauth_err}")))
+                    }
+                }
             }
         }
     }
@@ -1408,89 +1448,258 @@ pub(super) fn extract_claude_plan_from_compact(compact: &str) -> Option<String> 
     None
 }
 
-pub(super) fn load_claude_oauth_tokens() -> Result<(PathBuf, ClaudeOAuthTokens)> {
-    let path = dirs::home_dir()
-        .map(|home| home.join(".claude").join(".credentials.json"))
-        .context("Failed to resolve Claude credentials path")?;
-    let body = std::fs::read(&path)
-        .with_context(|| format!("Failed to read Claude credentials file: {}", path.display()))?;
-    let parsed: ClaudeCredentialsFile =
-        serde_json::from_slice(&body).context("Invalid Claude .credentials.json format")?;
-    let Some(tokens) = parsed.claude_ai_oauth else {
-        bail!("Claude credentials missing claudeAiOauth payload");
-    };
-    let access_token = tokens
-        .access_token
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or_default();
-    if access_token.is_empty() {
-        bail!("Claude credentials missing access token");
+#[cfg(target_os = "macos")]
+fn get_keychain_account(service: &str) -> Option<String> {
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", service])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    Ok((
-        path,
-        ClaudeOAuthTokens {
-            access_token: Some(access_token.to_string()),
-            ..tokens
-        },
-    ))
-}
-
-pub(super) fn save_claude_oauth_tokens(path: &Path, tokens: &ClaudeOAuthTokens) -> Result<()> {
-    let existing = std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let mut root = existing;
-    if !root.is_object() {
-        root = serde_json::json!({});
-    }
-    let obj = root
-        .as_object_mut()
-        .context("Claude credentials root must be object")?;
-    let oauth_value = obj
-        .entry("claudeAiOauth".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    if !oauth_value.is_object() {
-        *oauth_value = serde_json::json!({});
-    }
-    let oauth = oauth_value
-        .as_object_mut()
-        .context("claudeAiOauth must be object")?;
-
-    if let Some(access) = tokens.access_token.as_ref().filter(|v| !v.is_empty()) {
-        oauth.insert(
-            "accessToken".to_string(),
-            serde_json::Value::String(access.clone()),
-        );
-    }
-    if let Some(refresh) = tokens.refresh_token.as_ref().filter(|v| !v.is_empty()) {
-        oauth.insert(
-            "refreshToken".to_string(),
-            serde_json::Value::String(refresh.clone()),
-        );
-    }
-    if let Some(expires_at) = tokens.expires_at {
-        if let Some(number) = serde_json::Number::from_f64(expires_at) {
-            oauth.insert("expiresAt".to_string(), serde_json::Value::Number(number));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("\"acct\"<blob>=\"") {
+            if let Some(acct) = rest.strip_suffix('\"') {
+                if !acct.is_empty() {
+                    return Some(acct.to_string());
+                }
+            }
         }
     }
-    if let Some(tier) = tokens.rate_limit_tier.as_ref().filter(|v| !v.is_empty()) {
-        oauth.insert(
-            "rateLimitTier".to_string(),
-            serde_json::Value::String(tier.clone()),
-        );
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn load_claude_keychain_tokens() -> Option<(ClaudeCredentialSource, ClaudeOAuthTokens)> {
+    for service in &["Claude Code-credentials", "Claude Code"] {
+        let Ok(output) = Command::new("security")
+            .args(["find-generic-password", "-s", service, "-w"])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let password_str = String::from_utf8_lossy(&output.stdout);
+        let password_str = password_str.trim();
+        if password_str.is_empty() {
+            continue;
+        }
+        let Ok(raw_json) = serde_json::from_str::<serde_json::Value>(password_str) else {
+            continue;
+        };
+        let Some(oauth_val) = raw_json.get("claudeAiOauth") else {
+            continue;
+        };
+        let Ok(tokens) = serde_json::from_value::<ClaudeOAuthTokens>(oauth_val.clone()) else {
+            continue;
+        };
+        let has_access = tokens
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let has_refresh = tokens
+            .refresh_token
+            .as_deref()
+            .map(str::trim)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if has_access || has_refresh {
+            let account = get_keychain_account(service).unwrap_or_else(|| {
+                std::env::var("USER").unwrap_or_default()
+            });
+            return Some((
+                ClaudeCredentialSource::Keychain {
+                    service: service.to_string(),
+                    account,
+                    raw_json,
+                },
+                tokens,
+            ));
+        }
+    }
+    None
+}
+
+pub(super) fn load_claude_oauth_tokens() -> Result<(ClaudeCredentialSource, ClaudeOAuthTokens)> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(res) = load_claude_keychain_tokens() {
+            return Ok(res);
+        }
     }
 
-    let bytes =
-        serde_json::to_vec_pretty(&root).context("Failed to serialize Claude credentials file")?;
-    std::fs::write(path, bytes).with_context(|| {
-        format!(
-            "Failed to write Claude credentials file: {}",
-            path.display()
-        )
-    })?;
-    Ok(())
+    let file_candidates = [
+        std::env::var("CLAUDE_CONFIG_DIR")
+            .ok()
+            .map(|d| PathBuf::from(d).join(".credentials.json")),
+        dirs::home_dir().map(|h| h.join(".claude").join(".credentials.json")),
+    ];
+
+    for path_opt in file_candidates.into_iter().flatten() {
+        if path_opt.is_file() {
+            if let Ok(body) = std::fs::read(&path_opt) {
+                if let Ok(parsed) = serde_json::from_slice::<ClaudeCredentialsFile>(&body) {
+                    if let Some(tokens) = parsed.claude_ai_oauth {
+                        let has_access = tokens
+                            .access_token
+                            .as_deref()
+                            .map(str::trim)
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false);
+                        let has_refresh = tokens
+                            .refresh_token
+                            .as_deref()
+                            .map(str::trim)
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false);
+                        if has_access || has_refresh {
+                            return Ok((ClaudeCredentialSource::File(path_opt), tokens));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bail!("No Claude OAuth credentials found in Keychain or credentials file")
+}
+
+pub(super) fn save_claude_oauth_tokens(
+    source: &ClaudeCredentialSource,
+    tokens: &ClaudeOAuthTokens,
+) -> Result<()> {
+    match source {
+        #[cfg(target_os = "macos")]
+        ClaudeCredentialSource::Keychain {
+            service,
+            account,
+            raw_json,
+        } => {
+            let mut updated_json = raw_json.clone();
+            let oauth_value = updated_json
+                .as_object_mut()
+                .context("Keychain JSON root must be object")?
+                .entry("claudeAiOauth".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !oauth_value.is_object() {
+                *oauth_value = serde_json::json!({});
+            }
+            let oauth = oauth_value
+                .as_object_mut()
+                .context("claudeAiOauth must be object")?;
+
+            if let Some(access) = tokens.access_token.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "accessToken".to_string(),
+                    serde_json::Value::String(access.clone()),
+                );
+            }
+            if let Some(refresh) = tokens.refresh_token.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "refreshToken".to_string(),
+                    serde_json::Value::String(refresh.clone()),
+                );
+            }
+            if let Some(expires_at) = tokens.expires_at {
+                if let Some(number) = serde_json::Number::from_f64(expires_at) {
+                    oauth.insert("expiresAt".to_string(), serde_json::Value::Number(number));
+                }
+            }
+            if let Some(tier) = tokens.rate_limit_tier.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "rateLimitTier".to_string(),
+                    serde_json::Value::String(tier.clone()),
+                );
+            }
+
+            let serialized = serde_json::to_string(&updated_json)
+                .context("Failed to serialize updated Claude Keychain JSON")?;
+
+            let mut cmd = Command::new("security");
+            cmd.args(["add-generic-password", "-s", service]);
+            if !account.is_empty() {
+                cmd.args(["-a", account]);
+            }
+            cmd.args(["-w", &serialized, "-U"]);
+
+            let status = cmd
+                .status()
+                .context("Failed to run security add-generic-password")?;
+            if !status.success() {
+                bail!("security add-generic-password failed with status {status}");
+            }
+            Ok(())
+        }
+        ClaudeCredentialSource::File(path) => {
+            let existing = std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let mut root = existing;
+            if !root.is_object() {
+                root = serde_json::json!({});
+            }
+            let obj = root
+                .as_object_mut()
+                .context("Claude credentials root must be object")?;
+            let oauth_value = obj
+                .entry("claudeAiOauth".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !oauth_value.is_object() {
+                *oauth_value = serde_json::json!({});
+            }
+            let oauth = oauth_value
+                .as_object_mut()
+                .context("claudeAiOauth must be object")?;
+
+            if let Some(access) = tokens.access_token.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "accessToken".to_string(),
+                    serde_json::Value::String(access.clone()),
+                );
+            }
+            if let Some(refresh) = tokens.refresh_token.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "refreshToken".to_string(),
+                    serde_json::Value::String(refresh.clone()),
+                );
+            }
+            if let Some(expires_at) = tokens.expires_at {
+                if let Some(number) = serde_json::Number::from_f64(expires_at) {
+                    oauth.insert("expiresAt".to_string(), serde_json::Value::Number(number));
+                }
+            }
+            if let Some(tier) = tokens.rate_limit_tier.as_ref().filter(|v| !v.is_empty()) {
+                oauth.insert(
+                    "rateLimitTier".to_string(),
+                    serde_json::Value::String(tier.clone()),
+                );
+            }
+
+            let bytes = serde_json::to_vec_pretty(&root)
+                .context("Failed to serialize Claude credentials file")?;
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(path, bytes).with_context(|| {
+                format!(
+                    "Failed to write Claude credentials file: {}",
+                    path.display()
+                )
+            })?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        ClaudeCredentialSource::Keychain { .. } => {
+            bail!("Keychain storage is only supported on macOS");
+        }
+    }
 }
 
 pub(super) async fn fetch_claude_usage_with_access_token(
