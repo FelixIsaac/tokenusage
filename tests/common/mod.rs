@@ -338,11 +338,7 @@ impl MultiYearFixture {
                     }
                 }
             });
-            fs::write(
-                sess_dir.join("updates.jsonl"),
-                format!("{}\n", payload.to_string()),
-            )
-            .unwrap();
+            fs::write(sess_dir.join("updates.jsonl"), format!("{payload}\n")).unwrap();
         }
     }
 

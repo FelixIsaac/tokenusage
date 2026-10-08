@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 fn setup_fixture(test_name: &str) -> (PathBuf, PathBuf) {
