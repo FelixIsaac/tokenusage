@@ -25,6 +25,10 @@ use crate::pipeline::week_start;
 use crate::scale::InformationScale;
 use crate::types::{DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent};
 
+type BreakdownGroup = (u64, f64, HashMap<String, (u64, f64)>);
+type BreakdownMap = HashMap<String, BreakdownGroup>;
+type BreakdownEntries = Vec<(String, BreakdownGroup)>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DashboardTab {
     ScaleOverview = 0,
@@ -210,7 +214,7 @@ impl DashboardState {
         }
 
         let mut sorted_models: Vec<(String, u64)> = model_tokens.into_iter().collect();
-        sorted_models.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_models.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let top_models: Vec<RankModelItem> = sorted_models
             .into_iter()
@@ -253,7 +257,7 @@ impl DashboardState {
             .collect();
 
         let mut sorted_projects: Vec<(String, u64)> = project_tokens.into_iter().collect();
-        sorted_projects.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_projects.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let top_projects: Vec<RankProjectItem> = sorted_projects
             .into_iter()
@@ -283,7 +287,7 @@ impl DashboardState {
             .collect();
 
         let mut sorted_days: Vec<(String, u64)> = day_tokens.into_iter().collect();
-        sorted_days.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_days.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let peak_days: Vec<RankDayItem> = sorted_days
             .into_iter()
@@ -306,7 +310,7 @@ impl DashboardState {
             .collect();
 
         let mut sorted_sessions: Vec<(String, u64)> = session_tokens.into_iter().collect();
-        sorted_sessions.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_sessions.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let top_sessions: Vec<RankSessionItem> = sorted_sessions
             .into_iter()
@@ -1138,8 +1142,7 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
 
     if state.breakdown_by_model {
         // Models -> Projects
-        let mut model_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
-            HashMap::new();
+        let mut model_map: BreakdownMap = HashMap::new();
         for e in &state.current_events {
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
@@ -1154,9 +1157,8 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
             sub.1 += cost;
         }
 
-        let mut sorted: Vec<(String, (u64, f64, HashMap<String, (u64, f64)>))> =
-            model_map.into_iter().collect();
-        sorted.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+        let mut sorted: BreakdownEntries = model_map.into_iter().collect();
+        sorted.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
         for (model_name, (m_tokens, m_cost, sub_map)) in sorted {
             table_rows.push(
@@ -1186,7 +1188,7 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
             );
 
             let mut sub_items: Vec<(String, (u64, f64))> = sub_map.into_iter().collect();
-            sub_items.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+            sub_items.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
             for (proj_name, (p_tokens, p_cost)) in sub_items {
                 let pct = if m_tokens > 0 {
@@ -1205,8 +1207,7 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
         }
     } else {
         // Projects -> Models
-        let mut project_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
-            HashMap::new();
+        let mut project_map: BreakdownMap = HashMap::new();
         for e in &state.current_events {
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
@@ -1221,9 +1222,8 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
             sub.1 += cost;
         }
 
-        let mut sorted: Vec<(String, (u64, f64, HashMap<String, (u64, f64)>))> =
-            project_map.into_iter().collect();
-        sorted.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+        let mut sorted: BreakdownEntries = project_map.into_iter().collect();
+        sorted.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
         for (proj_name, (p_tokens, p_cost, sub_map)) in sorted {
             table_rows.push(
@@ -1253,7 +1253,7 @@ fn draw_breakdown_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &Dashbo
             );
 
             let mut sub_items: Vec<(String, (u64, f64))> = sub_map.into_iter().collect();
-            sub_items.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+            sub_items.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
             for (model_name, (m_tokens, m_cost)) in sub_items {
                 let pct = if p_tokens > 0 {

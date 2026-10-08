@@ -36,6 +36,10 @@ use super::parsing::{
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
 use super::*;
 
+type BreakdownGroup = (u64, f64, HashMap<String, (u64, f64)>);
+type BreakdownMap = HashMap<String, BreakdownGroup>;
+type BreakdownEntries = Vec<(String, BreakdownGroup)>;
+
 #[derive(Debug, Serialize)]
 struct DoctorSourceReport {
     source: String,
@@ -2266,7 +2270,7 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
     }
 
     let mut sorted_models: Vec<(String, u64)> = model_tokens.into_iter().collect();
-    sorted_models.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_models.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_models: Vec<RankModelItem> = sorted_models
         .into_iter()
@@ -2309,7 +2313,7 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         .collect();
 
     let mut sorted_projects: Vec<(String, u64)> = project_tokens.into_iter().collect();
-    sorted_projects.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_projects.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_projects: Vec<RankProjectItem> = sorted_projects
         .into_iter()
@@ -2339,7 +2343,7 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         .collect();
 
     let mut sorted_days: Vec<(String, u64)> = day_tokens.into_iter().collect();
-    sorted_days.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_days.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let peak_days: Vec<RankDayItem> = sorted_days
         .into_iter()
@@ -2362,7 +2366,7 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         .collect();
 
     let mut sorted_sessions: Vec<(String, u64)> = session_tokens.into_iter().collect();
-    sorted_sessions.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_sessions.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_sessions: Vec<RankSessionItem> = sorted_sessions
         .into_iter()
@@ -2536,8 +2540,7 @@ pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
 
     if args.by_model {
         // Group by Model -> Projects
-        let mut model_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
-            HashMap::new();
+        let mut model_map: BreakdownMap = HashMap::new();
         for e in &events {
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
@@ -2565,8 +2568,7 @@ pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
         }
     } else {
         // Group by Project -> Models
-        let mut project_map: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)> =
-            HashMap::new();
+        let mut project_map: BreakdownMap = HashMap::new();
         for e in &events {
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
@@ -2596,15 +2598,9 @@ pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
 }
 
 #[cfg(feature = "cli")]
-fn print_stratified_view(
-    title: &str,
-    _header_label: &str,
-    groups: HashMap<String, (u64, f64, HashMap<String, (u64, f64)>)>,
-    limit: usize,
-) {
-    let mut sorted_groups: Vec<(String, (u64, f64, HashMap<String, (u64, f64)>))> =
-        groups.into_iter().collect();
-    sorted_groups.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+fn print_stratified_view(title: &str, _header_label: &str, groups: BreakdownMap, limit: usize) {
+    let mut sorted_groups: BreakdownEntries = groups.into_iter().collect();
+    sorted_groups.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
     println!();
     println!("📊 \x1b[1m{title}\x1b[0m");
@@ -2619,7 +2615,7 @@ fn print_stratified_view(
         );
 
         let mut sub_items: Vec<(String, (u64, f64))> = sub_map.into_iter().collect();
-        sub_items.sort_by(|a, b| (b.1).0.cmp(&(a.1).0));
+        sub_items.sort_by_key(|a| std::cmp::Reverse((a.1).0));
 
         for (sub_name, (sub_tokens, sub_cost)) in sub_items {
             let pct = if grp_tokens > 0 {

@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 fn make_adversarial_env(test_name: &str) -> (PathBuf, PathBuf) {
