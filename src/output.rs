@@ -264,7 +264,7 @@ pub fn render_boxed_card_with_width(
     let min_width = (title_len + 4).min(term_width);
 
     let width = match target_width {
-        Some(tw) => tw.clamp(min_width, term_width),
+        Some(tw) => tw.max(min_width),
         None => term_width.clamp(72.min(term_width), 100.min(term_width)),
     };
     let inner_width = width.saturating_sub(4);
