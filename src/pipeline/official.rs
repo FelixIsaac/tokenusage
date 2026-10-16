@@ -82,6 +82,7 @@ pub(super) struct ClaudeCredentialsFile {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(super) enum ClaudeCredentialSource {
     Keychain {
         service: String,
