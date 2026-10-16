@@ -537,11 +537,9 @@ pub(super) async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnaps
         }
 
         let access_token = tokens.access_token.clone().unwrap_or_default();
-        let fetch_res = fetch_claude_usage_with_access_token(
-            &access_token,
-            tokens.rate_limit_tier.as_deref(),
-        )
-        .await;
+        let fetch_res =
+            fetch_claude_usage_with_access_token(&access_token, tokens.rate_limit_tier.as_deref())
+                .await;
 
         match fetch_res {
             Ok(snap) => Ok(snap),
@@ -595,7 +593,8 @@ pub(super) async fn fetch_claude_official_limits() -> Result<OfficialClaudeSnaps
                     if let Some(cached) = load_claude_snapshot_cache() {
                         Ok(cached)
                     } else {
-                        Err(cli_err.context(format!("Direct Claude OAuth also failed: {oauth_err}")))
+                        Err(cli_err
+                            .context(format!("Direct Claude OAuth also failed: {oauth_err}")))
                     }
                 }
             }
@@ -1510,9 +1509,8 @@ fn load_claude_keychain_tokens() -> Option<(ClaudeCredentialSource, ClaudeOAuthT
             .map(|s| !s.is_empty())
             .unwrap_or(false);
         if has_access || has_refresh {
-            let account = get_keychain_account(service).unwrap_or_else(|| {
-                std::env::var("USER").unwrap_or_default()
-            });
+            let account = get_keychain_account(service)
+                .unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
             return Some((
                 ClaudeCredentialSource::Keychain {
                     service: service.to_string(),
