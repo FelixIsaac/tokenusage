@@ -1281,6 +1281,23 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
         return;
     }
 
+    // `tu claude status` reaches the zero-history official Claude limits fast path.
+    if provider == "claude"
+        && argv
+            .get(2)
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("status"))
+    {
+        argv.remove(2);
+        argv[1] = "blocks".to_string();
+        argv.insert(2, "--official-limits-only".to_string());
+        argv.insert(3, "--only".to_string());
+        argv.insert(4, "claude".to_string());
+        if !argv.iter().any(|arg| arg == "--json" || arg == "--jq") {
+            argv.push("--json".to_string());
+        }
+        return;
+    }
+
     let report = argv
         .get(2)
         .map(|s| s.to_ascii_lowercase())
@@ -1522,6 +1539,23 @@ mod tests {
                 "tu".to_string(),
                 "blocks".to_string(),
                 "--official-limits-only".to_string(),
+                "--json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_status_reaches_official_limits_only() {
+        let argv = vec!["tu".to_string(), "claude".to_string(), "status".to_string()];
+        let out = normalize_cli_args(argv);
+        assert_eq!(
+            out,
+            vec![
+                "tu".to_string(),
+                "blocks".to_string(),
+                "--official-limits-only".to_string(),
+                "--only".to_string(),
+                "claude".to_string(),
                 "--json".to_string()
             ]
         );

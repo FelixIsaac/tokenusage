@@ -16,7 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Gauge, Paragraph, Wrap};
 
 use crate::activity::{ActivityDataset, activity_enabled, fetch_activity_dataset};
-use crate::cli::{BlocksArgs, CommonArgs};
+use crate::cli::{BlocksArgs, CommonArgs, ProviderArg};
 use crate::types::{ActivitySummary, SourceKind, TokenCounts, UsageEvent};
 
 use super::block_report::build_block_json_report;
@@ -36,12 +36,59 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
 
     let use_json = should_emit_json(&args.common);
     if args.official_limits_only {
-        if args.common.no_codex {
-            bail!("--official-limits-only requires the Codex source");
-        }
         if !use_json {
             bail!("--official-limits-only requires --json or --jq");
         }
+        let has_claude = args.common.only.contains(&ProviderArg::Claude);
+        let has_codex = args.common.only.contains(&ProviderArg::Codex);
+        let has_antigravity = args.common.only.contains(&ProviderArg::Antigravity);
+        let has_grok = args.common.only.contains(&ProviderArg::Grok);
+
+        if has_claude && !has_codex {
+            if args.common.no_claude {
+                bail!("--official-limits-only with Claude requires the Claude source");
+            }
+            return emit_json(
+                &serde_json::json!({ "official_claude": fetch_claude_official_limits().await? }),
+                args.common.jq.as_deref(),
+            );
+        }
+
+        if has_antigravity && !has_codex && !has_claude {
+            if args.common.no_antigravity {
+                bail!("--official-limits-only with Antigravity requires the Antigravity source");
+            }
+            return emit_json(
+                &serde_json::json!({ "official_antigravity": fetch_antigravity_official_limits().await? }),
+                args.common.jq.as_deref(),
+            );
+        }
+
+        if has_grok && !has_codex && !has_claude {
+            return emit_json(
+                &serde_json::json!({ "official_grok": fetch_grok_official_limits().await? }),
+                args.common.jq.as_deref(),
+            );
+        }
+
+        if args.common.no_codex {
+            bail!("--official-limits-only requires the Codex source");
+        }
+
+        if has_claude && has_codex {
+            let (codex, claude) = tokio::join!(
+                fetch_codex_official_limits(),
+                fetch_claude_official_limits()
+            );
+            return emit_json(
+                &serde_json::json!({
+                    "official_codex": codex?,
+                    "official_claude": claude?,
+                }),
+                args.common.jq.as_deref(),
+            );
+        }
+
         return emit_json(
             &serde_json::json!({ "official_codex": fetch_codex_official_limits().await? }),
             args.common.jq.as_deref(),
@@ -214,7 +261,10 @@ pub(super) async fn fetch_selected_official_limits(
     let antigravity_enabled = !common.no_antigravity;
     let deepseek_enabled = std::env::var("DEEPSEEK_API_KEY").is_ok();
     let openrouter_enabled = std::env::var("OPENROUTER_API_KEY").is_ok();
-    let grok_enabled = std::env::var("XAI_API_KEY").is_ok();
+    let grok_enabled = std::env::var("XAI_API_KEY").is_ok()
+        || dirs::home_dir()
+            .map(|h| h.join(".grok").join("auth.json").exists())
+            .unwrap_or(false);
     let kimi_enabled = std::env::var("MOONSHOT_API_KEY").is_ok();
     let anthropic_api_enabled =
         std::env::var("ANTHROPIC_API_KEY").is_ok() || std::env::var("ANTHROPIC_ADMIN_KEY").is_ok();
