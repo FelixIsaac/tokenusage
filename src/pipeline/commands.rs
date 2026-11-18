@@ -16,6 +16,7 @@ use crate::cli::{
     ScalePeriodArg, SessionArgs, TodayArgs, TuiArgs, WeeklyArgs,
 };
 use crate::cli::{CommonArgs, SortOrder};
+use crate::insights::{ReportTrend, TrendPeriod};
 #[cfg(feature = "cli")]
 use crate::output::{print_report_table_with_options, run_report_tui};
 use crate::scale::InformationScale;
@@ -567,22 +568,25 @@ pub(super) fn activity_summary_for_row(
         return dataset.project_summary_for_day(day, project_name);
     }
 
+    let (start, end) = report_period_bounds(period, key)?;
+    match period {
+        ReportPeriod::Daily => dataset.summary_for_day(start),
+        ReportPeriod::Weekly | ReportPeriod::Monthly => dataset.summary_for_range(start, end),
+    }
+}
+
+fn report_period_bounds(period: ReportPeriod, key: &str) -> Option<(NaiveDate, NaiveDate)> {
     match period {
         ReportPeriod::Daily => {
             let day = NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()?;
-            dataset.summary_for_day(day)
+            Some((day, day))
         }
         ReportPeriod::Weekly => {
             let start = NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()?;
-            let end = start
-                .checked_add_signed(chrono::TimeDelta::days(6))
-                .unwrap_or(start);
-            dataset.summary_for_range(start, end)
+            let end = start.checked_add_days(chrono::Days::new(6))?;
+            Some((start, end))
         }
-        ReportPeriod::Monthly => {
-            let (start, end) = parse_month_bounds(key)?;
-            dataset.summary_for_range(start, end)
-        }
+        ReportPeriod::Monthly => parse_month_bounds(key),
     }
 }
 
@@ -616,63 +620,14 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
         bail!("--json/--jq and --tui cannot be used together");
     }
 
-    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
-
-    let events = loaded
-        .events
-        .into_iter()
-        .filter(|e| match args.project.as_deref() {
-            Some(project_filter) => e
-                .project
-                .as_deref()
-                .is_some_and(|p| p.contains(project_filter)),
-            None => true,
-        })
-        .collect::<Vec<_>>();
-
-    let rows = build_group_rows(&events, ReportPeriod::Daily, &args.common, |event| {
-        let day = local_date(event.timestamp, &tz);
-        let day_key = day.format("%Y-%m-%d").to_string();
-        if args.instances {
-            match event.project.as_deref() {
-                Some(project) => format!("{project} | {day_key}"),
-                None => format!("- | {day_key}"),
-            }
-        } else {
-            day_key
-        }
-    });
-    let period_attribution = build_period_attribution(&events, |event| {
-        let day = local_date(event.timestamp, &tz);
-        let day_key = day.format("%Y-%m-%d").to_string();
-        if args.instances {
-            match event.project.as_deref() {
-                Some(project) => format!("{project} | {day_key}"),
-                None => format!("- | {day_key}"),
-            }
-        } else {
-            day_key
-        }
-    });
-
-    let (rows, activity_totals) = enrich_rows_with_activity(
+    let report = collect_calendar_report(
         &args.common,
         ReportPeriod::Daily,
         args.instances,
-        &tz,
         args.project.as_deref(),
-        &events,
-        rows,
+        WeekStart::default(),
     )
     .await?;
-
-    let report = build_report_from_rows(
-        rows,
-        activity_totals,
-        loaded.stats,
-        Some(period_attribution),
-    );
 
     if use_json {
         emit_json(&report, args.common.jq.as_deref())
@@ -693,40 +648,14 @@ pub(crate) async fn run_daily(args: DailyArgs) -> Result<()> {
 #[cfg(feature = "cli")]
 pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
-    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
-
-    let rows = build_group_rows(
-        &loaded.events,
-        ReportPeriod::Monthly,
-        &args.common,
-        |event| {
-            let day = local_date(event.timestamp, &tz);
-            format!("{:04}-{:02}", day.year(), day.month())
-        },
-    );
-    let period_attribution = build_period_attribution(&loaded.events, |event| {
-        let day = local_date(event.timestamp, &tz);
-        format!("{:04}-{:02}", day.year(), day.month())
-    });
-
-    let (rows, activity_totals) = enrich_rows_with_activity(
+    let report = collect_calendar_report(
         &args.common,
         ReportPeriod::Monthly,
         false,
-        &tz,
         None,
-        &loaded.events,
-        rows,
+        WeekStart::default(),
     )
     .await?;
-
-    let report = build_report_from_rows(
-        rows,
-        activity_totals,
-        loaded.stats,
-        Some(period_attribution),
-    );
 
     if use_json {
         #[derive(Serialize)]
@@ -767,42 +696,14 @@ pub(crate) async fn run_monthly(args: MonthlyArgs) -> Result<()> {
 #[cfg(feature = "cli")]
 pub(crate) async fn run_weekly(args: WeeklyArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
-    let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
-
-    let rows = build_group_rows(
-        &loaded.events,
-        ReportPeriod::Weekly,
-        &args.common,
-        |event| {
-            let day = local_date(event.timestamp, &tz);
-            let start = week_start(day, args.start_of_week);
-            format!("{}", start.format("%Y-%m-%d"))
-        },
-    );
-    let period_attribution = build_period_attribution(&loaded.events, |event| {
-        let day = local_date(event.timestamp, &tz);
-        let start = week_start(day, args.start_of_week);
-        format!("{}", start.format("%Y-%m-%d"))
-    });
-
-    let (rows, activity_totals) = enrich_rows_with_activity(
+    let report = collect_calendar_report(
         &args.common,
         ReportPeriod::Weekly,
         false,
-        &tz,
         None,
-        &loaded.events,
-        rows,
+        args.start_of_week,
     )
     .await?;
-
-    let report = build_report_from_rows(
-        rows,
-        activity_totals,
-        loaded.stats,
-        Some(period_attribution),
-    );
 
     if use_json {
         #[derive(Serialize)]
@@ -857,7 +758,7 @@ pub(crate) async fn run_today(mut args: TodayArgs) -> Result<()> {
 
     let use_json = should_emit_json(&args.common);
     let loaded = load_usage(&args.common, &tz).await?;
-    let LoadedUsage { events, stats } = loaded;
+    let LoadedUsage { events, stats, .. } = loaded;
     let filtered_events = filter_events_by_project(events, args.project.as_deref());
     let day_totals = aggregate_token_counts(&filtered_events);
     let models = token_breakdowns_by_model(&filtered_events, 5);
@@ -935,7 +836,7 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
 
     let loaded = load_usage(&args.common, &tz).await?;
-    let LoadedUsage { events, stats } = loaded;
+    let LoadedUsage { events, stats, .. } = loaded;
     let filtered_events = filter_events_by_project(events, args.project.as_deref());
     let dataset =
         fetch_activity_dataset(&args.common, &tz, &filtered_events, args.project.as_deref())
@@ -1207,93 +1108,161 @@ pub async fn collect_report(
     project: Option<String>,
     start_of_week: WeekStart,
 ) -> Result<DailyReport> {
-    let tz = parse_timezone_mode(common.timezone.as_deref())?;
-    let loaded = load_usage(&common, &tz).await?;
-
-    let rows = match period {
-        ReportPeriod::Daily => {
-            let events = loaded
-                .events
-                .iter()
-                .filter(|event| match project.as_deref() {
-                    Some(project_filter) => event
-                        .project
-                        .as_deref()
-                        .is_some_and(|p| p.contains(project_filter)),
-                    None => true,
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-
-            build_group_rows(&events, ReportPeriod::Daily, &common, |event| {
-                let day = local_date(event.timestamp, &tz);
-                let day_key = day.format("%Y-%m-%d").to_string();
-                if instances {
-                    match event.project.as_deref() {
-                        Some(project_name) => format!("{project_name} | {day_key}"),
-                        None => format!("- | {day_key}"),
-                    }
-                } else {
-                    day_key
-                }
-            })
-        }
-        ReportPeriod::Monthly => {
-            build_group_rows(&loaded.events, ReportPeriod::Monthly, &common, |event| {
-                let day = local_date(event.timestamp, &tz);
-                format!("{:04}-{:02}", day.year(), day.month())
-            })
-        }
-        ReportPeriod::Weekly => {
-            build_group_rows(&loaded.events, ReportPeriod::Weekly, &common, |event| {
-                let day = local_date(event.timestamp, &tz);
-                let start = week_start(day, start_of_week);
-                start.format("%Y-%m-%d").to_string()
-            })
-        }
-    };
-
-    let (rows, activity_totals) = enrich_rows_with_activity(
+    collect_calendar_report(
         &common,
         period,
         instances,
-        &tz,
         project.as_deref(),
+        start_of_week,
+    )
+    .await
+}
+
+async fn collect_calendar_report(
+    common: &CommonArgs,
+    period: ReportPeriod,
+    instances: bool,
+    project: Option<&str>,
+    start_of_week: WeekStart,
+) -> Result<DailyReport> {
+    let tz = parse_timezone_mode(common.timezone.as_deref())?;
+    let mut loaded = load_usage(common, &tz).await?;
+    let instances = period == ReportPeriod::Daily && instances;
+    if period == ReportPeriod::Daily
+        && let Some(project) = project
+    {
+        loaded.events.retain(|event| {
+            event
+                .project
+                .as_deref()
+                .is_some_and(|name| name.contains(project))
+        });
+    }
+
+    let period_key = |event| calendar_period_key(event, &tz, period, start_of_week, instances);
+
+    // Persisted daily history is keyed by date, with no project breakdown.
+    let scoped_common;
+    let grouping_options = if instances || (period == ReportPeriod::Daily && project.is_some()) {
+        scoped_common = CommonArgs {
+            no_history_db: true,
+            ..common.clone()
+        };
+        &scoped_common
+    } else {
+        common
+    };
+    let mut labels = HashMap::new();
+    let mut rows = build_group_rows(&loaded.events, period_key, |key @ (start, project)| {
+        let label = match (period, project) {
+            (ReportPeriod::Monthly, _) => format!("{:04}-{:02}", start.year(), start.month()),
+            (_, Some(project)) => {
+                format!("{project} | {}", start.format("%Y-%m-%d"))
+            }
+            _ => start.format("%Y-%m-%d").to_string(),
+        };
+        labels.insert(key, label.clone());
+        label
+    });
+    apply_group_history(&mut rows, period, grouping_options, start_of_week);
+
+    let (rows, activity_totals) = enrich_rows_with_activity(
+        common,
+        period,
+        instances,
+        &tz,
+        project,
         &loaded.events,
         rows,
     )
     .await?;
-
-    let period_attribution = build_period_attribution(&loaded.events, |event| match period {
-        ReportPeriod::Daily => {
-            let day = local_date(event.timestamp, &tz);
-            let day_key = day.format("%Y-%m-%d").to_string();
-            if instances {
-                match event.project.as_deref() {
-                    Some(project_name) => format!("{project_name} | {day_key}"),
-                    None => format!("- | {day_key}"),
-                }
-            } else {
-                day_key
+    let mut report = build_report_from_rows(rows, activity_totals, loaded.stats, None);
+    if let Some(insights) = &mut report.insights {
+        let outliers = insights
+            .spikes
+            .iter()
+            .map(|spike| spike.date.as_str())
+            .chain(
+                insights
+                    .anomalies
+                    .iter()
+                    .map(|anomaly| anomaly.date.as_str()),
+            )
+            .collect::<HashSet<_>>();
+        if !outliers.is_empty() {
+            labels.retain(|_, label| outliers.contains(label.as_str()));
+            if !labels.is_empty() {
+                let period_attribution = build_period_attribution(&loaded.events, |event| {
+                    labels.get(&period_key(event)).map(String::as_str)
+                });
+                insights.update_period_attribution(&period_attribution);
             }
         }
-        ReportPeriod::Monthly => {
-            let day = local_date(event.timestamp, &tz);
-            format!("{:04}-{:02}", day.year(), day.month())
-        }
-        ReportPeriod::Weekly => {
-            let day = local_date(event.timestamp, &tz);
-            let start = week_start(day, start_of_week);
-            start.format("%Y-%m-%d").to_string()
-        }
-    });
+        insights.trend = calendar_trend(
+            &report.daily,
+            period,
+            instances,
+            loaded.filter,
+            tz.now_date(),
+        );
+    }
+    Ok(report)
+}
 
-    Ok(build_report_from_rows(
-        rows,
-        activity_totals,
-        loaded.stats,
-        Some(period_attribution),
-    ))
+fn calendar_period_key<'a>(
+    event: &'a UsageEvent,
+    tz: &TimeZoneMode,
+    period: ReportPeriod,
+    start_of_week: WeekStart,
+    instances: bool,
+) -> (NaiveDate, Option<&'a str>) {
+    let day = local_date(event.timestamp, tz);
+    let start = match period {
+        ReportPeriod::Daily => day,
+        ReportPeriod::Monthly => day.with_day(1).expect("months start on day one"),
+        ReportPeriod::Weekly => week_start(day, start_of_week),
+    };
+    let project = instances.then(|| event.project.as_deref().unwrap_or("-"));
+    (start, project)
+}
+
+pub(super) fn calendar_trend(
+    rows: &[DailyRow],
+    period: ReportPeriod,
+    instances: bool,
+    filter: DateFilter,
+    today: NaiveDate,
+) -> Option<ReportTrend> {
+    let mut completed = BTreeMap::new();
+    for row in rows {
+        let key = if instances {
+            let Some((_, day)) = row.date.rsplit_once(" | ") else {
+                continue;
+            };
+            day
+        } else {
+            &row.date
+        };
+        let Some((start, end)) = report_period_bounds(period, key) else {
+            continue;
+        };
+        if end >= today || !filter.allows(start) || !filter.allows(end) {
+            continue;
+        }
+        let (_, _, period_rows) = completed
+            .entry(start)
+            .or_insert_with(|| (end, key, Vec::new()));
+        period_rows.push(row);
+    }
+
+    let (latest_start, (_, latest_key, latest_rows)) = completed.pop_last()?;
+    let (_, (previous_end, previous_key, previous_rows)) = completed.pop_last()?;
+    (previous_end.succ_opt() == Some(latest_start)).then(|| {
+        ReportTrend::new(
+            TrendPeriod::from_rows(previous_key.to_owned(), &previous_rows),
+            TrendPeriod::from_rows(latest_key.to_owned(), &latest_rows),
+        )
+    })
 }
 
 pub async fn collect_usage_snapshot(common: CommonArgs) -> Result<UsageSnapshot> {
@@ -1564,35 +1533,45 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
 
     // Apply history baseline and overrides if enabled
     if !args.common.no_history_overrides || !args.common.no_history_db {
-        let monthly_rows =
-            build_group_rows(&events, ReportPeriod::Monthly, &args.common, |event| {
-                let day = local_date(event.timestamp, &tz);
-                format!("{}", day.format("%Y-%m"))
-            });
+        let mut monthly_rows = build_group_rows(
+            &events,
+            |event| {
+                local_date(event.timestamp, &tz)
+                    .with_day(1)
+                    .expect("months start on day one")
+            },
+            |month| month.format("%Y-%m").to_string(),
+        );
+        let raw_month_totals = monthly_rows
+            .iter()
+            .map(|row| {
+                (
+                    row.date.clone(),
+                    (row.totals.total_tokens, row.totals.cost_usd),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        apply_group_history(
+            &mut monthly_rows,
+            ReportPeriod::Monthly,
+            &args.common,
+            WeekStart::default(),
+        );
 
+        let current_month = month_start_date.format("%Y-%m").to_string();
         for row in &monthly_rows {
             // Check if month is in scope for the carbon period
             let in_period = match args.period {
                 CarbonPeriodArg::All | CarbonPeriodArg::About => true,
-                CarbonPeriodArg::Monthly => {
-                    row.date == month_start_date.format("%Y-%m").to_string()
-                }
+                CarbonPeriodArg::Monthly => row.date == current_month,
                 _ => false,
             };
             if !in_period {
                 continue;
             }
 
-            let raw_month_tokens: u64 = events
-                .iter()
-                .filter(|e| local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date)
-                .map(|e| e.usage.total_tokens())
-                .sum();
-            let raw_month_cost: f64 = events
-                .iter()
-                .filter(|e| local_date(e.timestamp, &tz).format("%Y-%m").to_string() == row.date)
-                .map(|e| e.usage.cost_usd)
-                .sum();
+            let (raw_month_tokens, raw_month_cost) =
+                raw_month_totals.get(&row.date).copied().unwrap_or_default();
 
             if row.totals.total_tokens > raw_month_tokens {
                 let delta_tokens = row.totals.total_tokens - raw_month_tokens;

@@ -125,19 +125,19 @@ struct GroupAggregate {
 impl GroupAggregate {
     fn add_event(&mut self, event: &UsageEvent) {
         self.totals.add(event.usage);
-        let merged_model = event.model.clone();
-        self.by_model
-            .entry(merged_model)
-            .or_default()
-            .add(event.usage);
+        let model_totals = match self.by_model.get_mut(event.model.as_str()) {
+            Some(totals) => totals,
+            None => self.by_model.entry(event.model.clone()).or_default(),
+        };
+        model_totals.add(event.usage);
         self.by_source
             .entry(event.source)
             .or_default()
             .add(event.usage);
-        self.models_by_source
-            .entry(event.source)
-            .or_default()
-            .insert(event.model.clone());
+        let source_models = self.models_by_source.entry(event.source).or_default();
+        if !source_models.contains(event.model.as_str()) {
+            source_models.insert(event.model.clone());
+        }
 
         self.last_activity = match self.last_activity {
             Some(ts) if ts >= event.timestamp => Some(ts),
@@ -154,6 +154,7 @@ impl GroupAggregate {
 struct LoadedUsage {
     events: Vec<UsageEvent>,
     stats: ParseStats,
+    filter: DateFilter,
 }
 
 #[derive(Debug)]
@@ -920,43 +921,39 @@ fn build_report_from_rows(
     }
 }
 
-fn build_period_attribution<F>(
-    events: &[UsageEvent],
-    mut key_fn: F,
-) -> BTreeMap<String, PeriodAttribution>
-where
-    F: FnMut(&UsageEvent) -> String,
-{
+fn build_period_attribution<'events, 'keys>(
+    events: &'events [UsageEvent],
+    mut key_fn: impl FnMut(&'events UsageEvent) -> Option<&'keys str>,
+) -> HashMap<&'keys str, PeriodAttribution> {
     #[derive(Default)]
-    struct AttributionAggregate {
-        by_source: HashMap<String, u64>,
-        by_model: HashMap<String, u64>,
-        by_project: HashMap<String, u64>,
-        by_session: HashMap<String, u64>,
+    struct AttributionAggregate<'a> {
+        by_source: HashMap<&'a str, u64>,
+        by_model: HashMap<&'a str, u64>,
+        by_project: HashMap<&'a str, u64>,
+        by_session: HashMap<&'a str, u64>,
     }
 
-    let mut grouped: HashMap<String, AttributionAggregate> = HashMap::new();
+    let mut grouped = HashMap::<&str, AttributionAggregate<'_>>::new();
     for event in events {
-        let period_key = key_fn(event);
+        let Some(period_key) = key_fn(event) else {
+            continue;
+        };
         let aggregate = grouped.entry(period_key).or_default();
         let total_tokens = event.usage.total_tokens();
         *aggregate
             .by_source
-            .entry(event.source.as_str().to_string())
-            .or_insert(0) += total_tokens;
-        *aggregate.by_model.entry(event.model.clone()).or_insert(0) += total_tokens;
+            .entry(event.source.as_str())
+            .or_default() += total_tokens;
+        *aggregate.by_model.entry(&event.model).or_default() += total_tokens;
         if let Some(project) = event
             .project
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
-            *aggregate.by_project.entry(project.to_string()).or_insert(0) += total_tokens;
+            *aggregate.by_project.entry(project).or_default() += total_tokens;
         }
         if !event.session.trim().is_empty() {
-            *aggregate
-                .by_session
-                .entry(event.session.clone())
-                .or_insert(0) += total_tokens;
+            *aggregate.by_session.entry(&event.session).or_default() += total_tokens;
         }
     }
 
@@ -967,22 +964,22 @@ where
                 .by_source
                 .into_iter()
                 .max_by_key(|(_, tokens)| *tokens)
-                .map(|(label, _)| label);
+                .map(|(label, _)| label.to_owned());
             let top_model = aggregate
                 .by_model
                 .into_iter()
                 .max_by_key(|(_, tokens)| *tokens)
-                .map(|(label, _)| label);
+                .map(|(label, _)| label.to_owned());
             let top_project = aggregate
                 .by_project
                 .into_iter()
                 .max_by_key(|(_, tokens)| *tokens)
-                .map(|(label, _)| label);
+                .map(|(label, _)| label.to_owned());
             let top_session = aggregate
                 .by_session
                 .into_iter()
                 .max_by_key(|(_, tokens)| *tokens)
-                .map(|(label, _)| label);
+                .map(|(label, _)| label.to_owned());
             (
                 period,
                 PeriodAttribution {
@@ -993,19 +990,15 @@ where
                 },
             )
         })
-        .collect::<BTreeMap<_, _>>()
+        .collect()
 }
 
-fn build_group_rows<F>(
-    events: &[UsageEvent],
-    period: ReportPeriod,
-    common: &CommonArgs,
-    mut key_fn: F,
-) -> Vec<DailyRow>
-where
-    F: FnMut(&UsageEvent) -> String,
-{
-    let mut groups: HashMap<String, GroupAggregate> = HashMap::new();
+fn build_group_rows<'a, Key: Eq + std::hash::Hash>(
+    events: &'a [UsageEvent],
+    mut key_fn: impl FnMut(&'a UsageEvent) -> Key,
+    mut label_fn: impl FnMut(Key) -> String,
+) -> Vec<DailyRow> {
+    let mut groups: HashMap<Key, GroupAggregate> = HashMap::new();
     for event in events {
         let key = key_fn(event);
         groups.entry(key).or_default().add_event(event);
@@ -1014,7 +1007,7 @@ where
     let mut rows = groups
         .into_iter()
         .map(|(key, agg)| DailyRow {
-            date: key,
+            date: label_fn(key),
             totals: agg.totals.to_counts(),
             models: agg
                 .by_model
@@ -1036,22 +1029,28 @@ where
         .collect::<Vec<_>>();
 
     rows.sort_by(|a, b| a.date.cmp(&b.date));
+    rows
+}
 
-    history::merge_history_db(&mut rows, period, common);
+fn apply_group_history(
+    rows: &mut Vec<DailyRow>,
+    period: ReportPeriod,
+    common: &CommonArgs,
+    start_of_week: WeekStart,
+) {
+    history::merge_history_db(rows, period, common, start_of_week);
 
     if period == ReportPeriod::Monthly && !common.no_history_overrides {
-        history::apply_monthly_overrides(&mut rows, common);
+        history::apply_monthly_overrides(rows, common);
     }
 
     if period == ReportPeriod::Daily && !common.no_history_db {
-        let _ = history::persist_report_rows(&rows);
+        let _ = history::persist_report_rows(rows);
     }
 
     if common.order == SortOrder::Desc {
         rows.reverse();
     }
-
-    rows
 }
 
 fn parse_timezone_mode(input: Option<&str>) -> Result<TimeZoneMode> {

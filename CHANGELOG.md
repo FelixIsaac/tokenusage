@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.12.0] - 2026-11-18
+
+### Added
+- **Usage trends** compare two consecutive completed periods in daily, weekly, and monthly reports. The comparison covers token counts, estimated cost, cost per million tokens, cache hit rate and reuse, estimated cache savings, and provider and model changes. Use `--jq '.insights.trend'` for the period metrics and detailed breakdowns.
+
+### Performance
+- Calendar reports format dates once per period and collect detailed attribution only for reported outliers. Terminal reports reuse the table built during layout selection.
+- Warm-cache runs skip idle parser workers and open Codex logs only when cached metadata needs a fallback. Uncached runs skip cache bookkeeping.
+- Carbon history reconciliation reuses monthly totals, and builds omit Iced's unused canvas feature.
+
+### Fixed
+- Cache hit rate now measures the share of prompt tokens served from cache. Weekly history follows the selected week start, and project-scoped daily reports use project log data.
+
 ## [1.11.8] - 2026-08-29
 
 ### Added

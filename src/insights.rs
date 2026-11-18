@@ -1,14 +1,20 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DailyRow, SourceKind, TokenCounts};
+use crate::types::{DailyRow, PricingTable, SourceKind, TokenCounts};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReportInsights {
+    /// Usage, efficiency, and cost changes between adjacent completed calendar periods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<ReportTrend>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_share_pct: Option<f64>,
+    /// Cached reads as a percentage of prompt tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_pct: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_share_pct: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -45,7 +51,8 @@ pub struct ReportInsights {
     pub anomalies: Vec<AnomalyPeriod>,
     /// Estimated net $ saved by prompt caching vs. paying full input price for
     /// every cached read (minus the cache-write premium). Counterfactual using
-    /// canonical public rates; only emitted when priced-token coverage is high.
+    /// canonical public rates. Periods with cached tokens require sufficient
+    /// priced-token coverage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_savings_usd: Option<f64>,
     /// cache_read / cache_creation — how many times each cached token is reused.
@@ -61,6 +68,30 @@ pub struct ReportInsights {
     /// Full dual-lens information scale details
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<crate::scale::InformationScale>,
+}
+
+impl ReportInsights {
+    pub(crate) fn update_period_attribution(
+        &mut self,
+        attribution: &HashMap<&str, PeriodAttribution>,
+    ) {
+        for spike in &mut self.spikes {
+            if let Some(found) = attribution.get(spike.date.as_str()) {
+                spike.top_source.clone_from(&found.top_source);
+                spike.top_model.clone_from(&found.top_model);
+                spike.top_project.clone_from(&found.top_project);
+                spike.top_session.clone_from(&found.top_session);
+            }
+        }
+        for anomaly in &mut self.anomalies {
+            if let Some(found) = attribution.get(anomaly.date.as_str()) {
+                anomaly.top_source.clone_from(&found.top_source);
+                anomaly.top_model.clone_from(&found.top_model);
+                anomaly.top_project.clone_from(&found.top_project);
+                anomaly.top_session.clone_from(&found.top_session);
+            }
+        }
+    }
 }
 
 /// Where money concentrates relative to volume: a source whose cost share
@@ -89,6 +120,116 @@ pub struct PeakPeriod {
     pub date: String,
     pub total_tokens: u64,
     pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportTrend {
+    pub previous: TrendPeriod,
+    pub latest: TrendPeriod,
+    /// Percentage change relative to the previous period, when its volume was positive.
+    pub token_change_pct: Option<f64>,
+    /// Percentage change relative to the previous period, when its cost was positive.
+    pub cost_change_pct: Option<f64>,
+    /// Difference in cache hit rate, in percentage points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_change_pp: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendPeriod {
+    /// Period label matching the report table. Weekly labels are week start dates.
+    pub date: String,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_mtoken: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_savings_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_reuse_ratio: Option<f64>,
+    /// Per-provider usage available in the logs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, TokenCounts>,
+    /// Per-model usage available in the logs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, TokenCounts>,
+}
+
+impl TrendPeriod {
+    pub(crate) fn from_rows(date: String, rows: &[&DailyRow]) -> Self {
+        let mut totals = TokenCounts::default();
+        let mut sources = BTreeMap::<String, TokenCounts>::new();
+        let mut models = BTreeMap::<String, TokenCounts>::new();
+        for row in rows {
+            totals.add_assign(row.totals.clone());
+            for (breakdown, aggregate) in [(&row.sources, &mut sources), (&row.models, &mut models)]
+            {
+                for (label, counts) in breakdown {
+                    aggregate
+                        .entry(label.clone())
+                        .or_default()
+                        .add_assign(counts.clone());
+                }
+            }
+        }
+        sources.retain(|label, _| parse_source_kind(label).is_some());
+        models.retain(|_, counts| counts.total_tokens > 0 || counts.cost_usd > 0.0);
+        Self {
+            date,
+            total_tokens: totals.total_tokens,
+            cost_usd: totals.cost_usd,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            reasoning_output_tokens: totals.reasoning_output_tokens,
+            cache_read_input_tokens: totals.cache_read_input_tokens,
+            cache_creation_input_tokens: totals.cache_creation_input_tokens,
+            cache_hit_pct: cache_hit_pct(&totals),
+            cost_per_mtoken: cost_per_mtoken(&totals),
+            cache_savings_usd: cache_savings(&models, &totals),
+            cache_reuse_ratio: cache_reuse_ratio(&totals),
+            sources,
+            models,
+        }
+    }
+}
+
+impl ReportTrend {
+    pub(crate) fn new(previous: TrendPeriod, latest: TrendPeriod) -> Self {
+        Self {
+            token_change_pct: token_change_pct(previous.total_tokens, latest.total_tokens),
+            cost_change_pct: relative_change_pct(
+                previous.cost_usd,
+                latest.cost_usd - previous.cost_usd,
+            ),
+            cache_hit_change_pp: previous
+                .cache_hit_pct
+                .zip(latest.cache_hit_pct)
+                .map(|(before, after)| after - before),
+            previous,
+            latest,
+        }
+    }
+}
+
+pub(crate) fn relative_change_pct(previous: f64, difference: f64) -> Option<f64> {
+    (previous > 0.0).then(|| (difference / previous) * 100.0)
+}
+
+pub(crate) fn token_change_pct(previous: u64, latest: u64) -> Option<f64> {
+    let difference = (i128::from(latest) - i128::from(previous)) as f64;
+    relative_change_pct(previous as f64, difference)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,11 +276,7 @@ pub fn compute_report_insights(
 
     let cache_share_pct = percent(cache_tokens, total_tokens);
     let output_share_pct = percent(output_tokens, total_tokens);
-    let cost_per_mtoken = if total_tokens > 0 && totals.cost_usd > 0.0 {
-        Some(totals.cost_usd / (total_tokens as f64 / 1_000_000.0))
-    } else {
-        None
-    };
+    let cost_per_mtoken = cost_per_mtoken(totals);
     let tokens_per_usd = if totals.cost_usd > f64::EPSILON {
         Some((total_tokens as f64 / totals.cost_usd).round().max(0.0) as u64)
     } else {
@@ -190,11 +327,14 @@ pub fn compute_report_insights(
     let spikes = token_spikes(rows, 3, period_attribution);
     let anomalies = token_anomalies(rows, 3, period_attribution);
     let (mix_tokens_pct, mix_cost_pct) = provider_mix(rows);
-    let (cache_savings_usd, cache_reuse_ratio) = cache_economics(rows);
+    let cache_savings_usd = cache_savings(rows.iter().flat_map(|row| &row.models), totals);
+    let cache_reuse_ratio = cache_reuse_ratio(totals);
     let cost_concentration = cost_concentration(&mix_tokens_pct, &mix_cost_pct);
 
     ReportInsights {
+        trend: None,
         cache_share_pct,
+        cache_hit_pct: cache_hit_pct(totals),
         output_share_pct,
         cost_per_mtoken,
         tokens_per_usd,
@@ -226,55 +366,57 @@ const CACHE_PRICING_COVERAGE_MIN: f64 = 60.0;
 
 /// Counterfactual prompt-cache economics using canonical public rates.
 ///
-/// Returns `(net_savings_usd, reuse_ratio)`:
-/// - savings = Σ reads × (input_rate − cache_read_rate) − Σ writes × (cache_create_rate − input_rate),
-///   i.e. what caching saved on reads minus the premium paid to write the cache.
-///   Suppressed (None) when too few cacheable tokens have known cache pricing.
-/// - reuse = total cache reads / total cache writes (raw, always available).
-fn cache_economics(rows: &[DailyRow]) -> (Option<f64>, Option<f64>) {
-    let pricing = crate::types::PricingTable::default_table();
+/// Net savings are the read discount less the write premium, when enough
+/// of the period's cached tokens have known model pricing.
+fn cache_savings<'a>(
+    models: impl IntoIterator<Item = (&'a String, &'a TokenCounts)>,
+    totals: &TokenCounts,
+) -> Option<f64> {
+    let reported_cache_tokens = totals.cache_read_input_tokens + totals.cache_creation_input_tokens;
+    let pricing = PricingTable::default_table();
     let mut net_savings = 0.0;
-    let mut cacheable_tokens = 0u64;
+    let mut modeled_cache_tokens = 0u64;
     let mut priced_tokens = 0u64;
-    let mut total_read = 0u64;
-    let mut total_create = 0u64;
 
-    for row in rows {
-        for (model, counts) in &row.models {
-            let read = counts.cache_read_input_tokens;
-            let create = counts.cache_creation_input_tokens;
-            total_read += read;
-            total_create += create;
-            cacheable_tokens += read + create;
+    for (model, counts) in models {
+        let read = counts.cache_read_input_tokens;
+        let create = counts.cache_creation_input_tokens;
+        modeled_cache_tokens += read + create;
 
-            if let Some(rate) = pricing.find_rate(model)
-                && (rate.cache_read_per_million > 0.0 || rate.cache_creation_per_million > 0.0)
-            {
-                priced_tokens += read + create;
-                net_savings += (read as f64 / 1_000_000.0)
-                    * (rate.input_per_million - rate.cache_read_per_million);
-                net_savings -= (create as f64 / 1_000_000.0)
-                    * (rate.cache_creation_per_million - rate.input_per_million);
-            }
+        if read + create > 0
+            && let Some(rate) = pricing.find_rate(model)
+            && (rate.cache_read_per_million > 0.0 || rate.cache_creation_per_million > 0.0)
+        {
+            priced_tokens += read + create;
+            net_savings += (read as f64 / 1_000_000.0)
+                * (rate.input_per_million - rate.cache_read_per_million);
+            net_savings -= (create as f64 / 1_000_000.0)
+                * (rate.cache_creation_per_million - rate.input_per_million);
         }
     }
 
-    let coverage = if cacheable_tokens > 0 {
-        (priced_tokens as f64 / cacheable_tokens as f64) * 100.0
-    } else {
-        0.0
-    };
-    let savings = if priced_tokens > 0 && coverage >= CACHE_PRICING_COVERAGE_MIN {
-        Some(net_savings)
-    } else {
-        None
-    };
-    let reuse = if total_create > 0 {
-        Some(total_read as f64 / total_create as f64)
-    } else {
-        None
-    };
-    (savings, reuse)
+    let cache_tokens = reported_cache_tokens.max(modeled_cache_tokens);
+    if cache_tokens == 0 && totals.input_tokens > 0 {
+        return Some(0.0);
+    }
+    let coverage = percent(priced_tokens, cache_tokens)?;
+    (coverage >= CACHE_PRICING_COVERAGE_MIN).then_some(net_savings)
+}
+
+fn cache_hit_pct(totals: &TokenCounts) -> Option<f64> {
+    let prompt_tokens =
+        totals.input_tokens + totals.cache_creation_input_tokens + totals.cache_read_input_tokens;
+    percent(totals.cache_read_input_tokens, prompt_tokens)
+}
+
+fn cache_reuse_ratio(totals: &TokenCounts) -> Option<f64> {
+    let writes = totals.cache_creation_input_tokens;
+    (writes > 0).then(|| totals.cache_read_input_tokens as f64 / writes as f64)
+}
+
+fn cost_per_mtoken(totals: &TokenCounts) -> Option<f64> {
+    (totals.total_tokens > 0 && totals.cost_usd > 0.0)
+        .then(|| totals.cost_usd / (totals.total_tokens as f64 / 1_000_000.0))
 }
 
 /// Source whose cost share most exceeds its token share. The render layer
@@ -423,29 +565,32 @@ fn token_spikes(
     limit: usize,
     period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
 ) -> Vec<SpikePeriod> {
-    let mut values = rows
-        .iter()
-        .map(|row| (row.date.clone(), row.totals.total_tokens))
-        .collect::<Vec<_>>();
-    if values.len() < 7 {
+    if rows.len() < 7 {
         return Vec::new();
     }
-    let mut token_samples = values.iter().map(|(_, t)| *t).collect::<Vec<_>>();
-    token_samples.sort_unstable();
-    let median = token_samples[token_samples.len() / 2];
+    let mut token_samples = rows
+        .iter()
+        .map(|row| row.totals.total_tokens)
+        .collect::<Vec<_>>();
+    let midpoint = token_samples.len() / 2;
+    let (_, &mut median, _) = token_samples.select_nth_unstable(midpoint);
     if median == 0 {
         return Vec::new();
     }
 
+    let mut values = rows
+        .iter()
+        .filter(|row| row.totals.total_tokens > median.saturating_mul(3))
+        .map(|row| (row.date.as_str(), row.totals.total_tokens))
+        .collect::<Vec<_>>();
     values.sort_by_key(|v| std::cmp::Reverse(v.1));
     values
         .into_iter()
-        .filter(|(_, tokens)| *tokens > median.saturating_mul(3))
         .take(limit)
         .map(|(date, total_tokens)| {
-            let attribution = attribution_for_period(rows, &date, period_attribution);
+            let attribution = attribution_for_period(rows, date, period_attribution);
             SpikePeriod {
-                date,
+                date: date.to_owned(),
                 total_tokens,
                 baseline_median: median,
                 top_source: attribution.top_source,
@@ -462,33 +607,30 @@ fn token_anomalies(
     limit: usize,
     period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
 ) -> Vec<AnomalyPeriod> {
-    let mut values = rows
-        .iter()
-        .map(|row| (row.date.clone(), row.totals.total_tokens))
-        .collect::<Vec<_>>();
-    if values.len() < 7 {
+    if rows.len() < 7 {
         return Vec::new();
     }
-    let mut samples = values.iter().map(|(_, t)| *t).collect::<Vec<_>>();
-    samples.sort_unstable();
-    let median = samples[samples.len() / 2];
+    let mut samples = rows
+        .iter()
+        .map(|row| row.totals.total_tokens)
+        .collect::<Vec<_>>();
+    let midpoint = samples.len() / 2;
+    let (_, &mut median, _) = samples.select_nth_unstable(midpoint);
     if median == 0 {
         return Vec::new();
     }
-    let mut deviations = samples
-        .iter()
-        .map(|t| t.abs_diff(median))
-        .collect::<Vec<_>>();
-    deviations.sort_unstable();
-    let mad = deviations[deviations.len() / 2];
+    for sample in &mut samples {
+        *sample = sample.abs_diff(median);
+    }
+    let (_, &mut mad, _) = samples.select_nth_unstable(midpoint);
     if mad == 0 {
         return Vec::new();
     }
 
-    values.sort_by_key(|v| std::cmp::Reverse(v.1));
-    values
-        .into_iter()
-        .filter_map(|(date, total_tokens)| {
+    let mut values = rows
+        .iter()
+        .filter_map(|row| {
+            let total_tokens = row.totals.total_tokens;
             if total_tokens <= median {
                 return None;
             }
@@ -496,9 +638,17 @@ fn token_anomalies(
             if robust_z < 3.5 {
                 return None;
             }
-            let attribution = attribution_for_period(rows, &date, period_attribution);
-            Some(AnomalyPeriod {
-                date,
+            Some((row.date.as_str(), total_tokens, robust_z))
+        })
+        .collect::<Vec<_>>();
+    values.sort_by_key(|v| std::cmp::Reverse(v.1));
+    values
+        .into_iter()
+        .take(limit)
+        .map(|(date, total_tokens, robust_z)| {
+            let attribution = attribution_for_period(rows, date, period_attribution);
+            AnomalyPeriod {
+                date: date.to_owned(),
                 total_tokens,
                 median,
                 mad,
@@ -507,9 +657,8 @@ fn token_anomalies(
                 top_model: attribution.top_model,
                 top_project: attribution.top_project,
                 top_session: attribution.top_session,
-            })
+            }
         })
-        .take(limit)
         .collect()
 }
 
@@ -737,8 +886,8 @@ mod tests {
             total_tokens: 11_000_000,
             ..TokenCounts::default()
         };
-        let rows = vec![row_with_model("2026-05-01", "claude-sonnet-4-6", counts)];
-        let (savings, reuse) = cache_economics(&rows);
+        let row = row_with_model("2026-05-01", "claude-sonnet-4-6", counts);
+        let savings = cache_savings(&row.models, &row.totals);
         // reads saved: 10M * (3.0 - 0.3)/1e6 = 27.0 ; write premium: 1M * (3.75 - 3.0)/1e6 = 0.75
         let expected = 27.0 - 0.75;
         assert!(
@@ -746,7 +895,12 @@ mod tests {
             "savings={savings:?}"
         );
         // reuse = 10M reads / 1M writes = 10x
-        assert!((reuse.unwrap() - 10.0).abs() < 1e-6);
+        assert_eq!(cache_reuse_ratio(&row.totals), Some(10.0));
+
+        // A history override can add cache volume without any model breakdown.
+        let mut totals = row.totals;
+        totals.cache_read_input_tokens *= 2;
+        assert!(cache_savings(&row.models, &totals).is_none());
     }
 
     #[test]
@@ -758,10 +912,9 @@ mod tests {
             total_tokens: 6_000_000,
             ..TokenCounts::default()
         };
-        let rows = vec![row_with_model("2026-05-01", "some-unlisted-model", counts)];
-        let (savings, reuse) = cache_economics(&rows);
-        assert!(savings.is_none());
-        assert!((reuse.unwrap() - 5.0).abs() < 1e-6);
+        let row = row_with_model("2026-05-01", "some-unlisted-model", counts);
+        assert!(cache_savings(&row.models, &row.totals).is_none());
+        assert_eq!(cache_reuse_ratio(&row.totals), Some(5.0));
     }
 
     #[test]
@@ -771,9 +924,7 @@ mod tests {
             total_tokens: 5_000_000,
             ..TokenCounts::default()
         };
-        let rows = vec![row_with_model("2026-05-01", "claude-opus-4-8", counts)];
-        let (_savings, reuse) = cache_economics(&rows);
-        assert!(reuse.is_none());
+        assert!(cache_reuse_ratio(&counts).is_none());
     }
 
     #[test]

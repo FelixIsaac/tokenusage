@@ -144,7 +144,7 @@ pub use types::{
     SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
 };
 
-pub use insights::ReportInsights;
+pub use insights::{ReportInsights, ReportTrend, TrendPeriod};
 
 // ---------------------------------------------------------------------------
 // CLI entry point — only available with `cli` feature
@@ -227,9 +227,15 @@ pub fn run_blocking() -> Result<()> {
         return gui::run_gui(args);
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    // Calendar reports await I/O from one task and parallelize parsing with Rayon.
+    // They can skip starting Tokio's scheduler workers while retaining its blocking pool.
+    let mut builder = match &command {
+        Commands::Daily(_) | Commands::Weekly(_) | Commands::Monthly(_) => {
+            tokio::runtime::Builder::new_current_thread()
+        }
+        _ => tokio::runtime::Builder::new_multi_thread(),
+    };
+    let runtime = builder.enable_all().build()?;
     runtime.block_on(dispatch(command))
 }
 

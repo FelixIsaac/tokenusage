@@ -52,10 +52,6 @@ pub(super) fn parse_files_with_cache(
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
     let mut cache_dirty = false;
-    let seen_cache_keys: HashSet<String> = files
-        .iter()
-        .map(|file| cache_file_key(&file.path))
-        .collect();
 
     // The fingerprint(stat) + cache-hydration pass is the per-file floor over all
     // ~N discovered files. It only reads the cache (immutable) and bumps atomic
@@ -70,8 +66,15 @@ pub(super) fn parse_files_with_cache(
     let pass: Vec<PassResult> = files
         .par_iter()
         .map(|file| {
-            let key = cache_file_key(&file.path);
-            let Some(fingerprint) = read_file_fingerprint(&file.path) else {
+            let key = if cache_enabled {
+                cache_file_key(&file.path)
+            } else {
+                String::new()
+            };
+            let fingerprint = cache_enabled
+                .then(|| read_file_fingerprint(&file.path))
+                .flatten();
+            let Some(fingerprint) = fingerprint else {
                 return PassResult::Job(Box::new(FileParseJob {
                     file: file.clone(),
                     cache_key: key,
@@ -84,7 +87,7 @@ pub(super) fn parse_files_with_cache(
                 }));
             };
 
-            if cache_enabled && let Some(cached) = cache_files.get(&key) {
+            if let Some(cached) = cache_files.get(&key) {
                 if cached.fingerprint == fingerprint {
                     return PassResult::Hit(hydrate_cached_events(
                         file, cached, filter, timezone, &pricing, &stats,
@@ -127,6 +130,7 @@ pub(super) fn parse_files_with_cache(
         timezone.clone(),
         pricing,
         stats.clone(),
+        cache_enabled,
     );
     events.extend(parsed.events);
 
@@ -142,6 +146,10 @@ pub(super) fn parse_files_with_cache(
         // or doctor's opencode-only probe, must not wipe other sources' entries
         // (which it never discovered). Record removals so the backing store can
         // delete exactly those rows (no full rewrite).
+        let seen_cache_keys: HashSet<String> = files
+            .iter()
+            .map(|file| cache_file_key(&file.path))
+            .collect();
         let scanned_root_keys: HashSet<String> = files
             .iter()
             .map(|file| cache_file_key(&file.root))
@@ -168,12 +176,15 @@ pub(super) fn parse_files_with_cache(
     if sort_events {
         events.sort_by_key(|e| e.timestamp);
     }
-    dedupe_opencode_events(&mut events);
+    if files.iter().any(|file| file.source == SourceKind::OpenCode) {
+        dedupe_opencode_events(&mut events);
+    }
 
     ParsedUsageOutput {
         loaded: LoadedUsage {
             events,
             stats: stats.snapshot(),
+            filter,
         },
         cache_dirty,
     }
@@ -804,7 +815,12 @@ pub(super) fn parse_files_concurrently(
     timezone: TimeZoneMode,
     pricing: Arc<PricingTable>,
     stats: Arc<ParseStatsAtomic>,
+    cache_enabled: bool,
 ) -> WorkerParseOutput {
+    if files.is_empty() {
+        return WorkerParseOutput::default();
+    }
+
     let (tx, rx) = bounded::<FileParseJob>(4096);
     let global_claude_dedupe = Arc::new(ClaudeGlobalDedupe::default());
 
@@ -836,6 +852,7 @@ pub(super) fn parse_files_concurrently(
                 &pricing,
                 &stats,
                 &global_claude_dedupe,
+                cache_enabled,
             )
         });
         handles.push(handle);
@@ -859,15 +876,24 @@ pub(super) fn worker_loop(
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
     global_claude_dedupe: &ClaudeGlobalDedupe,
+    cache_enabled: bool,
 ) -> WorkerParseOutput {
     let mut output = WorkerParseOutput::default();
     while let Ok(job) = rx.recv() {
-        let cache_key = job.cache_key.clone();
-        if let Some(parsed) =
-            parse_single_file(job, filter, timezone, pricing, stats, global_claude_dedupe)
-        {
+        let cache_key = cache_enabled.then(|| job.cache_key.clone());
+        if let Some(parsed) = parse_single_file(
+            job,
+            filter,
+            timezone,
+            pricing,
+            stats,
+            global_claude_dedupe,
+            cache_enabled,
+        ) {
             output.events.extend(parsed.events);
-            output.cache_updates.push((cache_key, parsed.cache_entry));
+            if let Some(cache_key) = cache_key {
+                output.cache_updates.push((cache_key, parsed.cache_entry));
+            }
         }
     }
     output
@@ -914,6 +940,7 @@ pub(super) fn parse_single_file(
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
     global_claude_dedupe: &ClaudeGlobalDedupe,
+    cache_enabled: bool,
 ) -> Option<ParsedFileOutput> {
     if job.file.source == SourceKind::Gemini {
         let ext = job
@@ -923,7 +950,7 @@ pub(super) fn parse_single_file(
             .and_then(|e| e.to_str())
             .unwrap_or("");
         if ext.eq_ignore_ascii_case("db") {
-            return parse_antigravity_db_file(job, filter, timezone, pricing, stats);
+            return parse_antigravity_db_file(job, filter, timezone, pricing, stats, cache_enabled);
         }
     }
 
@@ -935,9 +962,9 @@ pub(super) fn parse_single_file(
             .and_then(|e| e.to_str())
             .unwrap_or("");
         if ext.eq_ignore_ascii_case("db") {
-            return parse_opencode_db_file(job, filter, timezone, pricing, stats);
+            return parse_opencode_db_file(job, filter, timezone, pricing, stats, cache_enabled);
         }
-        return parse_opencode_message_file(job, filter, timezone, pricing, stats);
+        return parse_opencode_message_file(job, filter, timezone, pricing, stats, cache_enabled);
     }
 
     let input = match File::open(&job.file.path) {
@@ -1057,10 +1084,11 @@ pub(super) fn parse_single_file(
         }
         parsed.event.file_path.clone_from(&file_path);
 
-        cached_events.push(cached_usage_event(&parsed.event));
+        if cache_enabled {
+            cached_events.push(cached_usage_event(&parsed.event));
+        }
 
-        let day = local_date(parsed.event.timestamp, timezone);
-        if !filter.allows(day) {
+        if !date_filter_allows(filter, parsed.event.timestamp, timezone) {
             lines_filtered += 1;
             continue;
         }
@@ -1098,7 +1126,11 @@ pub(super) fn parse_single_file(
         parsed_offset: job.fingerprint.size.max(parsed_offset),
         codex_last_model: codex_state.current_model,
         codex_last_totals: codex_state.previous_totals,
-        claude_recent_keys: claude_state.snapshot(),
+        claude_recent_keys: if cache_enabled {
+            claude_state.snapshot()
+        } else {
+            Vec::new()
+        },
     };
 
     Some(ParsedFileOutput {
@@ -1810,6 +1842,7 @@ fn parse_opencode_message_file(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
+    cache_enabled: bool,
 ) -> Option<ParsedFileOutput> {
     let bytes = std::fs::read(&job.file.path).ok()?;
     if bytes.len() > MAX_JSON_LINE_BYTES {
@@ -1830,8 +1863,7 @@ fn parse_opencode_message_file(
         return None;
     };
 
-    let day = local_date(timestamp, timezone);
-    if !filter.allows(day) {
+    if !date_filter_allows(filter, timestamp, timezone) {
         stats.lines_filtered.fetch_add(1, Ordering::Relaxed);
         return None;
     }
@@ -1899,8 +1931,13 @@ fn parse_opencode_message_file(
         usage: UsageAccumulator { cost_usd, ..usage },
     };
 
+    let cached_events = if cache_enabled {
+        vec![cached_usage_event(&event)]
+    } else {
+        Vec::new()
+    };
     Some(ParsedFileOutput {
-        events: vec![event.clone()],
+        events: vec![event],
         cache_entry: CachedFileEntry {
             fingerprint: job.fingerprint,
             stats: CachedFileStats {
@@ -1909,7 +1946,7 @@ fn parse_opencode_message_file(
                 lines_missing_usage: 0,
                 lines_unknown_pricing: if used_unknown_pricing { 1 } else { 0 },
             },
-            events: vec![cached_usage_event(&event)],
+            events: cached_events,
             parsed_offset: job.fingerprint.size,
             codex_last_model: None,
             codex_last_totals: None,
@@ -2088,6 +2125,7 @@ fn parse_antigravity_db_file(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
+    cache_enabled: bool,
 ) -> Option<ParsedFileOutput> {
     let path = &job.file.path;
 
@@ -2170,9 +2208,11 @@ fn parse_antigravity_db_file(
             file_path: path.to_string_lossy().to_string(),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
-        cached_events.push(cached_usage_event(&event));
+        if cache_enabled {
+            cached_events.push(cached_usage_event(&event));
+        }
 
-        if !filter.allows(local_date(timestamp, timezone)) {
+        if !date_filter_allows(filter, timestamp, timezone) {
             lines_filtered += 1;
             continue;
         }
@@ -2220,6 +2260,7 @@ fn parse_opencode_db_file(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
+    cache_enabled: bool,
 ) -> Option<ParsedFileOutput> {
     let path = &job.file.path;
 
@@ -2355,10 +2396,11 @@ fn parse_opencode_db_file(
             file_path: format!("{}#{}", path.display(), message_id),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
-        cached_events.push(cached_usage_event(&event));
+        if cache_enabled {
+            cached_events.push(cached_usage_event(&event));
+        }
 
-        let day = local_date(timestamp, timezone);
-        if !filter.allows(day) {
+        if !date_filter_allows(filter, timestamp, timezone) {
             lines_filtered += 1;
             continue;
         }
@@ -2824,15 +2866,18 @@ fn cache_meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result
 /// One-time import of the legacy JSON cache into an empty SQLite DB. The JSON
 /// file is removed afterwards (whether imported or stale) so it's never retried.
 fn migrate_legacy_json_if_present(conn: &Connection, pricing_key: &str) {
+    let Some(json_path) = legacy_json_cache_path() else {
+        return;
+    };
+    if json_path.symlink_metadata().is_err() {
+        return;
+    }
     let existing: i64 = conn
         .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
         .unwrap_or(0);
     if existing > 0 {
         return;
     }
-    let Some(json_path) = legacy_json_cache_path() else {
-        return;
-    };
     let _ = import_legacy_json(conn, pricing_key, &json_path);
     // Remove the legacy file whether imported or stale, so it's never retried.
     let _ = std::fs::remove_file(&json_path);
@@ -3004,6 +3049,15 @@ pub(super) fn can_incremental_parse(cached: &CachedFileEntry, current: FileFinge
     start_offset > 0 && start_offset <= current.size
 }
 
+fn date_filter_allows(
+    filter: DateFilter,
+    timestamp: DateTime<Utc>,
+    timezone: &TimeZoneMode,
+) -> bool {
+    (filter.since.is_none() && filter.until.is_none())
+        || filter.allows(local_date(timestamp, timezone))
+}
+
 pub(super) fn hydrate_cached_events(
     file: &DiscoveredFile,
     cached: &CachedFileEntry,
@@ -3025,8 +3079,10 @@ pub(super) fn hydrate_cached_events(
     // on the CURRENT pricing table, so we recompute it live below (pre-filter,
     // matching the parser, which counts unknown pricing before the date filter).
 
-    let (session, project) = derive_session_meta(file);
-    let file_path = file.path.display().to_string();
+    // Current entries usually carry their own metadata. Deriving the fallback
+    // for Codex opens the original file, so defer it until an entry needs it.
+    let session_meta = std::cell::LazyCell::new(|| derive_session_meta(file));
+    let file_path = std::cell::LazyCell::new(|| file.path.display().to_string());
     let mut filtered = 0usize;
     let mut parsed = 0usize;
     let mut unknown_pricing = 0usize;
@@ -3046,8 +3102,7 @@ pub(super) fn hydrate_cached_events(
             }
         }
 
-        let day = local_date(cached_event.timestamp, timezone);
-        if !filter.allows(day) {
+        if !date_filter_allows(filter, cached_event.timestamp, timezone) {
             filtered += 1;
             continue;
         }
@@ -3059,12 +3114,15 @@ pub(super) fn hydrate_cached_events(
             session: cached_event
                 .session
                 .clone()
-                .unwrap_or_else(|| session.clone()),
-            project: cached_event.project.clone().or_else(|| project.clone()),
+                .unwrap_or_else(|| session_meta.0.clone()),
+            project: cached_event
+                .project
+                .clone()
+                .or_else(|| session_meta.1.clone()),
             file_path: cached_event
                 .file_path
                 .clone()
-                .unwrap_or_else(|| file_path.clone()),
+                .unwrap_or_else(|| (*file_path).clone()),
             usage,
         });
     }
@@ -3316,6 +3374,7 @@ mod antigravity_proto_tests {
                     &TimeZoneMode::Local,
                     &pricing,
                     &stats,
+                    true,
                 );
                 assert!(
                     res.is_some(),
@@ -3360,6 +3419,69 @@ mod cache_tests {
             codex_last_totals: None,
             claude_recent_keys: Vec::new(),
         }
+    }
+
+    #[test]
+    fn hydrate_legacy_codex_entry_uses_file_metadata_and_local_date() {
+        let path = tmp_db("codex-metadata").with_extension("jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"cwd":"/work/legacy-project"}}"#,
+        )
+        .unwrap();
+        let file = DiscoveredFile {
+            source: SourceKind::Codex,
+            root: path.parent().unwrap().to_path_buf(),
+            path: path.clone(),
+        };
+        let mut cached = sample_entry(10);
+        cached.stats.lines_total = 2;
+        for hour in ["15", "16"] {
+            let timestamp = DateTime::parse_from_rfc3339(&format!("2026-10-01T{hour}:00:00Z"))
+                .unwrap()
+                .to_utc();
+            cached.events.push(CachedUsageEvent {
+                timestamp,
+                model: "unpriced-perf-test-model".to_owned(),
+                usage: UsageAccumulator {
+                    input_tokens: 12,
+                    cost_usd: 0.42,
+                    ..UsageAccumulator::default()
+                },
+                session: None,
+                project: None,
+                file_path: None,
+            });
+        }
+
+        let day = NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
+        let stats = ParseStatsAtomic::default();
+        let events = hydrate_cached_events(
+            &file,
+            &cached,
+            DateFilter {
+                since: Some(day),
+                until: Some(day),
+            },
+            &TimeZoneMode::Named(chrono_tz::Asia::Singapore),
+            &PricingTable::default(),
+            &stats,
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].session,
+            path.file_stem().unwrap().to_str().unwrap()
+        );
+        assert_eq!(events[0].project.as_deref(), Some("legacy-project"));
+        assert_eq!(events[0].file_path, path.display().to_string());
+        assert_eq!(events[0].usage.cost_usd, 0.0);
+        let stats = stats.snapshot();
+        assert_eq!(stats.lines_total, 2);
+        assert_eq!(stats.lines_parsed, 1);
+        assert_eq!(stats.lines_filtered, 1);
+        assert_eq!(stats.lines_unknown_pricing, 2);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

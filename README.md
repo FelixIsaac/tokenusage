@@ -248,6 +248,10 @@ tu img week
 | `tu --until <date>` | — | Filter by end date (`YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD`, or relative: `today`, `yesterday`, `7d`) |
 | `tu --brief` | — | One-line headline summary (range, tokens, cost, top model) |
 
+Daily, weekly, and monthly reports show a **Usage Trend** in Insights & Highlights when the two most recent completed periods with data are consecutive. The trend compares token counts, estimated cost, cost per million tokens, cache hit rate, cache reuse, estimated cache savings, and the leading providers and models. Cache hit rate is the share of prompt tokens served from cache, and its change is shown in percentage points. Use `--jq '.insights.trend'` for the period metrics and per-provider and per-model breakdowns in JSON.
+
+The comparison uses the report's timezone and week start. Periods cut short by today or by `--since` and `--until` are excluded. Set `--until` to the last day of a past period to compare it with the period before it.
+
 ### 🌱 Carbon Footprint & Environmental Telemetry
 | Command | Aliases | Description |
 | :--- | :--- | :--- |

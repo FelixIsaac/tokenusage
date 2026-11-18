@@ -318,7 +318,12 @@ use crate::cli::WeekStart;
 use crate::pipeline::week_start;
 
 /// Merge persisted daily history from SQLite history.db into current report rows.
-pub fn merge_history_db(rows: &mut Vec<DailyRow>, period: ReportPeriod, common: &CommonArgs) {
+pub fn merge_history_db(
+    rows: &mut Vec<DailyRow>,
+    period: ReportPeriod,
+    common: &CommonArgs,
+    start_of_week: WeekStart,
+) {
     if common.no_history_db {
         return;
     }
@@ -326,7 +331,7 @@ pub fn merge_history_db(rows: &mut Vec<DailyRow>, period: ReportPeriod, common: 
     if map.is_empty() {
         return;
     }
-    merge_history_db_with_map(rows, period, common, map);
+    merge_history_db_with_map(rows, period, common, map, start_of_week);
 }
 
 pub fn merge_history_db_with_map(
@@ -334,6 +339,7 @@ pub fn merge_history_db_with_map(
     period: ReportPeriod,
     common: &CommonArgs,
     map: BTreeMap<String, HistoryOverrideData>,
+    start_of_week: WeekStart,
 ) {
     if common.no_history_db {
         return;
@@ -537,7 +543,7 @@ pub fn merge_history_db_with_map(
                             continue;
                         }
                     }
-                    let w_start = week_start(d, WeekStart::default());
+                    let w_start = week_start(d, start_of_week);
                     if let Some(f) = filter {
                         if !week_in_range(w_start, f) {
                             continue;
@@ -755,7 +761,13 @@ mod tests {
             ..Default::default()
         };
 
-        merge_history_db_with_map(&mut rows, ReportPeriod::Daily, &common, map);
+        merge_history_db_with_map(
+            &mut rows,
+            ReportPeriod::Daily,
+            &common,
+            map,
+            WeekStart::default(),
+        );
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].date, "2026-07-28");
@@ -788,7 +800,13 @@ mod tests {
             ..Default::default()
         };
 
-        merge_history_db_with_map(&mut rows, ReportPeriod::Monthly, &common, map);
+        merge_history_db_with_map(
+            &mut rows,
+            ReportPeriod::Monthly,
+            &common,
+            map,
+            WeekStart::default(),
+        );
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].date, "2026-08");
@@ -822,10 +840,16 @@ mod tests {
             ..Default::default()
         };
 
-        merge_history_db_with_map(&mut rows, ReportPeriod::Weekly, &common, map);
+        merge_history_db_with_map(
+            &mut rows,
+            ReportPeriod::Weekly,
+            &common,
+            map,
+            WeekStart::Sunday,
+        );
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].date, "2026-08-10");
+        assert_eq!(rows[0].date, "2026-08-09");
         assert_eq!(rows[0].totals.total_tokens, 2000);
     }
 

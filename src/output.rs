@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
@@ -23,8 +24,9 @@ use ratatui::widgets::{
 use terminal_size::{Width, terminal_size};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ReportInsights;
+use crate::insights::{relative_change_pct, token_change_pct};
 use crate::types::{DailyReport, DailyRow, TableLayout, TokenCounts};
+use crate::{ReportInsights, ReportTrend};
 use std::collections::BTreeSet;
 
 /// Headline-first one-liner for muscle-memory checks (`--brief`): range, tokens,
@@ -61,28 +63,13 @@ pub(crate) fn print_report_table_with_options(
     }
     let terminal_width = detect_terminal_width();
     let show_activity = report_has_activity(report);
-    let total_models_cell = report_unique_model_count_by_source_multiline(report);
-    let layout = if force_compact {
-        TableLayout::Compact
-    } else {
-        choose_layout(report, show_activity, show_breakdown, terminal_width)
-    };
-    let mut daily_table = create_table(terminal_width);
-    set_layout_header(&mut daily_table, layout, show_activity);
-
-    for row in &report.daily {
-        daily_table.add_row(primary_row(row, layout, show_activity));
-        if show_breakdown {
-            add_breakdown_rows(&mut daily_table, row, layout, show_activity);
-        }
-    }
-
-    daily_table.add_row(layout_total_row(
+    let daily_table = build_report_table(
         report,
-        layout,
         show_activity,
-        &total_models_cell,
-    ));
+        show_breakdown,
+        force_compact,
+        terminal_width,
+    );
     let rendered_table = daily_table.to_string();
     let table_width = rendered_table
         .lines()
@@ -187,35 +174,36 @@ fn layout_total_row(
     Row::from(cells)
 }
 
-/// Natural rendered width of a layout (content + padding + borders), with no
-/// wrapping, so layout selection can pick the richest layout that actually fits.
-fn measure_layout_width(
+fn report_table_for_layout(
     report: &DailyReport,
     layout: TableLayout,
     show_activity: bool,
     show_breakdown: bool,
-) -> usize {
-    let mut probe = Table::new();
-    // Default arrangement (Disabled) => columns take full content width, no wrap.
-    probe
+    total_models_cell: &str,
+) -> Table {
+    let mut table = Table::new();
+    table
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS);
-    set_layout_header(&mut probe, layout, show_activity);
+    set_layout_header(&mut table, layout, show_activity);
     for row in &report.daily {
-        probe.add_row(primary_row(row, layout, show_activity));
+        table.add_row(primary_row(row, layout, show_activity));
         if show_breakdown {
-            add_breakdown_rows(&mut probe, row, layout, show_activity);
+            add_breakdown_rows(&mut table, row, layout, show_activity);
         }
     }
-    let total_models_cell = report_unique_model_count_by_source_multiline(report);
-    probe.add_row(layout_total_row(
+    table.add_row(layout_total_row(
         report,
         layout,
         show_activity,
-        &total_models_cell,
+        total_models_cell,
     ));
+    table
+}
 
-    let widths = probe.column_max_content_widths();
+/// Natural rendered width of a layout including padding and borders, with no wrapping.
+fn natural_table_width(table: &Table) -> usize {
+    let widths = table.column_max_content_widths();
     let n = widths.len();
     let content: usize = widths.iter().map(|w| *w as usize).sum();
     // comfy-table default per-column padding (1,1) = 2; UTF8_FULL borders = n + 1.
@@ -223,18 +211,39 @@ fn measure_layout_width(
 }
 
 /// Pick the richest layout whose natural width fits the terminal; Compact is the floor.
-fn choose_layout(
+fn build_report_table(
     report: &DailyReport,
     show_activity: bool,
     show_breakdown: bool,
+    force_compact: bool,
     terminal_width: usize,
-) -> TableLayout {
-    for layout in [TableLayout::Full, TableLayout::Standard] {
-        if measure_layout_width(report, layout, show_activity, show_breakdown) <= terminal_width {
-            return layout;
-        }
+) -> Table {
+    let total_models_cell = report_unique_model_count_by_source_multiline(report);
+    let build_layout = |layout| {
+        report_table_for_layout(
+            report,
+            layout,
+            show_activity,
+            show_breakdown,
+            &total_models_cell,
+        )
+    };
+    let rich_table = if force_compact {
+        None
+    } else {
+        [TableLayout::Full, TableLayout::Standard]
+            .into_iter()
+            .map(build_layout)
+            .find(|table| natural_table_width(table) <= terminal_width)
+    };
+    let mut table = rich_table.unwrap_or_else(|| build_layout(TableLayout::Compact));
+    table
+        .set_width(terminal_width.clamp(20, u16::MAX as usize) as u16)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    if !io::stdout().is_terminal() && std::env::var("CLICOLOR_FORCE").is_ok() {
+        table.enforce_styling();
     }
-    TableLayout::Compact
+    table
 }
 
 pub fn print_boxed_card(title: &str, sections: &[(&str, Vec<String>)]) {
@@ -372,13 +381,219 @@ pub fn render_boxed_card_with_width(
     lines_out.join("\n")
 }
 
+fn trend_lines(trend: &ReportTrend) -> Vec<String> {
+    let before = &trend.previous;
+    let after = &trend.latest;
+    let comparison = |label: &str, before: String, after: String, delta: String| {
+        format!("• {label:<17} {before} → {after}{delta}")
+    };
+    let mut lines = vec![
+        format!("{} → {} (completed periods)", before.date, after.date),
+        comparison(
+            "Tokens",
+            format_u64(before.total_tokens),
+            format_u64(after.total_tokens),
+            trend_change(trend.token_change_pct, "%", 1),
+        ),
+        comparison(
+            "Est. Cost",
+            format_usd(before.cost_usd),
+            format_usd(after.cost_usd),
+            trend_change(trend.cost_change_pct, "%", 1),
+        ),
+    ];
+
+    for (label, old, new) in [
+        ("Fresh Input", before.input_tokens, after.input_tokens),
+        ("Output", before.output_tokens, after.output_tokens),
+        (
+            "Reasoning",
+            before.reasoning_output_tokens,
+            after.reasoning_output_tokens,
+        ),
+        (
+            "Cache Read",
+            before.cache_read_input_tokens,
+            after.cache_read_input_tokens,
+        ),
+        (
+            "Cache Write",
+            before.cache_creation_input_tokens,
+            after.cache_creation_input_tokens,
+        ),
+    ] {
+        if old > 0 || new > 0 {
+            lines.push(comparison(
+                label,
+                format_u64(old),
+                format_u64(new),
+                trend_change(token_change_pct(old, new), "%", 1),
+            ));
+        }
+    }
+
+    let optional = |value: Option<f64>, format_value: fn(f64) -> String| {
+        value.map_or_else(|| "—".to_owned(), format_value)
+    };
+    let relative = |old: Option<f64>, new: Option<f64>| {
+        let change = old
+            .zip(new)
+            .and_then(|(old, new)| relative_change_pct(old, new - old));
+        trend_change(change, "%", 1)
+    };
+    let savings_change = before
+        .cache_savings_usd
+        .zip(after.cache_savings_usd)
+        .map_or_else(String::new, |(old, new)| {
+            format!(" ({})", signed_trend_usd(new - old))
+        });
+    for (label, old, new, format_value, delta) in [
+        (
+            "Cache Hit Rate",
+            before.cache_hit_pct,
+            after.cache_hit_pct,
+            (|value| format!("{value:.2}%")) as fn(f64) -> String,
+            trend_change(trend.cache_hit_change_pp, " pp", 2),
+        ),
+        (
+            "Cache Reuse",
+            before.cache_reuse_ratio,
+            after.cache_reuse_ratio,
+            |value| format!("{value:.2}×"),
+            relative(before.cache_reuse_ratio, after.cache_reuse_ratio),
+        ),
+        (
+            "Cost / 1M tok",
+            before.cost_per_mtoken,
+            after.cost_per_mtoken,
+            |value| format!("${value:.4}"),
+            relative(before.cost_per_mtoken, after.cost_per_mtoken),
+        ),
+        (
+            "Est. Cache Savings",
+            before.cache_savings_usd,
+            after.cache_savings_usd,
+            trend_usd,
+            savings_change,
+        ),
+    ] {
+        if old.is_some() || new.is_some() {
+            lines.push(comparison(
+                label,
+                optional(old, format_value),
+                optional(new, format_value),
+                delta,
+            ));
+        }
+    }
+
+    for (label, old, new) in [
+        ("Top Provider", &before.sources, &after.sources),
+        ("Top Model", &before.models, &after.models),
+    ] {
+        let old = top_token_contributor(old, before.total_tokens);
+        let new = top_token_contributor(new, after.total_tokens);
+        match (old, new) {
+            (Some((old_label, old_share)), Some((new_label, new_share)))
+                if old_label == new_label =>
+            {
+                let delta = trend_change(Some(new_share - old_share), " pp", 1);
+                lines.push(format!(
+                    "• {label:<17} {old_label} ({old_share:.1}% → {new_share:.1}%){delta}"
+                ));
+            }
+            (Some(_), _) | (_, Some(_)) => {
+                let leader = |entry: Option<(&str, f64)>| {
+                    entry.map_or_else(
+                        || "—".to_owned(),
+                        |(name, share)| format!("{name} ({share:.1}%)"),
+                    )
+                };
+                lines.push(comparison(label, leader(old), leader(new), String::new()));
+            }
+            (None, None) => {}
+        }
+    }
+
+    if !before.models.is_empty() && !after.models.is_empty() {
+        let model_costs = before
+            .models
+            .keys()
+            .chain(after.models.keys())
+            .map(|model| {
+                let old = before
+                    .models
+                    .get(model)
+                    .map_or(0.0, |counts| counts.cost_usd);
+                let new = after
+                    .models
+                    .get(model)
+                    .map_or(0.0, |counts| counts.cost_usd);
+                (model, old, new)
+            })
+            .max_by(|(_, a_old, a_new), (_, b_old, b_new)| {
+                (a_new - a_old).abs().total_cmp(&(b_new - b_old).abs())
+            });
+        if let Some((model, old, new)) = model_costs
+            && (new - old).abs() >= 0.01
+        {
+            lines.push(format!(
+                "• Largest Model Cost Change {model} {} → {} ({})",
+                format_usd(old),
+                format_usd(new),
+                signed_trend_usd(new - old)
+            ));
+        }
+    }
+    lines
+}
+
+fn top_token_contributor(
+    breakdown: &BTreeMap<String, TokenCounts>,
+    total_tokens: u64,
+) -> Option<(&str, f64)> {
+    let (label, counts) = breakdown
+        .iter()
+        .max_by_key(|(_, counts)| counts.total_tokens)?;
+    (counts.total_tokens > 0 && total_tokens > 0).then(|| {
+        (
+            label.as_str(),
+            counts.total_tokens as f64 / total_tokens as f64 * 100.0,
+        )
+    })
+}
+
+fn trend_change(change: Option<f64>, unit: &str, precision: usize) -> String {
+    match change {
+        Some(change) if change.abs() < 0.5 * 10_f64.powi(-(precision as i32)) => {
+            format!(" ({:.precision$}{unit})", 0.0)
+        }
+        Some(change) => format!(" ({change:+.precision$}{unit})"),
+        None => String::new(),
+    }
+}
+
+fn trend_usd(value: f64) -> String {
+    let sign = if value <= -0.005 { "-" } else { "" };
+    format!("{sign}{}", format_usd(value.abs()))
+}
+
+fn signed_trend_usd(value: f64) -> String {
+    let sign = if value >= 0.005 { "+" } else { "" };
+    format!("{sign}{}", trend_usd(value))
+}
+
 fn print_report_insights(insights: &ReportInsights, target_width: Option<usize>) {
     let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
 
+    if let Some(trend) = &insights.trend {
+        sections.push(("📊 Usage Trend", trend_lines(trend)));
+    }
+
     // 1. Spending & Efficiency
     let mut spend_lines = Vec::new();
-    if let Some(cache_share) = insights.cache_share_pct {
-        let mut text = format!("• Cache Efficiency: {:.1}% hit rate", cache_share);
+    if let Some(cache_hit) = insights.cache_hit_pct {
+        let mut text = format!("• Cache Efficiency: {:.2}% hit rate", cache_hit);
         if let Some(savings) = insights.cache_savings_usd
             && savings.abs() >= 1.0
         {
@@ -589,7 +804,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             if show_activity {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_activity_text(row.activity.as_ref())).fg(Color::DarkGrey),
                     Cell::new(format_u64(row.totals.total_tokens)),
                     Cell::new(format_usd(row.totals.cost_usd)).fg(Color::Green),
@@ -597,7 +812,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             } else {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_u64(row.totals.total_tokens)),
                     Cell::new(format_usd(row.totals.cost_usd)).fg(Color::Green),
                 ])
@@ -607,7 +822,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             if show_activity {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_activity_text(row.activity.as_ref())).fg(Color::DarkGrey),
                     Cell::new(format_tokens_per_hour(
                         row.activity.as_ref(),
@@ -619,7 +834,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             } else {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_u64(row.totals.input_tokens)),
                     Cell::new(format_u64(row.totals.output_tokens)),
                     Cell::new(format_u64(row.totals.total_tokens)),
@@ -631,7 +846,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             if show_activity {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_activity_text(row.activity.as_ref())).fg(Color::DarkGrey),
                     Cell::new(format_tokens_per_hour(
                         row.activity.as_ref(),
@@ -647,7 +862,7 @@ fn primary_row(row: &DailyRow, layout: TableLayout, show_activity: bool) -> Row 
             } else {
                 Row::from(vec![
                     Cell::new(format_date_cell(&row.date)),
-                    Cell::new(format_model_list(&row.models, layout)),
+                    Cell::new(format_model_multiline(&row.models, layout)),
                     Cell::new(format_u64(row.totals.input_tokens)),
                     Cell::new(format_u64(row.totals.output_tokens)),
                     Cell::new(format_u64(row.totals.cache_creation_input_tokens)),
@@ -1445,13 +1660,13 @@ fn tui_total_row(report: &DailyReport, layout: TableLayout, show_activity: bool)
 }
 
 fn report_unique_model_count_by_source_multiline(report: &DailyReport) -> String {
-    let mut per_source: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut per_source: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for row in &report.daily {
         for (source, models) in &row.models_by_source {
             per_source
-                .entry(source.clone())
+                .entry(source)
                 .or_default()
-                .extend(models.iter().cloned());
+                .extend(models.iter().map(String::as_str));
         }
     }
 
@@ -1492,16 +1707,18 @@ fn format_model_multiline(models: &BTreeMap<String, TokenCounts>, layout: TableL
     });
 
     let model_limit = layout.model_line_limit();
-    let mut lines = sorted
-        .iter()
-        .take(model_limit)
-        .map(|(model, _)| format!("- {}", truncate_text(model, layout.model_char_limit())))
-        .collect::<Vec<_>>();
-    if sorted.len() > model_limit {
-        lines.push(format!("... +{} more", sorted.len() - model_limit));
+    let mut lines = String::new();
+    for (index, (model, _)) in sorted.iter().take(model_limit).enumerate() {
+        if index > 0 {
+            lines.push('\n');
+        }
+        lines.push_str("- ");
+        lines.push_str(&truncate_text(model, layout.model_char_limit()));
     }
-
-    lines.join("\n")
+    if sorted.len() > model_limit {
+        let _ = write!(lines, "\n... +{} more", sorted.len() - model_limit);
+    }
+    lines
 }
 
 fn format_activity_text(activity: Option<&crate::types::ActivitySummary>) -> String {
@@ -1563,20 +1780,6 @@ impl Drop for TuiSession {
     }
 }
 
-fn create_table(width: usize) -> Table {
-    let mut table = Table::new();
-    let table_width = width.clamp(20, u16::MAX as usize) as u16;
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_width(table_width)
-        .set_content_arrangement(ContentArrangement::Dynamic);
-    if !io::stdout().is_terminal() && std::env::var("CLICOLOR_FORCE").is_ok() {
-        table.enforce_styling();
-    }
-    table
-}
-
 fn header_cell(text: &str, color: Color) -> Cell {
     Cell::new(text).fg(color).add_attribute(Attribute::Bold)
 }
@@ -1609,35 +1812,6 @@ fn format_date_cell(date: &str) -> String {
         (Some(y), Some(m), Some(d)) => format!("{y}\n{m}-{d}"),
         _ => date.to_string(),
     }
-}
-
-fn format_model_list(models: &BTreeMap<String, TokenCounts>, layout: TableLayout) -> String {
-    if models.is_empty() {
-        return "-".to_string();
-    }
-
-    let mut sorted = models.iter().collect::<Vec<_>>();
-    sorted.sort_by(|(model_a, counts_a), (model_b, counts_b)| {
-        counts_b
-            .total_tokens
-            .cmp(&counts_a.total_tokens)
-            .then_with(|| model_a.cmp(model_b))
-    });
-
-    let limit = layout.model_line_limit();
-    let char_limit = layout.model_char_limit();
-    let mut lines = Vec::new();
-    for (idx, (model, _)) in sorted.iter().enumerate() {
-        if idx >= limit {
-            break;
-        }
-        lines.push(format!("- {}", truncate_text(model, char_limit)));
-    }
-    if sorted.len() > limit {
-        lines.push(format!("... +{} more", sorted.len() - limit));
-    }
-
-    lines.join("\n")
 }
 
 fn truncate_text(input: &str, max_chars: usize) -> String {

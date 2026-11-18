@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -26,13 +27,171 @@ fn setup_fixture(test_name: &str) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+fn test_cli_usage_trend_compares_adjacent_completed_periods() {
+    let (root, claude_dir) = setup_fixture("usage-trend");
+    let sonnet = "claude-3-7-sonnet-20250219";
+    let opus = "claude-opus-4-8";
+    let days = [
+        ("2026-07-31", sonnet, 100_000, 200_000, 50_000, 50_000),
+        ("2026-08-30", sonnet, 50_000, 20_000, 10_000, 20_000),
+        ("2026-08-31", sonnet, 50_000, 20_000, 10_000, 20_000),
+        ("2026-09-06", opus, 400_000, 0, 0, 0),
+        ("2026-09-13", opus, 50_000, 0, 0, 0),
+    ];
+    let events = days.map(|(day, model, input, reads, writes, output)| {
+        serde_json::json!({
+            "type": "assistant",
+            "timestamp": format!("{day}T10:00:00Z"),
+            "messageId": day,
+            "requestId": day,
+            "message": {
+                "model": model,
+                "usage": {
+                    "input_tokens": input,
+                    "cache_read_input_tokens": reads,
+                    "cache_creation_input_tokens": writes,
+                    "output_tokens": output
+                }
+            }
+        })
+        .to_string()
+    });
+    fs::write(
+        claude_dir.join("-Users-test-Projects-core/session.jsonl"),
+        events.join("\n"),
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let result = Command::new(env!("CARGO_BIN_EXE_tu"))
+            .args(args)
+            .args([
+                "--offline",
+                "--no-history-db",
+                "--no-history-overrides",
+                "--no-incremental-cache",
+                "--sources",
+                "claude",
+                "--timezone",
+                "UTC",
+                "--claude-projects-dir",
+                claude_dir.to_str().unwrap(),
+            ])
+            .env("HOME", root.join("home"))
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let trend = |args: &[&str]| {
+        serde_json::from_str::<serde_json::Value>(&run(args)).unwrap()["insights"]["trend"].clone()
+    };
+
+    let monthly = trend(&[
+        "monthly",
+        "--until",
+        "2026-09-14",
+        "--json",
+        "--order",
+        "desc",
+    ]);
+    assert_eq!(monthly["previous"]["date"], "2026-07");
+    assert_eq!(monthly["latest"]["date"], "2026-08");
+    assert_eq!(monthly["token_change_pct"], -50.0);
+    assert_eq!(monthly["latest"]["cache_hit_pct"], 25.0);
+    assert_eq!(monthly["latest"]["cache_reuse_ratio"], 2.0);
+    assert!((monthly["cache_hit_change_pp"].as_f64().unwrap() + 32.142857).abs() < 1e-6);
+    assert_eq!(monthly["previous"]["cache_read_input_tokens"], 200_000);
+    assert_eq!(monthly["latest"]["output_tokens"], 40_000);
+    assert_eq!(
+        monthly["latest"]["sources"]["claude"]["total_tokens"],
+        200_000
+    );
+    assert!(monthly["latest"]["cost_per_mtoken"].as_f64().unwrap() > 0.0);
+    assert!(monthly["latest"]["cache_savings_usd"].as_f64().unwrap() > 0.0);
+
+    let weekly = trend(&[
+        "weekly",
+        "--start-of-week",
+        "sunday",
+        "--until",
+        "2026-09-14",
+        "--json",
+    ]);
+    assert_eq!(weekly["previous"]["date"], "2026-08-30");
+    assert_eq!(weekly["latest"]["date"], "2026-09-06");
+    assert_eq!(weekly["token_change_pct"], 100.0);
+    assert_eq!(weekly["latest"]["cache_hit_pct"], 0.0);
+    assert_eq!(weekly["cache_hit_change_pp"], -25.0);
+    assert_eq!(weekly["latest"]["cache_savings_usd"], 0.0);
+    assert_eq!(weekly["latest"]["models"][opus]["total_tokens"], 400_000);
+
+    let daily = trend(&["daily", "--instances", "--until", "2026-08-31", "--json"]);
+    assert_eq!(daily["previous"]["date"], "2026-08-30");
+    assert_eq!(daily["latest"]["date"], "2026-08-31");
+    assert_eq!(daily["token_change_pct"], 0.0);
+    assert!(trend(&["daily", "--until", "2026-09-06", "--json"]).is_null());
+    assert!(
+        trend(&[
+            "monthly",
+            "--since",
+            "2026-07-02",
+            "--until",
+            "2026-09-14",
+            "--json"
+        ])
+        .is_null()
+    );
+
+    let table = run(&["monthly", "--until", "2026-09-14"]);
+    assert!(table.contains("Usage Trend"));
+    assert!(table.contains("2026-07 → 2026-08"));
+    assert!(table.contains("400,000 → 200,000 (-50.0%)"));
+    assert!(table.contains("57.14% → 25.00% (-32.14 pp)"));
+    assert!(table.contains("Est. Cache Savings"));
+    assert!(table.contains("Cost / 1M tok"));
+    assert!(table.contains("Largest Model Cost Change"));
+
+    let weekly_table = run(&[
+        "weekly",
+        "--start-of-week",
+        "sunday",
+        "--until",
+        "2026-09-14",
+    ]);
+    assert!(weekly_table.contains("Top Provider"));
+    assert!(weekly_table.contains("Top Model"));
+    assert!(
+        weekly_table.contains("claude-3-7-sonnet-20250219 (100.0%) → claude-opus-4-8 (100.0%)")
+    );
+}
+
+#[test]
 fn test_cli_subcommands_happy_paths() {
     let (root, claude_dir) = setup_fixture("subcommands-happy");
+    let bin_dir = root.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let npx = bin_dir.join("npx");
+    fs::write(
+        &npx,
+        r#"#!/bin/sh
+[ "$#" -eq 4 ] && [ "$1" = "ccusage@latest" ] && [ "$2" = "daily" ] &&
+    [ "$3" = "--json" ] && [ "$4" = "--offline" ] || exit 1
+printf '%s\n' '{"totals":{"inputTokens":1000,"cacheCreationTokens":200,"cacheReadTokens":500,"outputTokens":150,"totalTokens":1850}}'
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(npx, fs::Permissions::from_mode(0o755)).unwrap();
 
     let run_cmd = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_tu"))
             .args(args)
             .args([
+                "--offline",
                 "--no-history-db",
                 "--no-incremental-cache",
                 "--claude-projects-dir",
@@ -43,6 +202,7 @@ fn test_cli_subcommands_happy_paths() {
                 "--no-opencode",
             ])
             .env("HOME", root.join("home"))
+            .env("PATH", &bin_dir)
             .output()
             .unwrap()
     };
@@ -138,12 +298,17 @@ fn test_cli_subcommands_happy_paths() {
     assert!(res.status.success(), "sl alias --json failed");
 
     // 11. parity / diff / compare
-    let res = run_cmd(&["parity", "--json"]);
-    assert!(res.status.success(), "parity --json failed");
-    let res = run_cmd(&["diff", "--json"]);
-    assert!(res.status.success(), "diff alias --json failed");
-    let res = run_cmd(&["compare", "--json"]);
-    assert!(res.status.success(), "compare alias --json failed");
+    for alias in ["parity", "diff", "compare"] {
+        let result = run_cmd(&[alias, "--json"]);
+        assert!(
+            result.status.success(),
+            "{alias} --json failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let parity: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(parity["ccusage"]["total_tokens"], 1850);
+        assert_eq!(parity["delta"]["total_tokens"], 0);
+    }
 
     // 12. completions / completion
     let res = Command::new(env!("CARGO_BIN_EXE_tu"))

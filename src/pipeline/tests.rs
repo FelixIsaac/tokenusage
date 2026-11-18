@@ -32,6 +32,43 @@ fn test_event(ts: DateTime<Utc>, source: SourceKind, total_tokens: u64) -> Usage
 }
 
 #[test]
+fn calendar_trend_excludes_the_open_month_and_handles_zero_cost() {
+    let rows = [
+        ("2026-09", 100, 0.0),
+        ("2026-10", 120, 2.0),
+        ("2026-11", 10, 0.1),
+    ]
+    .map(|(date, total_tokens, cost_usd)| DailyRow {
+        date: date.to_string(),
+        totals: TokenCounts {
+            total_tokens,
+            cost_usd,
+            ..Default::default()
+        },
+        models: BTreeMap::new(),
+        sources: BTreeMap::new(),
+        models_by_source: BTreeMap::new(),
+        activity: None,
+    });
+    let trend = commands::calendar_trend(
+        &rows,
+        ReportPeriod::Monthly,
+        false,
+        DateFilter {
+            since: None,
+            until: None,
+        },
+        NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(trend.previous.date, "2026-09");
+    assert_eq!(trend.latest.date, "2026-10");
+    assert_eq!(trend.token_change_pct, Some(20.0));
+    assert_eq!(trend.cost_change_pct, None);
+}
+
+#[test]
 fn normalize_official_percent_treats_one_as_percent_not_ratio() {
     assert!((normalize_official_used_percent(0.82) - 82.0).abs() < f64::EPSILON);
     assert!((normalize_official_used_percent(82.0) - 82.0).abs() < f64::EPSILON);
