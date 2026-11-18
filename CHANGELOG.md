@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.12.0] - 2026-11-18
+## [1.12.1] - 2026-11-18
 
 ### Added
 - **Usage trends** compare two consecutive completed periods in daily, weekly, and monthly reports. The comparison covers token counts, estimated cost, cost per million tokens, cache hit rate and reuse, estimated cache savings, and provider and model changes. Use `--jq '.insights.trend'` for the period metrics and detailed breakdowns.
@@ -14,6 +14,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Cache hit rate now measures the share of prompt tokens served from cache. Weekly history follows the selected week start, and project-scoped daily reports use project log data.
+- The Apple Silicon release build uses a supported GitHub-hosted runner.
 
 ## [1.11.8] - 2026-08-29
 

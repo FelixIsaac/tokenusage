@@ -21,3 +21,6 @@ tap = "FelixIsaac/homebrew-tokenusage"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
+
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
