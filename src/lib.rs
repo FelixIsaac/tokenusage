@@ -140,8 +140,9 @@ pub use carbon::{EnvironmentalEquivalences, EnvironmentalMetrics, GridRegion};
 pub use pipeline::{ReportPeriod, TimeZoneMode, UsageSnapshot};
 pub use scale::InformationScale;
 pub use types::{
-    ActivitySummary, DailyReport, DailyRow, DateFilter, ParseStats, PricingRate, PricingTable,
-    SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
+    ActivitySummary, ContextTierRate, DailyReport, DailyRow, DateFilter, ParseStats,
+    PricingContext, PricingRate, PricingTable, ServiceSpeed, SourceKind, TokenCounts, TokenRates,
+    UsageAccumulator, UsageEvent,
 };
 
 pub use insights::{ReportInsights, ReportTrend, TrendPeriod};

@@ -433,11 +433,10 @@ fn hydrate_cached_events_prefers_cached_metadata_over_file_fallback() {
             session: Some("cached-session".to_string()),
             project: Some("cached-project".to_string()),
             file_path: Some("opencode.db#msg_abc".to_string()),
+            ..CachedUsageEvent::default()
         }],
         parsed_offset: 100,
-        codex_last_model: None,
-        codex_last_totals: None,
-        claude_recent_keys: Vec::new(),
+        ..CachedFileEntry::default()
     };
 
     let stats = ParseStatsAtomic::default();
@@ -483,14 +482,10 @@ fn hydrate_cached_events_reprices_against_current_table() {
                 cost_usd: 999.0, // stale cost from when the file was first parsed
                 ..UsageAccumulator::default()
             },
-            session: None,
-            project: None,
-            file_path: None,
+            ..CachedUsageEvent::default()
         }],
         parsed_offset: 100,
-        codex_last_model: None,
-        codex_last_totals: None,
-        claude_recent_keys: Vec::new(),
+        ..CachedFileEntry::default()
     };
 
     let stats = ParseStatsAtomic::default();
@@ -540,14 +535,10 @@ fn hydrate_reprices_unknown_model_to_zero_like_parser() {
                 cost_usd: 42.0, // stale non-zero cost
                 ..UsageAccumulator::default()
             },
-            session: None,
-            project: None,
-            file_path: None,
+            ..CachedUsageEvent::default()
         }],
         parsed_offset: 100,
-        codex_last_model: None,
-        codex_last_totals: None,
-        claude_recent_keys: Vec::new(),
+        ..CachedFileEntry::default()
     };
 
     let stats = ParseStatsAtomic::default();
@@ -732,4 +723,120 @@ fn test_parse_common_filter_validation() {
         ..Default::default()
     };
     assert!(parse_common_filter(&invalid).is_err());
+}
+
+#[test]
+fn test_local_day_cache_matches_timezone_mode_across_dst_transitions() {
+    use chrono::TimeZone as _;
+
+    let zones = [
+        TimeZoneMode::Utc,
+        TimeZoneMode::Named(chrono_tz::Asia::Singapore),
+        TimeZoneMode::Named(chrono_tz::America::New_York),
+    ];
+
+    // Check 48h windows around US spring-forward (2026-03-08) and fall-back (2026-11-01).
+    let windows = [
+        Utc.with_ymd_and_hms(2026, 3, 7, 12, 0, 0).unwrap(),
+        Utc.with_ymd_and_hms(2026, 10, 31, 12, 0, 0).unwrap(),
+    ];
+
+    for tz in &zones {
+        let mut cache = LocalDayCache::new(tz);
+        for &start in &windows {
+            for step in 0..(48 * 4) {
+                let ts = start + chrono::TimeDelta::minutes(step * 15);
+                assert_eq!(
+                    cache.date_of(ts),
+                    tz.date_of(ts),
+                    "mismatch at {ts} for {tz:?}"
+                );
+            }
+            // Also sweep backward to verify cache invalidation across backward jumps.
+            for step in (0..(48 * 4)).rev() {
+                let ts = start + chrono::TimeDelta::minutes(step * 15);
+                assert_eq!(
+                    cache.date_of(ts),
+                    tz.date_of(ts),
+                    "reverse mismatch at {ts} for {tz:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_pricing_cache_binary_roundtrip_and_json_upgrade() {
+    use crate::types::{ContextTierRate, PricingRate, TokenRates};
+
+    let tmp_dir = std::env::temp_dir().join(format!("tu-pricing-bin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let cache_path = tmp_dir.join("pricing-test.cache");
+
+    let mut exact = std::collections::HashMap::new();
+    let tier_std = TokenRates {
+        input_per_million: 4.0,
+        output_per_million: 15.0,
+        cache_creation_per_million: 5.0,
+        cache_creation_1h_per_million: 8.0,
+        cache_read_per_million: 0.4,
+        reasoning_output_per_million: 12.0,
+    };
+    exact.insert(
+        "synthetic-model".to_string(),
+        PricingRate {
+            input_per_million: 2.0,
+            output_per_million: 10.0,
+            cache_creation_per_million: 2.5,
+            cache_creation_1h_per_million: Some(4.0),
+            cache_read_per_million: 0.2,
+            reasoning_output_per_million: 0.0,
+            fast: Some(Box::new(TokenRates {
+                input_per_million: 4.0,
+                output_per_million: 20.0,
+                cache_creation_per_million: 5.0,
+                cache_creation_1h_per_million: 8.0,
+                cache_read_per_million: 0.4,
+                reasoning_output_per_million: 0.0,
+            })),
+            ultrafast: Some(Box::new(TokenRates {
+                input_per_million: 12.0,
+                output_per_million: 60.0,
+                cache_creation_per_million: 15.0,
+                cache_creation_1h_per_million: 24.0,
+                cache_read_per_million: 1.2,
+                reasoning_output_per_million: 0.0,
+            })),
+            context_tiers: vec![ContextTierRate {
+                threshold_tokens: 272_000,
+                standard: tier_std,
+                fast: Some(tier_std),
+                ultrafast: None,
+            }],
+            ..PricingRate::default()
+        },
+    );
+
+    crate::pipeline::pricing::save_pricing_cache(&cache_path, 1, 1_795_000_000, &exact);
+    let raw = std::fs::read(&cache_path).unwrap();
+    assert!(raw.starts_with(b"TUP1"));
+
+    let loaded = crate::pipeline::pricing::load_pricing_cache(&cache_path, 1).unwrap();
+    assert_eq!(loaded.fetched_unix, 1_795_000_000);
+    let rate = loaded.exact.get("synthetic-model").unwrap();
+    assert_eq!(
+        serde_json::to_value(rate).unwrap(),
+        serde_json::to_value(exact.get("synthetic-model").unwrap()).unwrap()
+    );
+
+    // Legacy JSON cache loads cleanly and upgrades to TUP1 binary on disk.
+    let legacy_path = tmp_dir.join("legacy-json.cache");
+    let json_bytes = serde_json::to_vec(&loaded).unwrap();
+    std::fs::write(&legacy_path, json_bytes).unwrap();
+    let upgraded = crate::pipeline::pricing::load_pricing_cache(&legacy_path, 1).unwrap();
+    assert_eq!(upgraded.exact.len(), 1);
+    assert!(std::fs::read(&legacy_path).unwrap().starts_with(b"TUP1"));
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 }

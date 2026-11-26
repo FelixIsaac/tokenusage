@@ -31,7 +31,8 @@ use super::official::{
     select_antigravity_models,
 };
 use super::parsing::{
-    build_sources, discover_files, incremental_cache_stats, load_pricing, load_usage,
+    build_sources, discover_files, incremental_cache_stats, load_usage, load_usage_from_discovered,
+    load_usage_unsorted,
 };
 #[cfg(feature = "cli")]
 use super::statusline::{format_reset_timestamp, format_time_until_reset_short};
@@ -83,6 +84,11 @@ struct DoctorPricingReport {
     openrouter_cache_age_secs: Option<u64>,
     openrouter_cache_ttl_secs: u64,
     openrouter_cached_models: Option<usize>,
+    litellm_cache_path: Option<String>,
+    litellm_cache_fetched_unix: Option<u64>,
+    litellm_cache_age_secs: Option<u64>,
+    litellm_cache_ttl_secs: u64,
+    litellm_cached_models: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,10 +109,10 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
     let ignore_rules = PathIgnoreRules::from_common(&args.common);
     let source_configs = build_sources(&args.common).await?;
     let discovered = discover_files(&source_configs, &ignore_rules, filter);
-    let loaded = load_usage(&args.common, &tz).await?;
+    let loaded = load_usage_from_discovered(&args.common, &tz, &discovered, false).await?;
     let opencode_debug = build_opencode_debug_report(&args.common, &tz, &loaded).await?;
 
-    let pricing = load_pricing(args.common.pricing_file.as_deref(), args.common.offline).await?;
+    let pricing = loaded.pricing.clone();
     let mut missing_pricing_models: BTreeMap<String, usize> = BTreeMap::new();
     if args.common.pricing_debug {
         for event in &loaded.events {
@@ -135,6 +141,21 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             .unwrap_or((None, None, None));
     let openrouter_cache_age_secs =
         openrouter_cache_fetched_unix.map(|fetched| now_unix.saturating_sub(fetched));
+
+    let (litellm_cache_path, litellm_cache_fetched_unix, litellm_cached_models) =
+        super::pricing::litellm_pricing_cache_path()
+            .and_then(|path| {
+                let store =
+                    super::pricing::load_pricing_cache(&path, LITELLM_PRICING_CACHE_VERSION)?;
+                Some((
+                    Some(path.to_string_lossy().to_string()),
+                    Some(store.fetched_unix),
+                    Some(store.exact.len()),
+                ))
+            })
+            .unwrap_or((None, None, None));
+    let litellm_cache_age_secs =
+        litellm_cache_fetched_unix.map(|fetched| now_unix.saturating_sub(fetched));
 
     let mut by_source: HashMap<SourceKind, usize> = HashMap::new();
     for file in &discovered {
@@ -274,6 +295,11 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             openrouter_cache_age_secs,
             openrouter_cache_ttl_secs: OPENROUTER_PRICING_CACHE_TTL_SECS,
             openrouter_cached_models,
+            litellm_cache_path,
+            litellm_cache_fetched_unix,
+            litellm_cache_age_secs,
+            litellm_cache_ttl_secs: LITELLM_PRICING_CACHE_TTL_SECS,
+            litellm_cached_models,
         },
         cache,
         sources,
@@ -291,9 +317,20 @@ pub(crate) async fn run_doctor(args: DailyArgs) -> Result<()> {
             println!("selected-sources: {}", report.selected_sources.join(", "));
         }
         println!(
-            "pricing: openrouter cache ttl={}s offline={}",
-            report.pricing.openrouter_cache_ttl_secs, report.pricing.offline
+            "pricing: litellm ttl={}s openrouter ttl={}s offline={}",
+            report.pricing.litellm_cache_ttl_secs,
+            report.pricing.openrouter_cache_ttl_secs,
+            report.pricing.offline
         );
+        if let Some(path) = &report.pricing.litellm_cache_path {
+            println!("  litellm-cache: {path}");
+        }
+        if let Some(age) = report.pricing.litellm_cache_age_secs {
+            println!("  litellm-cache-age-secs: {age}");
+        }
+        if let Some(models) = report.pricing.litellm_cached_models {
+            println!("  litellm-cache-models: {models}");
+        }
         if let Some(path) = &report.pricing.openrouter_cache_path {
             println!("  openrouter-cache: {path}");
         }
@@ -480,6 +517,9 @@ async fn build_opencode_debug_report(
     db_only_args.no_claude = true;
     db_only_args.no_codex = true;
     db_only_args.no_gemini = true;
+    db_only_args.no_grok = true;
+    db_only_args.no_pi = true;
+    db_only_args.no_muse = true;
     db_only_args.no_opencode = false;
     db_only_args.ignore_path.push("storage/message".to_string());
     db_only_args
@@ -490,11 +530,14 @@ async fn build_opencode_debug_report(
     legacy_only_args.no_claude = true;
     legacy_only_args.no_codex = true;
     legacy_only_args.no_gemini = true;
+    legacy_only_args.no_grok = true;
+    legacy_only_args.no_pi = true;
+    legacy_only_args.no_muse = true;
     legacy_only_args.no_opencode = false;
     legacy_only_args.ignore_path.push("opencode.db".to_string());
 
-    let db_only_loaded = load_usage(&db_only_args, tz).await?;
-    let legacy_only_loaded = load_usage(&legacy_only_args, tz).await?;
+    let db_only_loaded = load_usage_unsorted(&db_only_args, tz).await?;
+    let legacy_only_loaded = load_usage_unsorted(&legacy_only_args, tz).await?;
 
     let db_only = collect_source_totals(&db_only_loaded.events, SourceKind::OpenCode);
     let legacy_only = collect_source_totals(&legacy_only_loaded.events, SourceKind::OpenCode);
@@ -836,7 +879,12 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
 
     let loaded = load_usage(&args.common, &tz).await?;
-    let LoadedUsage { events, stats, .. } = loaded;
+    let LoadedUsage {
+        events,
+        stats,
+        pricing,
+        ..
+    } = loaded;
     let filtered_events = filter_events_by_project(events, args.project.as_deref());
     let dataset =
         fetch_activity_dataset(&args.common, &tz, &filtered_events, args.project.as_deref())
@@ -851,6 +899,7 @@ pub(crate) async fn run_activity(mut args: ActivityArgs) -> Result<()> {
             start,
             end,
             stats: stats.clone(),
+            pricing: &pricing,
         },
     );
     let overview = build_activity_overview(
@@ -986,7 +1035,7 @@ pub(super) fn quota_bar(remaining_pct: f64) -> String {
 pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
+    let loaded = load_usage_unsorted(&args.common, &tz).await?;
 
     let mut grouped: HashMap<String, GroupAggregate> = HashMap::new();
     for event in loaded.events {
@@ -996,14 +1045,17 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             continue;
         }
         let session_key = if event.session.is_empty() {
-            event
-                .project
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string())
+            event.project.as_deref().unwrap_or("unknown")
         } else {
-            event.session.clone()
+            event.session.as_str()
         };
-        grouped.entry(session_key).or_default().add_event(&event);
+        if let Some(agg) = grouped.get_mut(session_key) {
+            agg.add_event(&event);
+        } else {
+            let mut agg = GroupAggregate::default();
+            agg.add_event(&event);
+            grouped.insert(session_key.to_string(), agg);
+        }
     }
 
     let mut sessions = grouped
@@ -1075,8 +1127,11 @@ pub(crate) async fn run_session(args: SessionArgs) -> Result<()> {
             .collect::<Vec<_>>();
 
         let totals = json_report.totals.clone();
-        let insights = Some(crate::insights::compute_report_insights(
-            &rows, &totals, None,
+        let insights = Some(crate::insights::compute_report_insights_with_pricing(
+            &rows,
+            &totals,
+            None,
+            &loaded.pricing,
         ));
 
         let show = DailyReport {
@@ -1126,7 +1181,7 @@ async fn collect_calendar_report(
     start_of_week: WeekStart,
 ) -> Result<DailyReport> {
     let tz = parse_timezone_mode(common.timezone.as_deref())?;
-    let mut loaded = load_usage(common, &tz).await?;
+    let mut loaded = load_usage_unsorted(common, &tz).await?;
     let instances = period == ReportPeriod::Daily && instances;
     if period == ReportPeriod::Daily
         && let Some(project) = project
@@ -1139,7 +1194,7 @@ async fn collect_calendar_report(
         });
     }
 
-    let period_key = |event| calendar_period_key(event, &tz, period, start_of_week, instances);
+    let mut day_cache = LocalDayCache::new(&tz);
 
     // Persisted daily history is keyed by date, with no project breakdown.
     let scoped_common;
@@ -1153,17 +1208,21 @@ async fn collect_calendar_report(
         common
     };
     let mut labels = HashMap::new();
-    let mut rows = build_group_rows(&loaded.events, period_key, |key @ (start, project)| {
-        let label = match (period, project) {
-            (ReportPeriod::Monthly, _) => format!("{:04}-{:02}", start.year(), start.month()),
-            (_, Some(project)) => {
-                format!("{project} | {}", start.format("%Y-%m-%d"))
-            }
-            _ => start.format("%Y-%m-%d").to_string(),
-        };
-        labels.insert(key, label.clone());
-        label
-    });
+    let mut rows = build_group_rows(
+        &loaded.events,
+        |event| calendar_period_key(event, &mut day_cache, period, start_of_week, instances),
+        |key @ (start, project)| {
+            let label = match (period, project) {
+                (ReportPeriod::Monthly, _) => format!("{:04}-{:02}", start.year(), start.month()),
+                (_, Some(project)) => {
+                    format!("{project} | {}", start.format("%Y-%m-%d"))
+                }
+                _ => start.format("%Y-%m-%d").to_string(),
+            };
+            labels.insert(key, label.clone());
+            label
+        },
+    );
     apply_group_history(&mut rows, period, grouping_options, start_of_week);
 
     let (rows, activity_totals) = enrich_rows_with_activity(
@@ -1176,7 +1235,8 @@ async fn collect_calendar_report(
         rows,
     )
     .await?;
-    let mut report = build_report_from_rows(rows, activity_totals, loaded.stats, None);
+    let mut report =
+        build_report_from_rows(rows, activity_totals, loaded.stats, None, &loaded.pricing);
     if let Some(insights) = &mut report.insights {
         let outliers = insights
             .spikes
@@ -1192,18 +1252,28 @@ async fn collect_calendar_report(
         if !outliers.is_empty() {
             labels.retain(|_, label| outliers.contains(label.as_str()));
             if !labels.is_empty() {
+                let mut attr_day_cache = LocalDayCache::new(&tz);
                 let period_attribution = build_period_attribution(&loaded.events, |event| {
-                    labels.get(&period_key(event)).map(String::as_str)
+                    labels
+                        .get(&calendar_period_key(
+                            event,
+                            &mut attr_day_cache,
+                            period,
+                            start_of_week,
+                            instances,
+                        ))
+                        .map(String::as_str)
                 });
                 insights.update_period_attribution(&period_attribution);
             }
         }
-        insights.trend = calendar_trend(
+        insights.trend = calendar_trend_with_pricing(
             &report.daily,
             period,
             instances,
             loaded.filter,
             tz.now_date(),
+            &loaded.pricing,
         );
     }
     Ok(report)
@@ -1211,12 +1281,12 @@ async fn collect_calendar_report(
 
 fn calendar_period_key<'a>(
     event: &'a UsageEvent,
-    tz: &TimeZoneMode,
+    day_cache: &mut LocalDayCache<'_>,
     period: ReportPeriod,
     start_of_week: WeekStart,
     instances: bool,
-) -> (NaiveDate, Option<&'a str>) {
-    let day = local_date(event.timestamp, tz);
+) -> (chrono::NaiveDate, Option<&'a str>) {
+    let day = day_cache.date_of(event.timestamp);
     let start = match period {
         ReportPeriod::Daily => day,
         ReportPeriod::Monthly => day.with_day(1).expect("months start on day one"),
@@ -1226,12 +1296,31 @@ fn calendar_period_key<'a>(
     (start, project)
 }
 
+#[cfg(test)]
 pub(super) fn calendar_trend(
     rows: &[DailyRow],
     period: ReportPeriod,
     instances: bool,
     filter: DateFilter,
     today: NaiveDate,
+) -> Option<ReportTrend> {
+    calendar_trend_with_pricing(
+        rows,
+        period,
+        instances,
+        filter,
+        today,
+        &PricingTable::default_table(),
+    )
+}
+
+pub(super) fn calendar_trend_with_pricing(
+    rows: &[DailyRow],
+    period: ReportPeriod,
+    instances: bool,
+    filter: DateFilter,
+    today: NaiveDate,
+    pricing: &PricingTable,
 ) -> Option<ReportTrend> {
     let mut completed = BTreeMap::new();
     for row in rows {
@@ -1259,8 +1348,8 @@ pub(super) fn calendar_trend(
     let (_, (previous_end, previous_key, previous_rows)) = completed.pop_last()?;
     (previous_end.succ_opt() == Some(latest_start)).then(|| {
         ReportTrend::new(
-            TrendPeriod::from_rows(previous_key.to_owned(), &previous_rows),
-            TrendPeriod::from_rows(latest_key.to_owned(), &latest_rows),
+            TrendPeriod::from_rows_with_pricing(previous_key.to_owned(), &previous_rows, pricing),
+            TrendPeriod::from_rows_with_pricing(latest_key.to_owned(), &latest_rows, pricing),
         )
     })
 }
@@ -1415,8 +1504,40 @@ pub(crate) async fn run_anthropic_api(args: AnthropicApiArgs) -> Result<()> {
     Ok(())
 }
 
+fn intersect_period_common(
+    common: &CommonArgs,
+    period_since: Option<chrono::NaiveDate>,
+    period_until: Option<chrono::NaiveDate>,
+) -> Result<Option<CommonArgs>> {
+    let user_since = parse_date_filter(common.since.as_deref())?;
+    let user_until = parse_date_filter(common.until.as_deref())?;
+    if let (Some(s), Some(u)) = (user_since, user_until)
+        && s > u
+    {
+        bail!("--since must be earlier than or equal to --until");
+    }
+    let eff_since = match (period_since, user_since) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    let eff_until = match (period_until, user_until) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    if let (Some(s), Some(u)) = (eff_since, eff_until)
+        && s > u
+    {
+        return Ok(None);
+    }
+    let mut out = common.clone();
+    out.since = eff_since.map(|d| d.to_string());
+    out.until = eff_until.map(|d| d.to_string());
+    Ok(Some(out))
+}
+
 #[cfg(feature = "cli")]
 pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
+    use chrono::Datelike;
     use std::str::FromStr;
 
     let use_json = should_emit_json(&args.common);
@@ -1430,77 +1551,38 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
     let wue = 4.30;
 
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
-
-    use chrono::Datelike;
-
-    let today_date = local_date(Utc::now(), &tz);
+    let today_date = tz.now_date();
     let monday_date = week_start(today_date, crate::cli::WeekStart::Monday);
     let month_start_date =
         chrono::NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1)
             .unwrap_or(today_date);
     let seven_days_ago = today_date - chrono::TimeDelta::days(7);
 
-    let events = loaded.events;
+    let (period_since, period_until) = match args.period {
+        CarbonPeriodArg::Today => (Some(today_date), Some(today_date)),
+        CarbonPeriodArg::Daily => (Some(seven_days_ago), None),
+        CarbonPeriodArg::Weekly => (Some(monday_date), None),
+        CarbonPeriodArg::Monthly => (Some(month_start_date), None),
+        CarbonPeriodArg::All | CarbonPeriodArg::About => (None, None),
+    };
 
-    // Filter events based on period (today, daily, weekly, monthly) and since/until
-    let events = events
-        .into_iter()
-        .filter(|e| {
-            let event_date = local_date(e.timestamp, &tz);
-            match args.period {
-                CarbonPeriodArg::Today => {
-                    if event_date != today_date {
-                        return false;
-                    }
-                }
-                CarbonPeriodArg::Daily => {
-                    if event_date < seven_days_ago {
-                        return false;
-                    }
-                }
-                CarbonPeriodArg::Weekly => {
-                    if event_date < monday_date {
-                        return false;
-                    }
-                }
-                CarbonPeriodArg::Monthly => {
-                    if event_date < month_start_date {
-                        return false;
-                    }
-                }
-                CarbonPeriodArg::All | CarbonPeriodArg::About => {}
-            }
-            if let Some(since) = &args.common.since {
-                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
-                    if event_date < dt {
-                        return false;
-                    }
-                }
-            }
-            if let Some(until) = &args.common.until {
-                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
-                    if event_date > dt {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .collect::<Vec<_>>();
+    let events = match intersect_period_common(&args.common, period_since, period_until)? {
+        Some(effective_common) => load_usage_unsorted(&effective_common, &tz).await?.events,
+        None => Vec::new(),
+    };
 
-    // Calculate overall metrics
-    let mut total_metrics = EnvironmentalMetrics::calculate_events(&events, grid, pue, wue);
-    let mut total_tokens: u64 = events.iter().map(|e| e.usage.total_tokens()).sum();
-    let mut total_cost: f64 = events.iter().map(|e| e.usage.cost_usd).sum();
-
-    // Group events by model for per-model breakdown
-    let mut model_events: BTreeMap<String, Vec<&UsageEvent>> = BTreeMap::new();
+    // Aggregate per model once without cloning UsageEvent values; carbon math is linear per model.
+    let mut by_model: HashMap<&str, (usize, UsageAccumulator)> = HashMap::new();
+    let mut total_tokens: u64 = 0;
+    let mut total_cost: f64 = 0.0;
     for event in &events {
-        model_events
-            .entry(event.model.clone())
-            .or_default()
-            .push(event);
+        total_tokens += event.usage.total_tokens();
+        total_cost += event.usage.cost_usd;
+        let entry = by_model
+            .entry(event.model.as_str())
+            .or_insert_with(|| (0, UsageAccumulator::default()));
+        entry.0 += 1;
+        entry.1.add(event.usage);
     }
 
     #[derive(Serialize)]
@@ -1514,17 +1596,17 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         water_ml: f64,
     }
 
-    let mut model_rows: Vec<CarbonModelRow> = Vec::new();
-    for (model, evs) in &model_events {
-        let evs_owned: Vec<UsageEvent> = evs.iter().map(|&e| e.clone()).collect();
-        let m = EnvironmentalMetrics::calculate_events(&evs_owned, grid, pue, wue);
-        let tok: u64 = evs.iter().map(|e| e.usage.total_tokens()).sum();
-        let cost: f64 = evs.iter().map(|e| e.usage.cost_usd).sum();
+    let mut total_metrics = EnvironmentalMetrics::default();
+    let mut model_rows: Vec<CarbonModelRow> = Vec::with_capacity(by_model.len());
+    for (model, (event_count, acc)) in by_model {
+        let counts = acc.to_counts();
+        let m = EnvironmentalMetrics::calculate_counts(&counts, model, grid, pue, wue);
+        total_metrics.add(&m);
         model_rows.push(CarbonModelRow {
-            model: model.clone(),
-            events: evs.len(),
-            tokens: tok,
-            cost_usd: cost,
+            model: model.to_string(),
+            events: event_count,
+            tokens: counts.total_tokens,
+            cost_usd: counts.cost_usd,
             energy_kwh: m.energy_kwh,
             carbon_gco2e: m.carbon_gco2e,
             water_ml: m.water_ml,
@@ -1533,10 +1615,12 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
 
     // Apply history baseline and overrides if enabled
     if !args.common.no_history_overrides || !args.common.no_history_db {
+        let mut day_cache = LocalDayCache::new(&tz);
         let mut monthly_rows = build_group_rows(
             &events,
             |event| {
-                local_date(event.timestamp, &tz)
+                day_cache
+                    .date_of(event.timestamp)
                     .with_day(1)
                     .expect("months start on day one")
             },
@@ -1544,12 +1628,7 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         );
         let raw_month_totals = monthly_rows
             .iter()
-            .map(|row| {
-                (
-                    row.date.clone(),
-                    (row.totals.total_tokens, row.totals.cost_usd),
-                )
-            })
+            .map(|row| (row.date.clone(), row.totals.clone()))
             .collect::<HashMap<_, _>>();
         apply_group_history(
             &mut monthly_rows,
@@ -1570,12 +1649,11 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
                 continue;
             }
 
-            let (raw_month_tokens, raw_month_cost) =
-                raw_month_totals.get(&row.date).copied().unwrap_or_default();
+            let raw = raw_month_totals.get(&row.date).cloned().unwrap_or_default();
 
-            if row.totals.total_tokens > raw_month_tokens {
-                let delta_tokens = row.totals.total_tokens - raw_month_tokens;
-                let delta_cost = (row.totals.cost_usd - raw_month_cost).max(0.0);
+            if row.totals.total_tokens > raw.total_tokens {
+                let delta_tokens = row.totals.total_tokens - raw.total_tokens;
+                let delta_cost = (row.totals.cost_usd - raw.cost_usd).max(0.0);
                 total_tokens += delta_tokens;
                 total_cost += delta_cost;
 
@@ -1586,16 +1664,16 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
                     .cloned()
                     .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
                 let delta_counts = crate::types::TokenCounts {
-                    input_tokens: row
+                    input_tokens: row.totals.input_tokens.saturating_sub(raw.input_tokens),
+                    cache_creation_input_tokens: row
                         .totals
-                        .input_tokens
-                        .saturating_sub(raw_month_tokens / 10),
-                    cache_creation_input_tokens: row.totals.cache_creation_input_tokens,
+                        .cache_creation_input_tokens
+                        .saturating_sub(raw.cache_creation_input_tokens),
                     cache_read_input_tokens: row
                         .totals
                         .cache_read_input_tokens
-                        .saturating_sub(raw_month_tokens.saturating_sub(raw_month_tokens / 10)),
-                    output_tokens: row.totals.output_tokens,
+                        .saturating_sub(raw.cache_read_input_tokens),
+                    output_tokens: row.totals.output_tokens.saturating_sub(raw.output_tokens),
                     reasoning_output_tokens: 0,
                     total_tokens: delta_tokens,
                     cost_usd: delta_cost,
@@ -1630,7 +1708,11 @@ pub(crate) async fn run_carbon(args: CarbonArgs) -> Result<()> {
         }
     }
 
-    model_rows.sort_by(|a, b| b.carbon_gco2e.partial_cmp(&a.carbon_gco2e).unwrap());
+    model_rows.sort_by(|a, b| {
+        b.carbon_gco2e
+            .partial_cmp(&a.carbon_gco2e)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let equiv = EnvironmentalEquivalences::from_metrics(&total_metrics);
     let gco2_per_1k = if total_tokens > 0 {
@@ -1960,9 +2042,9 @@ pub(crate) async fn run_scale(args: ScaleArgs) -> Result<()> {
 
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
 
     if args.tui {
+        let loaded = load_usage(&args.common, &tz).await?;
         return crate::dashboard_tui::run_dashboard_tui(
             loaded.events,
             tz,
@@ -1973,67 +2055,32 @@ pub(crate) async fn run_scale(args: ScaleArgs) -> Result<()> {
         );
     }
 
-    let today_date = local_date(Utc::now(), &tz);
+    let today_date = tz.now_date();
     let monday_date = week_start(today_date, crate::cli::WeekStart::Monday);
     let month_start_date =
         chrono::NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1)
             .unwrap_or(today_date);
     let seven_days_ago = today_date - chrono::TimeDelta::days(7);
 
-    let events = loaded
-        .events
-        .into_iter()
-        .filter(|e| {
-            if let Some(project_filter) = args.project.as_deref() {
-                if !e
-                    .project
-                    .as_deref()
-                    .is_some_and(|p| p.contains(project_filter))
-                {
-                    return false;
-                }
-            }
-            let event_date = local_date(e.timestamp, &tz);
-            match args.period {
-                ScalePeriodArg::Today => {
-                    if event_date != today_date {
-                        return false;
-                    }
-                }
-                ScalePeriodArg::Daily => {
-                    if event_date < seven_days_ago {
-                        return false;
-                    }
-                }
-                ScalePeriodArg::Weekly => {
-                    if event_date < monday_date {
-                        return false;
-                    }
-                }
-                ScalePeriodArg::Monthly => {
-                    if event_date < month_start_date {
-                        return false;
-                    }
-                }
-                ScalePeriodArg::All => {}
-            }
-            if let Some(since) = &args.common.since {
-                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
-                    if event_date < dt {
-                        return false;
-                    }
-                }
-            }
-            if let Some(until) = &args.common.until {
-                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
-                    if event_date > dt {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .collect::<Vec<_>>();
+    let (period_since, period_until) = match args.period {
+        ScalePeriodArg::Today => (Some(today_date), Some(today_date)),
+        ScalePeriodArg::Daily => (Some(seven_days_ago), None),
+        ScalePeriodArg::Weekly => (Some(monday_date), None),
+        ScalePeriodArg::Monthly => (Some(month_start_date), None),
+        ScalePeriodArg::All => (None, None),
+    };
+
+    let mut events = match intersect_period_common(&args.common, period_since, period_until)? {
+        Some(effective_common) => load_usage_unsorted(&effective_common, &tz).await?.events,
+        None => Vec::new(),
+    };
+    if let Some(project_filter) = args.project.as_deref() {
+        events.retain(|e| {
+            e.project
+                .as_deref()
+                .is_some_and(|p| p.contains(project_filter))
+        });
+    }
 
     let scale = InformationScale::from_events(&events);
 
@@ -2150,9 +2197,9 @@ pub struct RankLeaderboardOut {
 pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
 
     if args.tui {
+        let loaded = load_usage(&args.common, &tz).await?;
         return crate::dashboard_tui::run_dashboard_tui(
             loaded.events,
             tz,
@@ -2163,100 +2210,80 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         );
     }
 
-    let events = loaded
-        .events
-        .into_iter()
-        .filter(|e| {
-            if let Some(project_filter) = args.project.as_deref() {
-                if !e
-                    .project
-                    .as_deref()
-                    .is_some_and(|p| p.contains(project_filter))
-                {
-                    return false;
-                }
-            }
-            if let Some(since) = &args.common.since {
-                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
-                    let event_date = local_date(e.timestamp, &tz);
-                    if event_date < dt {
-                        return false;
-                    }
-                }
-            }
-            if let Some(until) = &args.common.until {
-                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
-                    let event_date = local_date(e.timestamp, &tz);
-                    if event_date > dt {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .collect::<Vec<_>>();
+    let loaded = load_usage_unsorted(&args.common, &tz).await?;
+    let project_filter = args.project.as_deref();
+    let mut day_cache = LocalDayCache::new(&tz);
 
     let mut total_tokens = 0u64;
     let mut total_cost = 0.0;
-    let mut model_tokens: HashMap<String, u64> = HashMap::new();
-    let mut model_cost: HashMap<String, f64> = HashMap::new();
-    let mut project_tokens: HashMap<String, u64> = HashMap::new();
-    let mut project_cost: HashMap<String, f64> = HashMap::new();
-    let mut project_model_tokens: HashMap<String, HashMap<String, u64>> = HashMap::new();
-    let mut day_tokens: HashMap<String, u64> = HashMap::new();
-    let mut day_cost: HashMap<String, f64> = HashMap::new();
-    let mut day_top_model: HashMap<String, HashMap<String, u64>> = HashMap::new();
-    let mut session_tokens: HashMap<String, u64> = HashMap::new();
-    let mut session_cost: HashMap<String, f64> = HashMap::new();
-    let mut session_meta: HashMap<String, (String, String)> = HashMap::new();
+    let mut model_stats: HashMap<&str, (u64, f64)> = HashMap::new();
+    let mut project_stats: HashMap<&str, (u64, f64, HashMap<&str, u64>)> = HashMap::new();
+    let mut day_stats: HashMap<chrono::NaiveDate, (u64, f64, HashMap<&str, u64>)> = HashMap::new();
+    let mut session_stats: HashMap<&str, (u64, f64, chrono::NaiveDate, &str, DateTime<Utc>)> =
+        HashMap::new();
 
-    for e in &events {
+    for e in &loaded.events {
+        if let Some(pf) = project_filter
+            && !e.project.as_deref().is_some_and(|p| p.contains(pf))
+        {
+            continue;
+        }
         let tok = e.usage.total_tokens();
         let cost = e.usage.cost_usd;
         total_tokens += tok;
         total_cost += cost;
 
-        *model_tokens.entry(e.model.clone()).or_insert(0) += tok;
-        *model_cost.entry(e.model.clone()).or_insert(0.0) += cost;
+        let model = e.model.as_str();
+        let ms = model_stats.entry(model).or_insert((0, 0.0));
+        ms.0 += tok;
+        ms.1 += cost;
 
-        let proj = e.project.as_deref().unwrap_or("-").to_string();
-        *project_tokens.entry(proj.clone()).or_insert(0) += tok;
-        *project_cost.entry(proj.clone()).or_insert(0.0) += cost;
-        *project_model_tokens
+        let proj = e.project.as_deref().unwrap_or("-");
+        let ps = project_stats
             .entry(proj)
-            .or_default()
-            .entry(e.model.clone())
-            .or_insert(0) += tok;
+            .or_insert_with(|| (0, 0.0, HashMap::new()));
+        ps.0 += tok;
+        ps.1 += cost;
+        *ps.2.entry(model).or_insert(0) += tok;
 
-        let day_str = local_date(e.timestamp, &tz).format("%Y-%m-%d").to_string();
-        *day_tokens.entry(day_str.clone()).or_insert(0) += tok;
-        *day_cost.entry(day_str.clone()).or_insert(0.0) += cost;
-        *day_top_model
-            .entry(day_str)
-            .or_default()
-            .entry(e.model.clone())
-            .or_insert(0) += tok;
+        let day = day_cache.date_of(e.timestamp);
+        let ds = day_stats
+            .entry(day)
+            .or_insert_with(|| (0, 0.0, HashMap::new()));
+        ds.0 += tok;
+        ds.1 += cost;
+        *ds.2.entry(model).or_insert(0) += tok;
 
-        if !e.session.trim().is_empty() {
-            *session_tokens.entry(e.session.clone()).or_insert(0) += tok;
-            *session_cost.entry(e.session.clone()).or_insert(0.0) += cost;
-            session_meta.entry(e.session.clone()).or_insert_with(|| {
-                let d = local_date(e.timestamp, &tz).format("%Y-%m-%d").to_string();
-                let p = e.project.as_deref().unwrap_or("-").to_string();
-                (d, p)
-            });
+        let sess = e.session.as_str();
+        if !sess.trim().is_empty() {
+            match session_stats.get_mut(sess) {
+                Some(ss) => {
+                    ss.0 += tok;
+                    ss.1 += cost;
+                    if e.timestamp < ss.4 {
+                        ss.2 = day;
+                        ss.3 = proj;
+                        ss.4 = e.timestamp;
+                    }
+                }
+                None => {
+                    session_stats.insert(sess, (tok, cost, day, proj, e.timestamp));
+                }
+            }
         }
     }
 
-    let mut sorted_models: Vec<(String, u64)> = model_tokens.into_iter().collect();
+    let mut sorted_models: Vec<(&str, u64, f64)> = model_stats
+        .into_iter()
+        .map(|(k, (tok, cost))| (k, tok, cost))
+        .collect();
     sorted_models.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_models: Vec<RankModelItem> = sorted_models
         .into_iter()
         .take(args.limit)
         .enumerate()
-        .map(|(i, (model, tok))| {
-            let cost = model_cost.get(&model).copied().unwrap_or(0.0);
+        .map(|(i, (model, tok, cost))| {
             let share_pct = if total_tokens > 0 {
                 (tok as f64 / total_tokens as f64) * 100.0
             } else {
@@ -2281,7 +2308,7 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
             .to_string();
             RankModelItem {
                 rank: i + 1,
-                model,
+                model: model.to_string(),
                 tokens: tok,
                 share_pct,
                 cost_usd: cost,
@@ -2291,25 +2318,28 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         })
         .collect();
 
-    let mut sorted_projects: Vec<(String, u64)> = project_tokens.into_iter().collect();
+    let mut sorted_projects: Vec<(&str, u64, f64, HashMap<&str, u64>)> = project_stats
+        .into_iter()
+        .map(|(proj, (tok, cost, pm))| (proj, tok, cost, pm))
+        .collect();
     sorted_projects.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_projects: Vec<RankProjectItem> = sorted_projects
         .into_iter()
         .take(args.limit)
         .enumerate()
-        .map(|(i, (proj, tok))| {
-            let cost = project_cost.get(&proj).copied().unwrap_or(0.0);
+        .map(|(i, (proj, tok, cost, pm))| {
             let share_pct = if total_tokens > 0 {
                 (tok as f64 / total_tokens as f64) * 100.0
             } else {
                 0.0
             };
-            let primary_model = project_model_tokens
-                .get(&proj)
-                .and_then(|m| m.iter().max_by_key(|(_, t)| **t).map(|(k, _)| k.clone()))
+            let primary_model = pm
+                .into_iter()
+                .max_by_key(|(_, t)| *t)
+                .map(|(k, _)| k.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            let clean_proj = crate::insights::sanitize_project_label(&proj);
+            let clean_proj = crate::insights::sanitize_project_label(proj);
             RankProjectItem {
                 rank: i + 1,
                 project: clean_proj,
@@ -2321,22 +2351,25 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         })
         .collect();
 
-    let mut sorted_days: Vec<(String, u64)> = day_tokens.into_iter().collect();
+    let mut sorted_days: Vec<(chrono::NaiveDate, u64, f64, HashMap<&str, u64>)> = day_stats
+        .into_iter()
+        .map(|(d, (tok, cost, dm))| (d, tok, cost, dm))
+        .collect();
     sorted_days.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let peak_days: Vec<RankDayItem> = sorted_days
         .into_iter()
         .take(args.limit)
         .enumerate()
-        .map(|(i, (date, tok))| {
-            let cost = day_cost.get(&date).copied().unwrap_or(0.0);
-            let top_model = day_top_model
-                .get(&date)
-                .and_then(|m| m.iter().max_by_key(|(_, t)| **t).map(|(k, _)| k.clone()))
+        .map(|(i, (day, tok, cost, dm))| {
+            let top_model = dm
+                .into_iter()
+                .max_by_key(|(_, t)| *t)
+                .map(|(k, _)| k.to_string())
                 .unwrap_or_else(|| "-".to_string());
             RankDayItem {
                 rank: i + 1,
-                date,
+                date: day.format("%Y-%m-%d").to_string(),
                 tokens: tok,
                 cost_usd: cost,
                 top_model,
@@ -2344,25 +2377,23 @@ pub(crate) async fn run_rank(args: RankArgs) -> Result<()> {
         })
         .collect();
 
-    let mut sorted_sessions: Vec<(String, u64)> = session_tokens.into_iter().collect();
+    let mut sorted_sessions: Vec<(&str, u64, f64, chrono::NaiveDate, &str)> = session_stats
+        .into_iter()
+        .map(|(s, (tok, cost, day, proj, _))| (s, tok, cost, day, proj))
+        .collect();
     sorted_sessions.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let top_sessions: Vec<RankSessionItem> = sorted_sessions
         .into_iter()
         .take(args.limit)
         .enumerate()
-        .map(|(i, (session, tok))| {
-            let cost = session_cost.get(&session).copied().unwrap_or(0.0);
-            let (date, proj) = session_meta
-                .get(&session)
-                .cloned()
-                .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
-            let clean_session = crate::insights::sanitize_session_label(&session);
-            let clean_proj = crate::insights::sanitize_project_label(&proj);
+        .map(|(i, (session, tok, cost, day, proj))| {
+            let clean_session = crate::insights::sanitize_session_label(session);
+            let clean_proj = crate::insights::sanitize_project_label(proj);
             RankSessionItem {
                 rank: i + 1,
                 session: clean_session,
-                date,
+                date: day.format("%Y-%m-%d").to_string(),
                 project: clean_proj,
                 tokens: tok,
                 cost_usd: cost,
@@ -2471,9 +2502,9 @@ fn print_rank_leaderboard(out: &RankLeaderboardOut) {
 pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
     let use_json = should_emit_json(&args.common);
     let tz = parse_timezone_mode(args.common.timezone.as_deref())?;
-    let loaded = load_usage(&args.common, &tz).await?;
 
     if args.tui {
+        let loaded = load_usage(&args.common, &tz).await?;
         return crate::dashboard_tui::run_dashboard_tui(
             loaded.events,
             tz,
@@ -2484,54 +2515,42 @@ pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
         );
     }
 
-    let events = loaded
-        .events
-        .into_iter()
-        .filter(|e| {
-            if let Some(project_filter) = args.project.as_deref() {
-                if !e
-                    .project
-                    .as_deref()
-                    .is_some_and(|p| p.contains(project_filter))
-                {
-                    return false;
-                }
-            }
-            if let Some(since) = &args.common.since {
-                if let Ok(Some(dt)) = parse_date_filter(Some(since.as_str())) {
-                    let event_date = local_date(e.timestamp, &tz);
-                    if event_date < dt {
-                        return false;
-                    }
-                }
-            }
-            if let Some(until) = &args.common.until {
-                if let Ok(Some(dt)) = parse_date_filter(Some(until.as_str())) {
-                    let event_date = local_date(e.timestamp, &tz);
-                    if event_date > dt {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .collect::<Vec<_>>();
+    let loaded = load_usage_unsorted(&args.common, &tz).await?;
+    let project_filter = args.project.as_deref();
+    type RawBreakdownMap<'a> = HashMap<&'a str, (u64, f64, HashMap<&'a str, (u64, f64)>)>;
 
     if args.by_model {
-        // Group by Model -> Projects
-        let mut model_map: BreakdownMap = HashMap::new();
-        for e in &events {
+        // Group by borrowed Model -> raw Project first, then sanitize each unique raw project once.
+        let mut raw_model_map: RawBreakdownMap<'_> = HashMap::new();
+        for e in &loaded.events {
+            if let Some(pf) = project_filter
+                && !e.project.as_deref().is_some_and(|p| p.contains(pf))
+            {
+                continue;
+            }
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
-            let proj = crate::insights::sanitize_project_label(e.project.as_deref().unwrap_or("-"));
-            let entry = model_map
-                .entry(e.model.clone())
+            let raw_proj = e.project.as_deref().unwrap_or("-");
+            let entry = raw_model_map
+                .entry(e.model.as_str())
                 .or_insert_with(|| (0, 0.0, HashMap::new()));
             entry.0 += tok;
             entry.1 += cost;
-            let sub = entry.2.entry(proj).or_insert((0, 0.0));
+            let sub = entry.2.entry(raw_proj).or_insert((0, 0.0));
             sub.0 += tok;
             sub.1 += cost;
+        }
+
+        let mut model_map: BreakdownMap = HashMap::with_capacity(raw_model_map.len());
+        for (model, (tok, cost, raw_subs)) in raw_model_map {
+            let mut clean_subs = HashMap::with_capacity(raw_subs.len());
+            for (raw_proj, (st, sc)) in raw_subs {
+                let clean_proj = crate::insights::sanitize_project_label(raw_proj);
+                let sub = clean_subs.entry(clean_proj).or_insert((0, 0.0));
+                sub.0 += st;
+                sub.1 += sc;
+            }
+            model_map.insert(model.to_string(), (tok, cost, clean_subs));
         }
 
         if use_json {
@@ -2546,20 +2565,40 @@ pub(crate) async fn run_breakdown(args: BreakdownArgs) -> Result<()> {
             Ok(())
         }
     } else {
-        // Group by Project -> Models
-        let mut project_map: BreakdownMap = HashMap::new();
-        for e in &events {
+        // Group by borrowed raw Project -> Model first, then sanitize each unique raw project once.
+        let mut raw_project_map: RawBreakdownMap<'_> = HashMap::new();
+        for e in &loaded.events {
+            if let Some(pf) = project_filter
+                && !e.project.as_deref().is_some_and(|p| p.contains(pf))
+            {
+                continue;
+            }
             let tok = e.usage.total_tokens();
             let cost = e.usage.cost_usd;
-            let proj = crate::insights::sanitize_project_label(e.project.as_deref().unwrap_or("-"));
-            let entry = project_map
-                .entry(proj)
+            let raw_proj = e.project.as_deref().unwrap_or("-");
+            let entry = raw_project_map
+                .entry(raw_proj)
                 .or_insert_with(|| (0, 0.0, HashMap::new()));
             entry.0 += tok;
             entry.1 += cost;
-            let sub = entry.2.entry(e.model.clone()).or_insert((0, 0.0));
+            let sub = entry.2.entry(e.model.as_str()).or_insert((0, 0.0));
             sub.0 += tok;
             sub.1 += cost;
+        }
+
+        let mut project_map: BreakdownMap = HashMap::with_capacity(raw_project_map.len());
+        for (raw_proj, (tok, cost, raw_subs)) in raw_project_map {
+            let clean_proj = crate::insights::sanitize_project_label(raw_proj);
+            let entry = project_map
+                .entry(clean_proj)
+                .or_insert_with(|| (0, 0.0, HashMap::new()));
+            entry.0 += tok;
+            entry.1 += cost;
+            for (model, (st, sc)) in raw_subs {
+                let sub = entry.2.entry(model.to_string()).or_insert((0, 0.0));
+                sub.0 += st;
+                sub.1 += sc;
+            }
         }
 
         if use_json {

@@ -98,10 +98,14 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 | **Gemini CLI** | Log / JSON | ✅ | ✅ | — | `tu gemini` |
 | **OpenCode** | SQLite / JSON | ✅ | ✅ | — | `tu opencode` |
 | **Grok (xAI)** | Session / JSONL | ✅ | ✅ | ✅ (`tu grok`) | `tu grok` |
+| **Pi** | Session JSONL | ✅ | ✅ | — | `tu pi` |
+| **Muse Code** | Session JSONL | ✅ | ✅ | — | `tu muse` |
 | **DeepSeek API** | API Balance | — | — | ✅ (`tu deepseek`) | `tu deepseek` |
 | **OpenRouter API** | API Balance | — | — | ✅ (`tu openrouter`) | `tu openrouter` |
 | **Kimi (Moonshot)** | API Balance | — | — | ✅ (`tu kimi`) | `tu kimi` |
 | **Anthropic API** | API Usage | — | — | ✅ (`tu anthropic-api`) | `tu anthropic-api` |
+
+See [`docs/providers/`](https://github.com/FelixIsaac/tokenusage/blob/main/docs/providers/README.md) for documented session-log schemas, token semantics, deduplication rules, and pricing resolution across all providers.
 
 ### 🗺️ Provider Landscape & Ecosystem Support Policy
 
@@ -111,6 +115,8 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 | **OpenAI Codex** | Supported | Core | Full session tracking and official OAuth quota probe. |
 | **Antigravity / AGY** | Supported | Core | Protobuf session parser + live plan tier / quota limits. |
 | **Grok Build (xAI)** | Supported | Core | Full session (`~/.grok/sessions`) + unified log parser. |
+| **Pi** | Supported | Core | Session JSONL parser (`~/.pi/agent/sessions`). |
+| **Muse Code** | Supported | Core | Runtime session JSONL parser (`$MUSE_HOME/sessions/**/session.jsonl`). |
 | **OpenCode** | Supported | Core | Dual SQLite DB + legacy message directory parsing. |
 | **Cursor CLI (`cursor-agent`)** | Under Evaluation | High | Popular CLI agent mode (`~/.cursor/chats`); candidate for next core provider. |
 | **Goose (Block / AAIF)** | Community | PR Welcome | Welcomed via community PR when test fixtures and spec are provided. |
@@ -369,9 +375,13 @@ Example `~/.config/tu/tu.json`:
 
 ## 🙏 Acknowledgements & Credits
 
-**tokenusage** was originally created by **[@hanbu97](https://github.com/hanbu97)** (`hanbu97/tokenusage`), who designed the original architecture and foundation for local AI log parsing. 
+**tokenusage** was originally created by **[@hanbu97](https://github.com/hanbu97)** (`hanbu97/tokenusage`), who designed the original architecture and foundation for local AI log parsing.
 
 All core credit for creating the initial tool belongs to the original author. This repository (**[FelixIsaac/tokenusage](https://github.com/FelixIsaac/tokenusage)**) actively maintains, optimizes, and expands the project with multi-agent support, cross-platform installers, and real-time quota telemetry.
+
+Additional ecosystem credits:
+- **[T3 Code (`pingdotgg/t3code`)](https://github.com/pingdotgg/t3code)** (MIT): Reference session-log research and edge-case validation for Pi (`~/.pi/agent/sessions`), Muse Code, Grok Build, Claude Code multi-row deduplication, Codex request/tier edge cases, OpenCode, Antigravity, and LiteLLM pricing rules.
+- **[LiteLLM (`BerriAI/litellm`)](https://github.com/BerriAI/litellm)** & **[OpenRouter](https://openrouter.ai)**: Live model pricing feeds covering 1-hour cache writes, context-window pricing tiers, and priority/fast/ultrafast speed rates.
 
 ---
 

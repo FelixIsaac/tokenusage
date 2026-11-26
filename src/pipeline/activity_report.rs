@@ -66,6 +66,7 @@ pub(super) struct ActivityReportBuildOptions<'a> {
     pub(super) start: NaiveDate,
     pub(super) end: NaiveDate,
     pub(super) stats: ParseStats,
+    pub(super) pricing: &'a PricingTable,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,8 +217,9 @@ pub(super) fn build_activity_daily_report(
     options: ActivityReportBuildOptions<'_>,
 ) -> DailyReport {
     let mut grouped: BTreeMap<NaiveDate, GroupAggregate> = BTreeMap::new();
+    let mut day_cache = LocalDayCache::new(options.tz);
     for event in events {
-        let day = local_date(event.timestamp, options.tz);
+        let day = day_cache.date_of(event.timestamp);
         grouped.entry(day).or_default().add_event(event);
     }
 
@@ -281,7 +283,7 @@ pub(super) fn build_activity_daily_report(
 
     let activity_totals = dataset.summary_for_range(options.start, options.end);
 
-    build_report_from_rows(rows, activity_totals, options.stats, None)
+    build_report_from_rows(rows, activity_totals, options.stats, None, options.pricing)
 }
 
 pub(super) fn build_activity_overview(

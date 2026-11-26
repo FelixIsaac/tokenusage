@@ -168,7 +168,16 @@ pub struct TrendPeriod {
 }
 
 impl TrendPeriod {
+    #[allow(dead_code)]
     pub(crate) fn from_rows(date: String, rows: &[&DailyRow]) -> Self {
+        Self::from_rows_with_pricing(date, rows, &PricingTable::default_table())
+    }
+
+    pub(crate) fn from_rows_with_pricing(
+        date: String,
+        rows: &[&DailyRow],
+        pricing: &PricingTable,
+    ) -> Self {
         let mut totals = TokenCounts::default();
         let mut sources = BTreeMap::<String, TokenCounts>::new();
         let mut models = BTreeMap::<String, TokenCounts>::new();
@@ -197,7 +206,7 @@ impl TrendPeriod {
             cache_creation_input_tokens: totals.cache_creation_input_tokens,
             cache_hit_pct: cache_hit_pct(&totals),
             cost_per_mtoken: cost_per_mtoken(&totals),
-            cache_savings_usd: cache_savings(&models, &totals),
+            cache_savings_usd: cache_savings(&models, &totals, pricing),
             cache_reuse_ratio: cache_reuse_ratio(&totals),
             sources,
             models,
@@ -270,6 +279,20 @@ pub fn compute_report_insights(
     totals: &TokenCounts,
     period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
 ) -> ReportInsights {
+    compute_report_insights_with_pricing(
+        rows,
+        totals,
+        period_attribution,
+        &PricingTable::default_table(),
+    )
+}
+
+pub(crate) fn compute_report_insights_with_pricing(
+    rows: &[DailyRow],
+    totals: &TokenCounts,
+    period_attribution: Option<&BTreeMap<String, PeriodAttribution>>,
+    pricing: &PricingTable,
+) -> ReportInsights {
     let total_tokens = totals.total_tokens;
     let cache_tokens = totals.cache_creation_input_tokens + totals.cache_read_input_tokens;
     let output_tokens = totals.output_tokens + totals.reasoning_output_tokens;
@@ -327,7 +350,7 @@ pub fn compute_report_insights(
     let spikes = token_spikes(rows, 3, period_attribution);
     let anomalies = token_anomalies(rows, 3, period_attribution);
     let (mix_tokens_pct, mix_cost_pct) = provider_mix(rows);
-    let cache_savings_usd = cache_savings(rows.iter().flat_map(|row| &row.models), totals);
+    let cache_savings_usd = cache_savings(rows.iter().flat_map(|row| &row.models), totals, pricing);
     let cache_reuse_ratio = cache_reuse_ratio(totals);
     let cost_concentration = cost_concentration(&mix_tokens_pct, &mix_cost_pct);
 
@@ -371,9 +394,9 @@ const CACHE_PRICING_COVERAGE_MIN: f64 = 60.0;
 fn cache_savings<'a>(
     models: impl IntoIterator<Item = (&'a String, &'a TokenCounts)>,
     totals: &TokenCounts,
+    pricing: &PricingTable,
 ) -> Option<f64> {
     let reported_cache_tokens = totals.cache_read_input_tokens + totals.cache_creation_input_tokens;
-    let pricing = PricingTable::default_table();
     let mut net_savings = 0.0;
     let mut modeled_cache_tokens = 0u64;
     let mut priced_tokens = 0u64;
@@ -478,6 +501,8 @@ fn parse_source_kind(raw: &str) -> Option<SourceKind> {
         "gemini" => Some(SourceKind::Gemini),
         "opencode" => Some(SourceKind::OpenCode),
         "grok" => Some(SourceKind::Grok),
+        "pi" => Some(SourceKind::Pi),
+        "muse" => Some(SourceKind::Muse),
         _ => None,
     }
 }
@@ -887,7 +912,8 @@ mod tests {
             ..TokenCounts::default()
         };
         let row = row_with_model("2026-05-01", "claude-sonnet-4-6", counts);
-        let savings = cache_savings(&row.models, &row.totals);
+        let default_pricing = PricingTable::default_table();
+        let savings = cache_savings(&row.models, &row.totals, &default_pricing);
         // reads saved: 10M * (3.0 - 0.3)/1e6 = 27.0 ; write premium: 1M * (3.75 - 3.0)/1e6 = 0.75
         let expected = 27.0 - 0.75;
         assert!(
@@ -900,7 +926,7 @@ mod tests {
         // A history override can add cache volume without any model breakdown.
         let mut totals = row.totals;
         totals.cache_read_input_tokens *= 2;
-        assert!(cache_savings(&row.models, &totals).is_none());
+        assert!(cache_savings(&row.models, &totals, &default_pricing).is_none());
     }
 
     #[test]
@@ -913,8 +939,34 @@ mod tests {
             ..TokenCounts::default()
         };
         let row = row_with_model("2026-05-01", "some-unlisted-model", counts);
-        assert!(cache_savings(&row.models, &row.totals).is_none());
+        let default_pricing = PricingTable::default_table();
+        assert!(cache_savings(&row.models, &row.totals, &default_pricing).is_none());
         assert_eq!(cache_reuse_ratio(&row.totals), Some(5.0));
+    }
+
+    #[test]
+    fn cache_economics_uses_supplied_pricing_table_rates() {
+        let counts = TokenCounts {
+            cache_read_input_tokens: 10_000_000,
+            cache_creation_input_tokens: 1_000_000,
+            total_tokens: 11_000_000,
+            ..TokenCounts::default()
+        };
+        let row = row_with_model("2026-05-01", "claude-opus-5-5", counts);
+        let mut custom = PricingTable::default_table();
+        custom.exact.insert(
+            "claude-opus-5-5".to_string(),
+            crate::types::PricingRate {
+                input_per_million: 4.0,
+                output_per_million: 20.0,
+                cache_creation_per_million: 5.0,
+                cache_read_per_million: 0.2,
+                ..Default::default()
+            },
+        );
+        // reads saved: 10M * (4.0 - 0.2)/1e6 = 38.0 ; write premium: 1M * (5.0 - 4.0)/1e6 = 1.0 -> 37.0
+        let savings = cache_savings(&row.models, &row.totals, &custom).unwrap();
+        assert!((savings - 37.0).abs() < 1e-6, "got {savings}");
     }
 
     #[test]

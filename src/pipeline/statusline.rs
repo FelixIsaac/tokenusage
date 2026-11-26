@@ -10,8 +10,38 @@ use crate::cli::{
 use crate::types::{SourceKind, TokenCounts, UsageEvent};
 
 use super::live::fetch_selected_official_limits;
-use super::parsing::load_usage;
+use super::parsing::load_usage_unsorted;
 use super::*;
+
+/// When the statusline only needs today's spend + active 5h block (no derived
+/// all-time session lookup needed, or `--cost-source cc`), bound `since` to
+/// yesterday so SQLite only reads recent session files instead of full history.
+fn effective_statusline_common(
+    args: &StatuslineArgs,
+    hook: Option<&StatuslineHookInput>,
+    session_id: Option<&str>,
+    tz: &TimeZoneMode,
+) -> CommonArgs {
+    let mut common = args.common.clone();
+    if common.since.is_some() {
+        return common;
+    }
+    let has_cc_cost = hook
+        .and_then(|h| h.cost.as_ref())
+        .and_then(|c| c.total_cost_usd)
+        .is_some();
+    let needs_full_session_history = session_id.is_some()
+        && match args.cost_source {
+            CostSource::Derived => true,
+            CostSource::Auto | CostSource::Both => !has_cc_cost,
+            CostSource::Cc => false,
+        };
+    if !needs_full_session_history {
+        let yesterday = tz.now_date() - chrono::TimeDelta::days(1);
+        common.since = Some(yesterday.to_string());
+    }
+    common
+}
 
 pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
     if let Some(StatuslineAction::Init(init)) = &args.action {
@@ -56,13 +86,15 @@ pub(crate) async fn run_statusline(args: StatuslineArgs) -> Result<()> {
         return Ok(());
     }
 
-    let loaded = load_usage(&args.common, &tz).await?;
-    let today = local_date(Utc::now(), &tz);
+    let effective_common = effective_statusline_common(&args, hook.as_ref(), session_id, &tz);
+    let loaded = load_usage_unsorted(&effective_common, &tz).await?;
+    let today = tz.now_date();
+    let mut day_cache = LocalDayCache::new(&tz);
 
     let today_totals = loaded
         .events
         .iter()
-        .filter(|e| local_date(e.timestamp, &tz) == today)
+        .filter(|e| day_cache.date_of(e.timestamp) == today)
         .fold(TokenCounts::default(), |mut acc, e| {
             acc.add_assign(e.usage.to_counts());
             acc
@@ -395,12 +427,14 @@ async fn compute_statusline_fields(
     session_id: Option<&str>,
     tz: &TimeZoneMode,
 ) -> Result<StatuslineFields> {
-    let loaded = load_usage(&args.common, tz).await?;
-    let today = local_date(Utc::now(), tz);
+    let effective_common = effective_statusline_common(args, hook, session_id, tz);
+    let loaded = load_usage_unsorted(&effective_common, tz).await?;
+    let today = tz.now_date();
+    let mut day_cache = LocalDayCache::new(tz);
     let today_totals = loaded
         .events
         .iter()
-        .filter(|e| local_date(e.timestamp, tz) == today)
+        .filter(|e| day_cache.date_of(e.timestamp) == today)
         .fold(TokenCounts::default(), |mut acc, e| {
             acc.add_assign(e.usage.to_counts());
             acc

@@ -22,7 +22,7 @@ use crate::types::{ActivitySummary, SourceKind, TokenCounts, UsageEvent};
 use super::block_report::build_block_json_report;
 use super::membership::*;
 use super::official::*;
-use super::parsing::load_usage;
+use super::parsing::load_usage_unsorted;
 use super::statusline::*;
 use super::*;
 
@@ -103,7 +103,7 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
     let window_secs = i64::from(args.session_length) * 3600;
     let token_limit_mode = parse_token_limit_mode(args.token_limit.as_deref())?;
     if args.smoke_check {
-        let loaded = load_usage(&args.common, &tz).await?;
+        let loaded = load_usage_unsorted(&args.common, &tz).await?;
         println!(
             "live-smoke-ok: events={} files={} parsed_lines={}",
             loaded.events.len(),
@@ -160,7 +160,8 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
         (None, None, None, None, None, None, None, None)
     };
 
-    let loaded = load_usage(&args.common, &tz).await?;
+    let loaded = load_usage_unsorted(&args.common, &tz).await?;
+    let pricing = loaded.pricing.clone();
     let now = Utc::now();
     let membership_estimate = estimate_membership_from_logs(&loaded.events, now, window_secs);
     let inferred_limit = membership_estimate
@@ -211,8 +212,8 @@ pub(crate) async fn run_blocks(args: BlocksArgs) -> Result<()> {
             .collect::<Vec<_>>();
 
         let totals = json_report.totals.clone();
-        let insights = Some(crate::insights::compute_report_insights(
-            &rows, &totals, None,
+        let insights = Some(crate::insights::compute_report_insights_with_pricing(
+            &rows, &totals, None, &pricing,
         ));
 
         let show = DailyReport {
@@ -996,7 +997,11 @@ pub(super) fn resolve_live_block_bounds(
                 .unwrap_or(default_window_secs);
             (reset, window)
         }
-        Some(SourceKind::Gemini) | Some(SourceKind::OpenCode) | Some(SourceKind::Grok) => {
+        Some(SourceKind::Gemini)
+        | Some(SourceKind::OpenCode)
+        | Some(SourceKind::Grok)
+        | Some(SourceKind::Pi)
+        | Some(SourceKind::Muse) => {
             return fallback;
         }
         None => return fallback,
@@ -1699,7 +1704,11 @@ pub(super) fn render_live_source_detail(
                     "Run `tu live {lower}` after using {label} to fetch limits.",
                 )));
             }
-            SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => {
+            SourceKind::Gemini
+            | SourceKind::OpenCode
+            | SourceKind::Grok
+            | SourceKind::Pi
+            | SourceKind::Muse => {
                 lines.push(Line::from(
                     "Official limits not implemented for this source.",
                 ));
@@ -2040,6 +2049,8 @@ pub(super) fn preferred_official_for_live<'a>(
                 Some(SourceKind::Gemini)
                 | Some(SourceKind::OpenCode)
                 | Some(SourceKind::Grok)
+                | Some(SourceKind::Pi)
+                | Some(SourceKind::Muse)
                 | None => Some(LiveOfficialRef::Codex(codex)),
             }
         }
@@ -2054,7 +2065,11 @@ fn official_for_source<'a>(
     match source {
         SourceKind::Codex => context.official_codex.map(LiveOfficialRef::Codex),
         SourceKind::Claude => context.official_claude.map(LiveOfficialRef::Claude),
-        SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => None,
+        SourceKind::Gemini
+        | SourceKind::OpenCode
+        | SourceKind::Grok
+        | SourceKind::Pi
+        | SourceKind::Muse => None,
     }
 }
 

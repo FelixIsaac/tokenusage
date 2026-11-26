@@ -55,6 +55,12 @@ struct CommonConfig {
     no_gemini: Option<bool>,
     #[serde(alias = "noOpencode")]
     no_opencode: Option<bool>,
+    #[serde(alias = "noGrok")]
+    no_grok: Option<bool>,
+    #[serde(alias = "noPi")]
+    no_pi: Option<bool>,
+    #[serde(alias = "noMuse")]
+    no_muse: Option<bool>,
     #[serde(alias = "noAntigravity")]
     no_antigravity: Option<bool>,
     #[serde(alias = "noHistoryOverrides")]
@@ -71,6 +77,12 @@ struct CommonConfig {
     gemini_data_dir: Option<Vec<String>>,
     #[serde(alias = "opencodeDataDir")]
     opencode_data_dir: Option<Vec<String>>,
+    #[serde(alias = "grokLogDir")]
+    grok_log_dir: Option<Vec<String>>,
+    #[serde(alias = "piSessionsDir")]
+    pi_sessions_dir: Option<Vec<String>>,
+    #[serde(alias = "museSessionsDir")]
+    muse_sessions_dir: Option<Vec<String>>,
     #[serde(alias = "ignorePath")]
     ignore_path: Option<Vec<String>>,
     #[serde(alias = "noDefaultIgnores")]
@@ -453,6 +465,9 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
     merge_if_false(&mut common.no_codex, cfg.no_codex);
     merge_if_false(&mut common.no_gemini, cfg.no_gemini);
     merge_if_false(&mut common.no_opencode, cfg.no_opencode);
+    merge_if_false(&mut common.no_grok, cfg.no_grok);
+    merge_if_false(&mut common.no_pi, cfg.no_pi);
+    merge_if_false(&mut common.no_muse, cfg.no_muse);
     merge_if_false(&mut common.no_antigravity, cfg.no_antigravity);
     merge_if_false(&mut common.no_history_overrides, cfg.no_history_overrides);
     merge_if_false(&mut common.no_history_db, cfg.no_history_db);
@@ -485,6 +500,21 @@ fn apply_common_config(common: &mut CommonArgs, cfg: Option<&CommonConfig>) {
         && let Some(values) = cfg.opencode_data_dir.as_ref()
     {
         common.opencode_data_dir = values.clone();
+    }
+    if common.grok_log_dir.is_empty()
+        && let Some(values) = cfg.grok_log_dir.as_ref()
+    {
+        common.grok_log_dir = values.clone();
+    }
+    if common.pi_sessions_dir.is_empty()
+        && let Some(values) = cfg.pi_sessions_dir.as_ref()
+    {
+        common.pi_sessions_dir = values.clone();
+    }
+    if common.muse_sessions_dir.is_empty()
+        && let Some(values) = cfg.muse_sessions_dir.as_ref()
+    {
+        common.muse_sessions_dir = values.clone();
     }
     if common.ignore_path.is_empty()
         && let Some(values) = cfg.ignore_path.as_ref()

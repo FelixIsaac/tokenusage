@@ -474,6 +474,8 @@ fn display_source_label(source: SourceKind) -> &'static str {
         SourceKind::Gemini => "Antigravity",
         SourceKind::OpenCode => "OpenCode",
         SourceKind::Grok => "Grok",
+        SourceKind::Pi => "Pi",
+        SourceKind::Muse => "Muse",
     }
 }
 

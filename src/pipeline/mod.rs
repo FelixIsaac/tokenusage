@@ -1,6 +1,7 @@
 #[cfg(feature = "cli")]
 mod activity_report;
 mod block_report;
+mod cache_codec;
 pub(crate) mod commands;
 #[cfg(feature = "cli")]
 mod display;
@@ -42,7 +43,7 @@ pub(crate) use statusline::run_statusline;
 #[cfg(feature = "cli")]
 pub(crate) use top::run_top;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[cfg(feature = "cli")]
 use std::io::IsTerminal;
 use std::io::Write;
@@ -64,7 +65,8 @@ use crate::insights::PeriodAttribution;
 use crate::output::print_report_table_with_options;
 use crate::types::{
     ActivitySummary, CodexRawUsage, DailyReport, DailyRow, DateFilter, DiscoveredFile, ParseStats,
-    PricingRate, PricingTable, SourceConfig, SourceKind, TokenCounts, UsageAccumulator, UsageEvent,
+    PricingContext, PricingRate, PricingTable, ServiceSpeed, SourceConfig, SourceKind, TokenCounts,
+    UsageAccumulator, UsageEvent,
 };
 
 /// Timezone strategy for date grouping.
@@ -112,6 +114,76 @@ impl TimeZoneMode {
     }
 }
 
+/// DST-safe single-day fast-path cache over [`TimeZoneMode`].
+///
+/// Repeated calls within the same local calendar day hit an integer timestamp
+/// bounds check without calling `chrono::Local` (`localtime_r`) or IANA offset
+/// lookups per event. Days whose 24-hour boundary verification fails (e.g. DST
+/// transitions) fall through directly to [`TimeZoneMode::date_of`].
+pub(super) struct LocalDayCache<'a> {
+    tz: &'a TimeZoneMode,
+    cached_start_secs: i64,
+    cached_end_secs: i64,
+    cached_day: NaiveDate,
+}
+
+impl<'a> LocalDayCache<'a> {
+    pub(super) fn new(tz: &'a TimeZoneMode) -> Self {
+        Self {
+            tz,
+            // Inverted bounds force a miss on the first call.
+            cached_start_secs: 1,
+            cached_end_secs: 0,
+            cached_day: NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date is valid"),
+        }
+    }
+
+    #[inline]
+    pub(super) fn date_of(&mut self, ts: DateTime<Utc>) -> NaiveDate {
+        if matches!(self.tz, TimeZoneMode::Utc) {
+            return ts.date_naive();
+        }
+        let secs = ts.timestamp();
+        if secs >= self.cached_start_secs && secs < self.cached_end_secs {
+            return self.cached_day;
+        }
+        self.date_of_slow(ts, secs)
+    }
+
+    #[cold]
+    fn date_of_slow(&mut self, ts: DateTime<Utc>, secs: i64) -> NaiveDate {
+        use chrono::Offset as _;
+
+        let day = self.tz.date_of(ts);
+        let offset_secs = match self.tz {
+            TimeZoneMode::Utc => return day,
+            TimeZoneMode::Local => i64::from(ts.with_timezone(&Local).offset().local_minus_utc()),
+            TimeZoneMode::Named(tz) => {
+                i64::from(ts.with_timezone(tz).offset().fix().local_minus_utc())
+            }
+        };
+        let local_secs = secs.saturating_add(offset_secs);
+        let day_start_local = local_secs.saturating_sub(local_secs.rem_euclid(86_400));
+        let start_secs = day_start_local.saturating_sub(offset_secs);
+        let end_secs = start_secs.saturating_add(86_400);
+
+        if let (Some(dt_start), Some(dt_last), Some(dt_next)) = (
+            DateTime::from_timestamp(start_secs, 0),
+            DateTime::from_timestamp(end_secs.saturating_sub(1), 0),
+            DateTime::from_timestamp(end_secs, 0),
+        ) && self.tz.date_of(dt_start) == day
+            && self.tz.date_of(dt_last) == day
+            && self.tz.date_of(dt_next) != day
+        {
+            self.cached_start_secs = start_secs;
+            self.cached_end_secs = end_secs;
+            self.cached_day = day;
+        }
+
+        day
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct GroupAggregate {
     totals: UsageAccumulator,
@@ -155,6 +227,7 @@ struct LoadedUsage {
     events: Vec<UsageEvent>,
     stats: ParseStats,
     filter: DateFilter,
+    pricing: Arc<PricingTable>,
 }
 
 #[derive(Debug)]
@@ -608,11 +681,14 @@ const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".venv",
     "venv",
 ];
-const INCREMENTAL_CACHE_VERSION: u32 = 4;
+const INCREMENTAL_CACHE_VERSION: u32 = 5;
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_PRICING_CACHE_VERSION: u32 = 1;
 const OPENROUTER_PRICING_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
-const CLAUDE_RECENT_DEDUPE_KEYS_LIMIT: usize = 8192;
+const LITELLM_PRICING_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const LITELLM_PRICING_CACHE_VERSION: u32 = 1;
+const LITELLM_PRICING_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 const MAX_JSON_LINE_BYTES: usize = 10 * 1024 * 1024;
 const CLAUDE_OAUTH_REFRESH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
@@ -685,6 +761,10 @@ struct FileFingerprint {
     modified_unix_nanos: u32,
 }
 
+const fn default_model_calls() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedUsageEvent {
     timestamp: DateTime<Utc>,
@@ -696,6 +776,45 @@ struct CachedUsageEvent {
     project: Option<String>,
     #[serde(default)]
     file_path: Option<String>,
+    #[serde(default)]
+    cache_creation_1h_tokens: u64,
+    #[serde(default)]
+    speed: ServiceSpeed,
+    #[serde(default = "default_model_calls")]
+    model_calls: u32,
+    #[serde(default)]
+    reported_cost_usd: Option<f64>,
+    #[serde(default)]
+    dedupe_hash: Option<u64>,
+}
+
+impl Default for CachedUsageEvent {
+    fn default() -> Self {
+        Self {
+            timestamp: DateTime::<Utc>::UNIX_EPOCH,
+            model: String::new(),
+            usage: UsageAccumulator::default(),
+            session: None,
+            project: None,
+            file_path: None,
+            cache_creation_1h_tokens: 0,
+            speed: ServiceSpeed::Standard,
+            model_calls: 1,
+            reported_cost_usd: None,
+            dedupe_hash: None,
+        }
+    }
+}
+
+impl CachedUsageEvent {
+    fn pricing_context(&self) -> PricingContext {
+        PricingContext {
+            cache_creation_1h_tokens: self.cache_creation_1h_tokens,
+            speed: self.speed,
+            model_calls: self.model_calls.max(1),
+            reported_cost_usd: self.reported_cost_usd,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -718,7 +837,40 @@ struct CachedFileEntry {
     #[serde(default)]
     codex_last_totals: Option<CodexRawUsage>,
     #[serde(default)]
-    claude_recent_keys: Vec<String>,
+    codex_service_tier: ServiceSpeed,
+    #[serde(default)]
+    codex_fork_anchor_ms: Option<i64>,
+    #[serde(default)]
+    codex_request_ledger_active: bool,
+}
+
+impl Default for CachedFileEntry {
+    fn default() -> Self {
+        Self {
+            fingerprint: FileFingerprint {
+                size: 0,
+                modified_unix_secs: 0,
+                modified_unix_nanos: 0,
+            },
+            stats: CachedFileStats::default(),
+            events: Vec::new(),
+            parsed_offset: 0,
+            codex_last_model: None,
+            codex_last_totals: None,
+            codex_service_tier: ServiceSpeed::Standard,
+            codex_fork_anchor_ms: None,
+            codex_request_ledger_active: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedFileMeta {
+    fingerprint: FileFingerprint,
+    min_ts_ms: i64,
+    max_ts_ms: i64,
+    parsed_offset: u64,
+    stats: CachedFileStats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -726,6 +878,11 @@ struct IncrementalCacheStore {
     version: u32,
     pricing_key: String,
     files: HashMap<String, CachedFileEntry>,
+    #[serde(skip)]
+    meta: HashMap<String, CachedFileMeta>,
+    /// True when only `meta` was populated on load (lazy blob fetch mode).
+    #[serde(skip)]
+    meta_only: bool,
     /// Keys touched since load — upserted incrementally on save. Not persisted.
     #[serde(skip)]
     changed: HashSet<String>,
@@ -781,11 +938,20 @@ impl IncrementalCacheStore {
             version: INCREMENTAL_CACHE_VERSION,
             pricing_key,
             files: HashMap::new(),
+            meta: HashMap::new(),
+            meta_only: false,
             changed: HashSet::new(),
             removed: HashSet::new(),
             full_rewrite: true,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct InternalEvent {
+    event: UsageEvent,
+    pricing_ctx: PricingContext,
+    dedupe_hash: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -804,47 +970,14 @@ enum ParseStrategy {
 
 #[derive(Debug, Default)]
 struct WorkerParseOutput {
-    events: Vec<UsageEvent>,
+    events: Vec<InternalEvent>,
     cache_updates: Vec<(String, CachedFileEntry)>,
 }
 
 #[derive(Debug)]
 struct ParsedFileOutput {
-    events: Vec<UsageEvent>,
+    events: Vec<InternalEvent>,
     cache_entry: CachedFileEntry,
-}
-
-#[derive(Debug, Default)]
-struct ClaudeDedupeState {
-    seen_keys: HashSet<String>,
-    insertion_order: VecDeque<String>,
-}
-
-impl ClaudeDedupeState {
-    fn with_seed(seed: Vec<String>) -> Self {
-        let mut out = Self::default();
-        for key in seed {
-            out.insert(key);
-        }
-        out
-    }
-
-    fn insert(&mut self, key: String) -> bool {
-        if !self.seen_keys.insert(key.clone()) {
-            return false;
-        }
-        self.insertion_order.push_back(key);
-        while self.insertion_order.len() > CLAUDE_RECENT_DEDUPE_KEYS_LIMIT {
-            if let Some(old) = self.insertion_order.pop_front() {
-                self.seen_keys.remove(&old);
-            }
-        }
-        true
-    }
-
-    fn snapshot(&self) -> Vec<String> {
-        self.insertion_order.iter().cloned().collect()
-    }
 }
 
 fn should_emit_json(common: &CommonArgs) -> bool {
@@ -900,16 +1033,18 @@ fn build_report_from_rows(
     activity_totals: Option<ActivitySummary>,
     stats: ParseStats,
     period_attribution: Option<BTreeMap<String, PeriodAttribution>>,
+    pricing: &PricingTable,
 ) -> DailyReport {
     let totals = rows.iter().fold(TokenCounts::default(), |mut acc, row| {
         acc.add_assign(row.totals.clone());
         acc
     });
 
-    let insights = Some(crate::insights::compute_report_insights(
+    let insights = Some(crate::insights::compute_report_insights_with_pricing(
         &rows,
         &totals,
         period_attribution.as_ref(),
+        pricing,
     ));
 
     DailyReport {

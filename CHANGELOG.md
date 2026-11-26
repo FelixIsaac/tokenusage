@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.13.0] - 2026-11-27
+
+### Added
+- **Pi & Muse Code providers:** Added local session log parsing for Pi (`~/.pi/agent/sessions`, `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`) and Muse Code (`~/.local/share/muse`, `MUSE_HOME`, macOS Application Support), with `--no-pi`, `--no-muse`, `--pi-sessions-dir`, `--muse-sessions-dir`, and provider-first shortcuts (`tu pi`, `tu muse`).
+- **Live LiteLLM pricing catalog & rich rate semantics:** Merged LiteLLM's model pricing catalog (24h cache TTL) alongside OpenRouter, adding support for 1-hour prompt cache writes (`ephemeral_1h_input_tokens`), context-window tier cliffs (`>200K` / `>272K`), fast/ultrafast speed tiers, and provider-reported cost overrides.
+- **Provider session docs & credits:** Added sanitized session format documentation under `docs/providers/` and upstream credits in `README.md` (including T3 Code, LiteLLM, and OpenRouter).
+
+### Performance
+- **Compact binary parse & pricing caches:** Added compact binary parse caching (`TU05` in SQLite `files_v5`) with per-file timestamp bounds + date-window pushdown, plus compact binary pricing caches (`TUP1`, auto-upgrading legacy JSON caches on first read).
+- **Concurrent loading & bulk SQLite scan:** Overlapped pricing load, file discovery, and SQLite metadata preload via Tokio/Rayon; replaced N SQLite point lookups with a single filtered sequential scan when loading `>512` cached files; added zero-clone owned event hydration, a 1-slot per-file rate lookup cache, O(1) eviction skips when all cached files remain present, and parallel unstable timestamp sorting.
+- **DST-safe `LocalDayCache` & subcommand speedups:** Added a verified single-day bounds cache eliminating repeated `localtime_r`/IANA lookups in hot loops; pushed period bounds into `carbon`, `scale`, and `statusline`; eliminated `doctor`'s duplicate filesystem walk and pricing reload; and switched `rank`, `breakdown`, `session`, `blocks`, and `carbon` to unsorted loads and borrowed-key aggregations.
+
+### Fixed
+- **Provider accuracy & deduplication:** Added Claude Code `message.id` + `requestId` max-merge deduplication across streaming chunks and resumed/forked transcripts, 1-hour cache-write billing, and synthetic-model exclusion; added Codex `token_usage_record` request ledgers, fork deduplication, and `service_tier` pricing; fixed Grok Build multi-call `modelCalls` context-tier division and `costUsdTicks` overrides; and normalized Antigravity model variant aliases.
+- **Carbon & range edge cases:** Stopped double-counting `reasoning_output_tokens` (already included in `output_tokens`), computed exact per-channel history deltas instead of heuristic splits, handled empty period/date intersections safely, and used NaN-safe sort ordering.
+
 ## [1.12.1] - 2026-11-18
 
 ### Added

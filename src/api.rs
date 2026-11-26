@@ -151,6 +151,12 @@ pub struct Config {
     /// When `true`, Grok Build logs and session transcripts are skipped.
     pub no_grok: bool,
 
+    /// Disable the Pi coding agent log source.
+    pub no_pi: bool,
+
+    /// Disable the Muse Code log source.
+    pub no_muse: bool,
+
     /// Disable historical baseline overrides from history_overrides.json.
     pub no_history_overrides: bool,
 
@@ -174,6 +180,10 @@ pub struct Config {
     pub opencode_data_dir: Vec<String>,
     /// Custom Grok Build log directory paths.
     pub grok_log_dir: Vec<String>,
+    /// Custom Pi sessions directory paths.
+    pub pi_sessions_dir: Vec<String>,
+    /// Custom Muse sessions directory paths.
+    pub muse_sessions_dir: Vec<String>,
 
     /// Path substring ignore rules.
     ///
@@ -425,6 +435,8 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         no_gemini: config.no_gemini,
         no_opencode: config.no_opencode,
         no_grok: config.no_grok,
+        no_pi: config.no_pi,
+        no_muse: config.no_muse,
         no_antigravity: true,
         no_history_overrides: config.no_history_overrides,
         no_history_db: config.no_history_db,
@@ -435,6 +447,8 @@ fn config_to_common_args(config: &Config) -> cli::CommonArgs {
         gemini_data_dir: config.gemini_data_dir.clone(),
         opencode_data_dir: config.opencode_data_dir.clone(),
         grok_log_dir: config.grok_log_dir.clone(),
+        pi_sessions_dir: config.pi_sessions_dir.clone(),
+        muse_sessions_dir: config.muse_sessions_dir.clone(),
         ignore_path: config.ignore_path.clone(),
         no_default_ignores: config.no_default_ignores,
         no_incremental_cache: config.no_incremental_cache,

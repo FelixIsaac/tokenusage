@@ -76,6 +76,8 @@ pub enum ProviderArg {
     Antigravity,
     Opencode,
     Grok,
+    Pi,
+    Muse,
 }
 
 impl ProviderArg {
@@ -86,6 +88,8 @@ impl ProviderArg {
             ProviderArg::Gemini | ProviderArg::Antigravity => SourceKind::Gemini,
             ProviderArg::Opencode => SourceKind::OpenCode,
             ProviderArg::Grok => SourceKind::Grok,
+            ProviderArg::Pi => SourceKind::Pi,
+            ProviderArg::Muse => SourceKind::Muse,
         }
     }
 }
@@ -220,6 +224,10 @@ pub struct CommonArgs {
     pub no_opencode: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Grok Build source"))]
     pub no_grok: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Pi coding agent source"))]
+    pub no_pi: bool,
+    #[cfg_attr(feature = "cli", arg(long, help = "Disable Muse Code source"))]
+    pub no_muse: bool,
     #[cfg_attr(feature = "cli", arg(long, help = "Disable Antigravity quota probe"))]
     pub no_antigravity: bool,
     #[cfg_attr(
@@ -287,10 +295,26 @@ pub struct CommonArgs {
         feature = "cli",
         arg(
             long = "grok-log-dir",
-            help = "Grok Build log dir (defaults to ~/.grok/logs), repeatable"
+            help = "Grok Build log dir (defaults to ~/.grok/sessions or ~/.grok/logs), repeatable"
         )
     )]
     pub grok_log_dir: Vec<String>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "pi-sessions-dir",
+            help = "Pi sessions dir (defaults to ~/.pi/agent/sessions), repeatable"
+        )
+    )]
+    pub pi_sessions_dir: Vec<String>,
+    #[cfg_attr(
+        feature = "cli",
+        arg(
+            long = "muse-sessions-dir",
+            help = "Muse Code sessions dir (defaults to $MUSE_HOME/sessions), repeatable"
+        )
+    )]
+    pub muse_sessions_dir: Vec<String>,
     #[cfg_attr(
         feature = "cli",
         arg(
@@ -372,7 +396,9 @@ impl CommonArgs {
                   - Gemini:      ~/.gemini/tmp             (--gemini-data-dir)\n\
                   - Antigravity: ~/.gemini/antigravity-cli/conversations, .../brain (--gemini-data-dir)\n\
                   - OpenCode:    $OPENCODE_DATA_DIR or ~/.local/share/opencode (--opencode-data-dir)\n\
-                  - Grok:        ~/.grok/logs              (--grok-log-dir)\n\
+                  - Grok:        ~/.grok/sessions or ~/.grok/logs (--grok-log-dir)\n\
+                  - Pi:          ~/.pi/agent/sessions      (--pi-sessions-dir)\n\
+                  - Muse:        $MUSE_HOME/sessions       (--muse-sessions-dir)\n\
                   - Overrides:   ~/.config/tokenusage/history_overrides.json (--no-history-overrides)\n\
                   - Persistence: ~/.config/tokenusage/history.db (--no-history-db)\n\
                   \n\
@@ -1248,6 +1274,9 @@ fn normalize_provider_first(argv: &mut Vec<String>) {
         "codex" => "codex",
         "gemini" => "gemini",
         "opencode" => "opencode",
+        "grok" => "grok",
+        "pi" => "pi",
+        "muse" => "muse",
         "antigravity" | "agy" => "antigravity",
         _ => return,
     };

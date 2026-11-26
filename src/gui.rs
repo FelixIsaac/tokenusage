@@ -142,12 +142,15 @@ struct CacheKey {
     until: Option<String>,
     timezone: Option<String>,
     order: SortOrder,
-    disabled: [bool; 4],
+    disabled: [bool; 7],
     selected_sources: Vec<SourceKind>,
     claude_projects_dir: Vec<String>,
     codex_sessions_dir: Vec<String>,
     gemini_data_dir: Vec<String>,
     opencode_data_dir: Vec<String>,
+    grok_log_dir: Vec<String>,
+    pi_sessions_dir: Vec<String>,
+    muse_sessions_dir: Vec<String>,
     ignore_path: Vec<String>,
     no_default_ignores: bool,
     no_incremental_cache: bool,
@@ -171,6 +174,9 @@ impl PartialEq for CacheKey {
             && self.codex_sessions_dir == other.codex_sessions_dir
             && self.gemini_data_dir == other.gemini_data_dir
             && self.opencode_data_dir == other.opencode_data_dir
+            && self.grok_log_dir == other.grok_log_dir
+            && self.pi_sessions_dir == other.pi_sessions_dir
+            && self.muse_sessions_dir == other.muse_sessions_dir
             && self.ignore_path == other.ignore_path
             && self.no_default_ignores == other.no_default_ignores
             && self.no_incremental_cache == other.no_incremental_cache
@@ -195,6 +201,9 @@ impl Hash for CacheKey {
         self.codex_sessions_dir.hash(state);
         self.gemini_data_dir.hash(state);
         self.opencode_data_dir.hash(state);
+        self.grok_log_dir.hash(state);
+        self.pi_sessions_dir.hash(state);
+        self.muse_sessions_dir.hash(state);
         self.ignore_path.hash(state);
         self.no_default_ignores.hash(state);
         self.no_incremental_cache.hash(state);
@@ -217,6 +226,12 @@ impl CacheKey {
         gemini_data_dir.sort();
         let mut opencode_data_dir = req.common.opencode_data_dir.clone();
         opencode_data_dir.sort();
+        let mut grok_log_dir = req.common.grok_log_dir.clone();
+        grok_log_dir.sort();
+        let mut pi_sessions_dir = req.common.pi_sessions_dir.clone();
+        pi_sessions_dir.sort();
+        let mut muse_sessions_dir = req.common.muse_sessions_dir.clone();
+        muse_sessions_dir.sort();
 
         let mut ignore_path = req.common.ignore_path.clone();
         ignore_path.sort();
@@ -234,12 +249,18 @@ impl CacheKey {
                 req.common.no_codex,
                 req.common.no_gemini,
                 req.common.no_opencode,
+                req.common.no_grok,
+                req.common.no_pi,
+                req.common.no_muse,
             ],
             selected_sources,
             claude_projects_dir,
             codex_sessions_dir,
             gemini_data_dir,
             opencode_data_dir,
+            grok_log_dir,
+            pi_sessions_dir,
+            muse_sessions_dir,
             ignore_path,
             no_default_ignores: req.common.no_default_ignores,
             no_incremental_cache: req.common.no_incremental_cache,

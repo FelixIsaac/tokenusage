@@ -13,18 +13,44 @@ use crossbeam_channel::{Receiver, bounded};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::fs;
 
 use crate::cli::CommonArgs;
 use crate::types::{
     CodexParseState, CodexRawUsage, DateFilter, DiscoveredFile, LEGACY_CODEX_FALLBACK_MODEL,
-    ParseLineResult, ParseStatsAtomic, ParsedLine, PricingRate, PricingTable, SourceConfig,
-    SourceKind, UsageAccumulator, UsageEvent,
+    ParseLineResult, ParseStatsAtomic, ParsedLine, PricingContext, PricingRate, PricingTable,
+    ServiceSpeed, SourceConfig, SourceKind, UsageAccumulator, UsageEvent,
 };
 
+use super::cache_codec::{decode_cached_file_entry, encode_cached_file_entry, entry_ts_bounds};
 use super::pricing::*;
 use super::*;
+
+#[inline]
+pub(super) fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn filter_utc_window_ms(filter: DateFilter) -> (Option<i64>, Option<i64>) {
+    // Expand by +/- 24 hours so every IANA timezone (UTC-12..UTC+14) is covered safely.
+    const PAD_MS: i64 = 24 * 3_600_000;
+    let since_ms = filter.since.and_then(|d| {
+        d.and_hms_opt(0, 0, 0)
+            .map(|dt| dt.and_utc().timestamp_millis().saturating_sub(PAD_MS))
+    });
+    let until_ms = filter.until.and_then(|d| {
+        d.and_hms_opt(23, 59, 59)
+            .map(|dt| dt.and_utc().timestamp_millis().saturating_add(PAD_MS))
+    });
+    (since_ms, until_ms)
+}
 
 pub(super) struct ParseFilesConfig<'a> {
     pub filter: DateFilter,
@@ -32,6 +58,7 @@ pub(super) struct ParseFilesConfig<'a> {
     pub pricing: Arc<PricingTable>,
     pub worker_count: usize,
     pub cache_enabled: bool,
+    pub cache_path: Option<&'a Path>,
     pub sort_events: bool,
 }
 
@@ -46,26 +73,31 @@ pub(super) fn parse_files_with_cache(
         pricing,
         worker_count,
         cache_enabled,
+        cache_path,
         sort_events,
     } = config;
     let stats = Arc::new(ParseStatsAtomic::default());
     stats.files_discovered.store(files.len(), Ordering::Relaxed);
 
     let mut cache_dirty = false;
+    let (since_ms, until_ms) = filter_utc_window_ms(filter);
 
-    // The fingerprint(stat) + cache-hydration pass is the per-file floor over all
-    // ~N discovered files. It only reads the cache (immutable) and bumps atomic
-    // stats, so it parallelizes cleanly across cores. Each file resolves to either
-    // already-cached events or a parse job; partition afterwards.
     enum PassResult {
-        Hit(Vec<UsageEvent>),
+        Hit(Vec<InternalEvent>),
+        FetchBlobHit(usize, String, CachedFileMeta),
+        FetchBlobIncr(usize, String, FileFingerprint, CachedFileMeta),
         Job(Box<FileParseJob>),
+        SkippedOld,
     }
 
-    let cache_files = &cache_store.files;
+    let use_meta = cache_enabled && cache_store.meta_only && cache_path.is_some();
+    let pre_update_meta_len = cache_store.meta.len();
+    let matched_meta_keys = std::sync::atomic::AtomicUsize::new(0);
+
     let pass: Vec<PassResult> = files
         .par_iter()
-        .map(|file| {
+        .enumerate()
+        .map(|(idx, file)| {
             let key = if cache_enabled {
                 cache_file_key(&file.path)
             } else {
@@ -75,6 +107,9 @@ pub(super) fn parse_files_with_cache(
                 .then(|| read_file_fingerprint(&file.path))
                 .flatten();
             let Some(fingerprint) = fingerprint else {
+                if use_meta && cache_store.meta.contains_key(&key) {
+                    matched_meta_keys.fetch_add(1, Ordering::Relaxed);
+                }
                 return PassResult::Job(Box::new(FileParseJob {
                     file: file.clone(),
                     cache_key: key,
@@ -87,9 +122,48 @@ pub(super) fn parse_files_with_cache(
                 }));
             };
 
-            if let Some(cached) = cache_files.get(&key) {
+            if use_meta {
+                if let Some(meta) = cache_store.meta.get(&key) {
+                    matched_meta_keys.fetch_add(1, Ordering::Relaxed);
+                    if meta.fingerprint == fingerprint {
+                        let out_of_window = (meta.min_ts_ms == 0 && meta.max_ts_ms == 0)
+                            || since_ms.is_some_and(|s| meta.max_ts_ms > 0 && meta.max_ts_ms < s)
+                            || until_ms.is_some_and(|u| meta.min_ts_ms > 0 && meta.min_ts_ms > u);
+                        if out_of_window {
+                            stats
+                                .lines_total
+                                .fetch_add(meta.stats.lines_total, Ordering::Relaxed);
+                            stats
+                                .lines_invalid_json
+                                .fetch_add(meta.stats.lines_invalid_json, Ordering::Relaxed);
+                            stats
+                                .lines_missing_usage
+                                .fetch_add(meta.stats.lines_missing_usage, Ordering::Relaxed);
+                            return PassResult::SkippedOld;
+                        }
+                        return PassResult::FetchBlobHit(idx, key, meta.clone());
+                    }
+                    if can_incremental_parse_meta(meta, fingerprint) {
+                        return PassResult::FetchBlobIncr(idx, key, fingerprint, meta.clone());
+                    }
+                }
+                if let Some(s) = since_ms
+                    && fingerprint.modified_unix_secs.saturating_mul(1000)
+                        < s.saturating_sub(48 * 3_600_000)
+                {
+                    return PassResult::SkippedOld;
+                }
+                return PassResult::Job(Box::new(FileParseJob {
+                    file: file.clone(),
+                    cache_key: key,
+                    fingerprint,
+                    strategy: ParseStrategy::Full,
+                }));
+            }
+
+            if let Some(cached) = cache_store.files.get(&key) {
                 if cached.fingerprint == fingerprint {
-                    return PassResult::Hit(hydrate_cached_events(
+                    return PassResult::Hit(hydrate_cached_internal_events(
                         file, cached, filter, timezone, &pricing, &stats,
                     ));
                 }
@@ -105,6 +179,13 @@ pub(super) fn parse_files_with_cache(
                 }
             }
 
+            if let Some(s) = since_ms
+                && fingerprint.modified_unix_secs.saturating_mul(1000)
+                    < s.saturating_sub(48 * 3_600_000)
+            {
+                return PassResult::SkippedOld;
+            }
+
             PassResult::Job(Box::new(FileParseJob {
                 file: file.clone(),
                 cache_key: key,
@@ -115,11 +196,178 @@ pub(super) fn parse_files_with_cache(
         .collect();
 
     let mut parse_jobs = Vec::new();
-    let mut events = Vec::new();
+    let mut internal_events = Vec::new();
+    let mut fetch_hits = Vec::new();
+    let mut fetch_incr = Vec::new();
+
     for result in pass {
         match result {
-            PassResult::Hit(hit) => events.extend(hit),
+            PassResult::Hit(hit) => internal_events.extend(hit),
+            PassResult::FetchBlobHit(idx, key, meta) => fetch_hits.push((idx, key, meta)),
+            PassResult::FetchBlobIncr(idx, key, fp, meta) => fetch_incr.push((idx, key, fp, meta)),
             PassResult::Job(job) => parse_jobs.push(*job),
+            PassResult::SkippedOld => {}
+        }
+    }
+
+    if (!fetch_hits.is_empty() || !fetch_incr.is_empty())
+        && let Some(path) = cache_path
+        && let Ok(conn) = open_cache_db_readonly(path)
+    {
+        let mut raw_hits: Vec<(usize, CachedFileMeta, Vec<u8>)> =
+            Vec::with_capacity(fetch_hits.len());
+        if fetch_hits.len() + fetch_incr.len() > 512 {
+            let mut hit_map: HashMap<String, (usize, CachedFileMeta)> =
+                HashMap::with_capacity(fetch_hits.len());
+            for (idx, key, meta) in fetch_hits {
+                hit_map.insert(key, (idx, meta));
+            }
+            let mut incr_map: HashMap<String, (usize, FileFingerprint, CachedFileMeta)> =
+                HashMap::with_capacity(fetch_incr.len());
+            for (idx, key, fp, meta) in fetch_incr {
+                incr_map.insert(key, (idx, fp, meta));
+            }
+            let sql = match (since_ms, until_ms) {
+                (Some(_), Some(_)) => {
+                    "SELECT cache_key, blob FROM files_v5 WHERE (max_ts_ms <= 0 OR max_ts_ms >= ?1) AND (min_ts_ms <= 0 OR min_ts_ms <= ?2)"
+                }
+                (Some(_), None) => {
+                    "SELECT cache_key, blob FROM files_v5 WHERE max_ts_ms <= 0 OR max_ts_ms >= ?1"
+                }
+                (None, Some(_)) => {
+                    "SELECT cache_key, blob FROM files_v5 WHERE min_ts_ms <= 0 OR min_ts_ms <= ?1"
+                }
+                (None, None) => "SELECT cache_key, blob FROM files_v5",
+            };
+            if let Ok(mut stmt) = conn.prepare(sql) {
+                let rows_res = match (since_ms, until_ms) {
+                    (Some(s), Some(u)) => stmt.query(params![s, u]),
+                    (Some(s), None) => stmt.query(params![s]),
+                    (None, Some(u)) => stmt.query(params![u]),
+                    (None, None) => stmt.query([]),
+                };
+                if let Ok(mut rows) = rows_res {
+                    while let Ok(Some(row)) = rows.next() {
+                        let Ok(key) = row.get::<_, String>(0) else {
+                            continue;
+                        };
+                        if let Some((idx, meta)) = hit_map.remove(&key) {
+                            if let Ok(blob) = row.get::<_, Vec<u8>>(1) {
+                                raw_hits.push((idx, meta, blob));
+                            } else {
+                                parse_jobs.push(FileParseJob {
+                                    file: files[idx].clone(),
+                                    cache_key: key,
+                                    fingerprint: meta.fingerprint,
+                                    strategy: ParseStrategy::Full,
+                                });
+                            }
+                        } else if let Some((idx, fp, meta)) = incr_map.remove(&key) {
+                            if let Ok(blob) = row.get::<_, Vec<u8>>(1)
+                                && let Ok(entry) = decode_cached_file_entry(
+                                    &blob,
+                                    meta.fingerprint,
+                                    meta.stats.clone(),
+                                    meta.parsed_offset,
+                                )
+                            {
+                                parse_jobs.push(FileParseJob {
+                                    file: files[idx].clone(),
+                                    cache_key: key,
+                                    fingerprint: fp,
+                                    strategy: ParseStrategy::Incremental { base_cache: entry },
+                                });
+                            } else {
+                                parse_jobs.push(FileParseJob {
+                                    file: files[idx].clone(),
+                                    cache_key: key,
+                                    fingerprint: fp,
+                                    strategy: ParseStrategy::Full,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            for (key, (idx, meta)) in hit_map {
+                parse_jobs.push(FileParseJob {
+                    file: files[idx].clone(),
+                    cache_key: key,
+                    fingerprint: meta.fingerprint,
+                    strategy: ParseStrategy::Full,
+                });
+            }
+            for (key, (idx, fp, _meta)) in incr_map {
+                parse_jobs.push(FileParseJob {
+                    file: files[idx].clone(),
+                    cache_key: key,
+                    fingerprint: fp,
+                    strategy: ParseStrategy::Full,
+                });
+            }
+        } else if let Ok(mut stmt) = conn.prepare("SELECT blob FROM files_v5 WHERE cache_key = ?1")
+        {
+            for (idx, key, meta) in fetch_hits {
+                if let Ok(blob) = stmt.query_row(params![&key], |r| r.get::<_, Vec<u8>>(0)) {
+                    raw_hits.push((idx, meta, blob));
+                } else {
+                    parse_jobs.push(FileParseJob {
+                        file: files[idx].clone(),
+                        cache_key: key,
+                        fingerprint: meta.fingerprint,
+                        strategy: ParseStrategy::Full,
+                    });
+                }
+            }
+            for (idx, key, fp, meta) in fetch_incr {
+                if let Ok(blob) = stmt.query_row(params![&key], |r| r.get::<_, Vec<u8>>(0))
+                    && let Ok(entry) = decode_cached_file_entry(
+                        &blob,
+                        meta.fingerprint,
+                        meta.stats.clone(),
+                        meta.parsed_offset,
+                    )
+                {
+                    parse_jobs.push(FileParseJob {
+                        file: files[idx].clone(),
+                        cache_key: key,
+                        fingerprint: fp,
+                        strategy: ParseStrategy::Incremental { base_cache: entry },
+                    });
+                } else {
+                    parse_jobs.push(FileParseJob {
+                        file: files[idx].clone(),
+                        cache_key: key,
+                        fingerprint: fp,
+                        strategy: ParseStrategy::Full,
+                    });
+                }
+            }
+        }
+
+        let decoded_hits: Vec<Vec<InternalEvent>> = raw_hits
+            .par_iter()
+            .map(|(idx, meta, blob)| {
+                match decode_cached_file_entry(
+                    blob,
+                    meta.fingerprint,
+                    meta.stats.clone(),
+                    meta.parsed_offset,
+                ) {
+                    Ok(entry) => hydrate_cached_internal_events_owned(
+                        &files[*idx],
+                        entry,
+                        filter,
+                        timezone,
+                        &pricing,
+                        &stats,
+                    ),
+                    Err(_) => Vec::new(),
+                }
+            })
+            .collect();
+        for hit in decoded_hits {
+            internal_events.extend(hit);
         }
     }
 
@@ -128,53 +376,86 @@ pub(super) fn parse_files_with_cache(
         worker_count.max(1),
         filter,
         timezone.clone(),
-        pricing,
+        pricing.clone(),
         stats.clone(),
         cache_enabled,
     );
-    events.extend(parsed.events);
+    internal_events.extend(parsed.events);
 
     if cache_enabled {
         for (key, entry) in parsed.cache_updates {
+            let (min_ts_ms, max_ts_ms) = entry_ts_bounds(&entry);
+            cache_store.meta.insert(
+                key.clone(),
+                CachedFileMeta {
+                    fingerprint: entry.fingerprint,
+                    min_ts_ms,
+                    max_ts_ms,
+                    parsed_offset: entry.parsed_offset,
+                    stats: entry.stats.clone(),
+                },
+            );
             cache_store.changed.insert(key.clone());
             cache_store.files.insert(key, entry);
             cache_dirty = true;
         }
 
-        // Evict entries for files no longer present — but ONLY under roots this
-        // run actually scanned. A scoped (single-source) run, e.g. `tu codex ...`
-        // or doctor's opencode-only probe, must not wipe other sources' entries
-        // (which it never discovered). Record removals so the backing store can
-        // delete exactly those rows (no full rewrite).
-        let seen_cache_keys: HashSet<String> = files
-            .iter()
-            .map(|file| cache_file_key(&file.path))
-            .collect();
-        let scanned_root_keys: HashSet<String> = files
-            .iter()
-            .map(|file| cache_file_key(&file.root))
-            .collect();
-        let removed_keys: Vec<String> = cache_store
-            .files
-            .keys()
-            .filter(|key| {
-                !seen_cache_keys.contains(key.as_str())
-                    && scanned_root_keys
-                        .iter()
-                        .any(|root| key.starts_with(root.as_str()))
-            })
-            .cloned()
-            .collect();
-        for key in removed_keys {
-            cache_store.files.remove(&key);
-            cache_store.changed.remove(&key);
-            cache_store.removed.insert(key);
-            cache_dirty = true;
+        // Skip eviction when every pre-existing meta key matched in `files` (no deletions possible).
+        let all_meta_present =
+            use_meta && matched_meta_keys.load(Ordering::Relaxed) == pre_update_meta_len;
+        if !all_meta_present {
+            // Evict entries for files no longer present — but ONLY under roots this
+            // run actually scanned.
+            let seen_cache_keys: HashSet<String> = files
+                .iter()
+                .map(|file| cache_file_key(&file.path))
+                .collect();
+            let unique_roots: HashSet<&Path> =
+                files.iter().map(|file| file.root.as_path()).collect();
+            let scanned_root_keys: Vec<String> =
+                unique_roots.into_iter().map(cache_file_key).collect();
+            let removed_keys: Vec<String> = cache_store
+                .meta
+                .keys()
+                .chain(cache_store.files.keys())
+                .filter(|key| {
+                    !seen_cache_keys.contains(key.as_str())
+                        && scanned_root_keys
+                            .iter()
+                            .any(|root| key.starts_with(root.as_str()))
+                })
+                .cloned()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            for key in removed_keys {
+                cache_store.files.remove(&key);
+                cache_store.meta.remove(&key);
+                cache_store.changed.remove(&key);
+                cache_store.removed.insert(key);
+                cache_dirty = true;
+            }
         }
     }
 
+    // Cross-file deduplication for Claude (handles resumed/forked transcripts deterministically
+    // using max() per token channel) and Grok (if prompt copies exist across files).
+    if files.iter().any(|file| file.source == SourceKind::Claude) {
+        dedupe_claude_events_max_merge(&mut internal_events, &pricing);
+    }
+    if files.iter().any(|file| {
+        matches!(
+            file.source,
+            SourceKind::Grok | SourceKind::Pi | SourceKind::Muse
+        )
+    }) {
+        dedupe_hash_events(&mut internal_events);
+    }
+
+    let mut events: Vec<UsageEvent> = internal_events.into_iter().map(|item| item.event).collect();
+
     if sort_events {
-        events.sort_by_key(|e| e.timestamp);
+        events.par_sort_unstable_by_key(|e| e.timestamp);
     }
     if files.iter().any(|file| file.source == SourceKind::OpenCode) {
         dedupe_opencode_events(&mut events);
@@ -185,6 +466,7 @@ pub(super) fn parse_files_with_cache(
             events,
             stats: stats.snapshot(),
             filter,
+            pricing,
         },
         cache_dirty,
     }
@@ -340,6 +622,7 @@ impl LiveUsageRuntime {
                 pricing: self.pricing.clone(),
                 worker_count: self.worker_count,
                 cache_enabled: self.cache_enabled,
+                cache_path: self.cache_path.as_deref(),
                 sort_events: false,
             },
         );
@@ -363,9 +646,35 @@ impl LiveUsageRuntime {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LoadUsageOptions {
+    pub sort_events: bool,
+}
+
+impl Default for LoadUsageOptions {
+    fn default() -> Self {
+        Self { sort_events: true }
+    }
+}
+
 pub(super) async fn load_usage(
     common: &CommonArgs,
     timezone: &TimeZoneMode,
+) -> Result<LoadedUsage> {
+    load_usage_with_options(common, timezone, LoadUsageOptions::default()).await
+}
+
+pub(super) async fn load_usage_unsorted(
+    common: &CommonArgs,
+    timezone: &TimeZoneMode,
+) -> Result<LoadedUsage> {
+    load_usage_with_options(common, timezone, LoadUsageOptions { sort_events: false }).await
+}
+
+pub(super) async fn load_usage_with_options(
+    common: &CommonArgs,
+    timezone: &TimeZoneMode,
+    options: LoadUsageOptions,
 ) -> Result<LoadedUsage> {
     let filter = parse_common_filter(common)?;
     let sources = build_sources(common).await?;
@@ -375,43 +684,126 @@ pub(super) async fn load_usage(
         );
     }
 
-    let pricing = Arc::new(load_pricing(common.pricing_file.as_deref(), common.offline).await?);
     let ignore_rules = PathIgnoreRules::from_common(common);
-    let files = discover_files(&sources, &ignore_rules, filter);
     let worker_count = worker_count_from_common(common);
-    let pricing_key = pricing_cache_key(&pricing);
+    let pricing_key = cache_schema_key();
     let cache_enabled = !common.no_incremental_cache;
     let cache_path = incremental_cache_path();
+    let rebuild_cache = common.rebuild_cache;
 
-    let mut cache_store = if cache_enabled {
-        match cache_path.as_ref() {
-            Some(path) => load_incremental_cache(path, &pricing_key),
-            None => IncrementalCacheStore::new(pricing_key.clone()),
-        }
-    } else {
-        IncrementalCacheStore::new(pricing_key.clone())
-    };
-    if common.rebuild_cache {
-        cache_store = IncrementalCacheStore::new(pricing_key);
-    }
+    let pricing_fut = load_pricing(common.pricing_file.as_deref(), common.offline);
+    let discovery_and_meta_fut = tokio::task::spawn_blocking(move || {
+        let (files, cache_store) = rayon::join(
+            || discover_files(&sources, &ignore_rules, filter),
+            || {
+                if cache_enabled && !rebuild_cache {
+                    match cache_path.as_ref() {
+                        Some(path) => load_incremental_cache_meta(path, &pricing_key),
+                        None => {
+                            let mut s = IncrementalCacheStore::new(pricing_key.clone());
+                            s.meta_only = true;
+                            s
+                        }
+                    }
+                } else {
+                    IncrementalCacheStore::new(pricing_key.clone())
+                }
+            },
+        );
+        (files, cache_store, cache_path)
+    });
 
-    let parsed = parse_files_with_cache(
+    let (pricing_res, blocking_res) = tokio::join!(pricing_fut, discovery_and_meta_fut);
+    let pricing = Arc::new(pricing_res?);
+    let (files, mut cache_store, cache_path) = blocking_res?;
+    finish_load_usage(
         &files,
         &mut cache_store,
+        filter,
+        timezone,
+        pricing,
+        worker_count,
+        cache_enabled,
+        cache_path.as_deref(),
+        rebuild_cache,
+        options.sort_events,
+    )
+}
+
+pub(super) async fn load_usage_from_discovered(
+    common: &CommonArgs,
+    timezone: &TimeZoneMode,
+    files: &[DiscoveredFile],
+    sort_events: bool,
+) -> Result<LoadedUsage> {
+    let filter = parse_common_filter(common)?;
+    let worker_count = worker_count_from_common(common);
+    let pricing_key = cache_schema_key();
+    let cache_enabled = !common.no_incremental_cache;
+    let cache_path = incremental_cache_path();
+    let rebuild_cache = common.rebuild_cache;
+
+    let pricing_fut = load_pricing(common.pricing_file.as_deref(), common.offline);
+    let cache_path_clone = cache_path.clone();
+    let meta_fut = tokio::task::spawn_blocking(move || {
+        if cache_enabled && !rebuild_cache {
+            match cache_path_clone.as_ref() {
+                Some(path) => load_incremental_cache_meta(path, &pricing_key),
+                None => IncrementalCacheStore::new(pricing_key),
+            }
+        } else {
+            IncrementalCacheStore::new(pricing_key)
+        }
+    });
+
+    let (pricing_res, cache_res) = tokio::join!(pricing_fut, meta_fut);
+    let pricing = Arc::new(pricing_res?);
+    let mut cache_store = cache_res?;
+    finish_load_usage(
+        files,
+        &mut cache_store,
+        filter,
+        timezone,
+        pricing,
+        worker_count,
+        cache_enabled,
+        cache_path.as_deref(),
+        rebuild_cache,
+        sort_events,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_load_usage(
+    files: &[DiscoveredFile],
+    cache_store: &mut IncrementalCacheStore,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: Arc<PricingTable>,
+    worker_count: usize,
+    cache_enabled: bool,
+    cache_path: Option<&Path>,
+    rebuild_cache: bool,
+    sort_events: bool,
+) -> Result<LoadedUsage> {
+    let parsed = parse_files_with_cache(
+        files,
+        cache_store,
         ParseFilesConfig {
             filter,
             timezone,
             pricing,
             worker_count,
             cache_enabled,
-            sort_events: true,
+            cache_path,
+            sort_events,
         },
     );
     if cache_enabled
-        && (parsed.cache_dirty || common.rebuild_cache)
-        && let Some(path) = cache_path.as_ref()
+        && (parsed.cache_dirty || rebuild_cache)
+        && let Some(path) = cache_path
     {
-        save_incremental_cache(path, &mut cache_store);
+        save_incremental_cache(path, cache_store);
     }
 
     Ok(parsed.loaded)
@@ -447,7 +839,7 @@ struct ProviderSpec {
     roots: fn(&CommonArgs, &Path) -> Vec<PathBuf>,
 }
 
-fn provider_registry() -> [ProviderSpec; 5] {
+fn provider_registry() -> [ProviderSpec; 7] {
     [
         ProviderSpec {
             kind: SourceKind::Claude,
@@ -478,6 +870,18 @@ fn provider_registry() -> [ProviderSpec; 5] {
             accepted_exts: &["jsonl"],
             enabled: |common| !common.no_grok,
             roots: grok_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::Pi,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_pi,
+            roots: pi_source_roots,
+        },
+        ProviderSpec {
+            kind: SourceKind::Muse,
+            accepted_exts: &["jsonl"],
+            enabled: |common| !common.no_muse,
+            roots: muse_source_roots,
         },
     ]
 }
@@ -562,6 +966,70 @@ fn grok_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
     }
 }
 
+fn pi_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if !common.pi_sessions_dir.is_empty() {
+        return common
+            .pi_sessions_dir
+            .iter()
+            .map(|p| expand_user_path(p))
+            .collect();
+    }
+    if let Some(session_dir) = std::env::var_os("PI_CODING_AGENT_SESSION_DIR") {
+        let trimmed = session_dir.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            return vec![expand_user_path(trimmed)];
+        }
+    }
+    if let Some(agent_dir) = std::env::var_os("PI_CODING_AGENT_DIR") {
+        let trimmed = agent_dir.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            return vec![expand_user_path(trimmed).join("sessions")];
+        }
+    }
+    vec![home.join(".pi").join("agent").join("sessions")]
+}
+
+fn muse_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
+    if !common.muse_sessions_dir.is_empty() {
+        return common
+            .muse_sessions_dir
+            .iter()
+            .map(|p| expand_user_path(p))
+            .collect();
+    }
+    let mut candidates = Vec::new();
+    if let Some(muse_home) = std::env::var_os("MUSE_HOME") {
+        let trimmed = muse_home.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            candidates.push(expand_user_path(trimmed).join("sessions"));
+        }
+    }
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        let trimmed = xdg.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed).join("muse").join("sessions"));
+        }
+    }
+    candidates.push(
+        home.join(".local")
+            .join("share")
+            .join("muse")
+            .join("sessions"),
+    );
+    #[cfg(target_os = "macos")]
+    candidates.push(
+        home.join("Library")
+            .join("Application Support")
+            .join("muse")
+            .join("sessions"),
+    );
+    candidates
+}
+
 fn opencode_source_roots(common: &CommonArgs, home: &Path) -> Vec<PathBuf> {
     if !common.opencode_data_dir.is_empty() {
         return common
@@ -630,17 +1098,65 @@ pub(super) async fn filter_existing_dirs(input: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
+fn deduplicate_source_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut sorted = roots.to_vec();
+    sorted.sort_by_key(|p| p.components().count());
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(sorted.len());
+    for root in sorted {
+        if !kept.iter().any(|ancestor| root.starts_with(ancestor)) {
+            kept.push(root);
+        }
+    }
+    kept
+}
+
+fn should_prune_subdir(kind: SourceKind, name: &str) -> bool {
+    match kind {
+        SourceKind::Claude => matches!(name, "tool-results" | "memory"),
+        SourceKind::Gemini => matches!(
+            name,
+            ".system_generated"
+                | "skills"
+                | "browser_recordings"
+                | "scratch"
+                | "node_modules"
+                | ".git"
+        ),
+        SourceKind::Grok => matches!(
+            name,
+            "tool-results"
+                | "blobs"
+                | "artifacts"
+                | "attachments"
+                | "workspace"
+                | "node_modules"
+                | ".git"
+        ),
+        SourceKind::Codex | SourceKind::OpenCode | SourceKind::Pi | SourceKind::Muse => {
+            matches!(name, "node_modules" | ".git")
+        }
+    }
+}
+
 pub(super) fn discover_files(
     sources: &[SourceConfig],
     ignore_rules: &PathIgnoreRules,
     filter: DateFilter,
 ) -> Vec<DiscoveredFile> {
-    let mut files: Vec<DiscoveredFile> = sources
+    let walk_jobs: Vec<(SourceKind, PathBuf)> = sources
+        .iter()
+        .flat_map(|source| {
+            deduplicate_source_roots(&source.roots)
+                .into_iter()
+                .map(move |root| (source.kind, root))
+        })
+        .collect();
+    let walk_threads = if walk_jobs.len() <= 1 { 4 } else { 2 };
+
+    let mut files: Vec<DiscoveredFile> = walk_jobs
         .par_iter()
-        .flat_map_iter(|source| {
-            source.roots.iter().flat_map(move |root| {
-                discover_files_in_root(source.kind, root, ignore_rules, filter)
-            })
+        .flat_map_iter(|(kind, root)| {
+            discover_files_in_root_with_threads(*kind, root, ignore_rules, filter, walk_threads)
         })
         .collect();
 
@@ -649,24 +1165,38 @@ pub(super) fn discover_files(
     files
 }
 
+#[allow(dead_code)]
 pub(super) fn discover_files_in_root(
     kind: SourceKind,
     root: &Path,
     ignore_rules: &PathIgnoreRules,
+    filter: DateFilter,
+) -> Vec<DiscoveredFile> {
+    let threads = thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .unwrap_or(4);
+    discover_files_in_root_with_threads(kind, root, ignore_rules, filter, threads)
+}
+
+fn discover_files_in_root_with_threads(
+    kind: SourceKind,
+    root: &Path,
+    ignore_rules: &PathIgnoreRules,
     _filter: DateFilter,
+    threads: usize,
 ) -> Vec<DiscoveredFile> {
     // NOTE:
     // Do not short-circuit Codex discovery by directory date partition.
     // A Codex session file can continue receiving events on later days while
     // staying under its original directory (session start date), so partition
     // pruning can miss valid events and undercount filtered ranges.
-    let mut out = Vec::new();
+    let mut initial = Vec::new();
 
     if kind == SourceKind::OpenCode {
         // Always merge both SQLite and legacy message logs when present.
         let db_path = root.join("opencode.db");
         if db_path.is_file() && !ignore_rules.should_skip_path(&db_path) {
-            out.push(DiscoveredFile {
+            initial.push(DiscoveredFile {
                 source: kind,
                 root: root.to_path_buf(),
                 path: normalized_discovered_path(&db_path),
@@ -676,6 +1206,7 @@ pub(super) fn discover_files_in_root(
     let rules = ignore_rules.clone();
     let mut builder = WalkBuilder::new(root);
     builder
+        .threads(threads.max(1))
         .follow_links(false)
         // keep hidden entries visible because source roots often start with '.'
         .hidden(false)
@@ -686,52 +1217,106 @@ pub(super) fn discover_files_in_root(
         .git_global(false)
         .git_exclude(false)
         .ignore(false)
-        .filter_entry(move |entry| entry.depth() == 0 || !rules.should_skip_dir(entry.path()));
-
-    for entry in builder.build().filter_map(Result::ok) {
-        let path = entry.path();
-        let is_file = entry
-            .file_type()
-            .map(|file_type| file_type.is_file())
-            .unwrap_or(false);
-        if !is_file || ignore_rules.should_skip_path(path) {
-            continue;
-        }
-
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
-        };
-        let should_keep = provider_accepts_extension(kind, ext);
-        if !should_keep {
-            continue;
-        }
-
-        if kind == SourceKind::OpenCode {
-            // Restrict OpenCode discovery to message JSONs; skip db/log/snapshots.
-            let normalized = path
-                .to_string_lossy()
-                .replace('\\', "/")
-                .to_ascii_lowercase();
-            if !normalized.contains("/storage/message/") {
-                continue;
+        .filter_entry(move |entry| {
+            if entry.depth() == 0 {
+                return true;
             }
-        }
-
-        if kind == SourceKind::Grok {
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if file_name != "updates.jsonl" && file_name != "unified.jsonl" {
-                continue;
+            if entry.file_type().is_some_and(|ft| ft.is_dir())
+                && let Some(name) = entry.file_name().to_str()
+                && should_prune_subdir(kind, name)
+            {
+                return false;
             }
-        }
-
-        out.push(DiscoveredFile {
-            source: kind,
-            root: root.to_path_buf(),
-            path: normalized_discovered_path(path),
+            !rules.should_skip_dir(entry.path())
         });
+    if kind == SourceKind::Grok {
+        builder.max_depth(Some(4));
     }
 
-    out
+    struct LocalCollector<'a> {
+        out: &'a Mutex<Vec<DiscoveredFile>>,
+        buf: Vec<DiscoveredFile>,
+    }
+
+    impl Drop for LocalCollector<'_> {
+        fn drop(&mut self) {
+            if !self.buf.is_empty()
+                && let Ok(mut guard) = self.out.lock()
+            {
+                guard.append(&mut self.buf);
+            }
+        }
+    }
+
+    let out = Mutex::new(initial);
+    let root_buf = root.to_path_buf();
+    builder.build_parallel().run(|| {
+        let out = &out;
+        let root_buf = &root_buf;
+        let mut collector = LocalCollector {
+            out,
+            buf: Vec::new(),
+        };
+        Box::new(move |entry_res| {
+            let Ok(entry) = entry_res else {
+                return ignore::WalkState::Continue;
+            };
+            let path = entry.path();
+            let is_file = entry
+                .file_type()
+                .map(|file_type| file_type.is_file())
+                .unwrap_or(false);
+            if !is_file || ignore_rules.should_skip_path(path) {
+                return ignore::WalkState::Continue;
+            }
+
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                return ignore::WalkState::Continue;
+            };
+            if !provider_accepts_extension(kind, ext) {
+                return ignore::WalkState::Continue;
+            }
+
+            if kind == SourceKind::OpenCode {
+                // Restrict OpenCode discovery to message JSONs; skip db/log/snapshots.
+                let normalized = path
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase();
+                if !normalized.contains("/storage/message/") {
+                    return ignore::WalkState::Continue;
+                }
+            }
+
+            if kind == SourceKind::Grok {
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if file_name != "updates.jsonl" && file_name != "unified.jsonl" {
+                    return ignore::WalkState::Continue;
+                }
+            }
+
+            if kind == SourceKind::Muse {
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if file_name != "session.jsonl" {
+                    return ignore::WalkState::Continue;
+                }
+            }
+
+            collector.buf.push(DiscoveredFile {
+                source: kind,
+                root: root_buf.clone(),
+                path: normalized_discovered_path(path),
+            });
+            if collector.buf.len() >= 256
+                && let Ok(mut guard) = collector.out.lock()
+            {
+                guard.append(&mut collector.buf);
+            }
+            ignore::WalkState::Continue
+        })
+    });
+
+    out.into_inner().unwrap_or_else(|e| e.into_inner())
 }
 
 pub(super) fn dedupe_opencode_events(events: &mut Vec<UsageEvent>) {
@@ -808,6 +1393,114 @@ fn provider_accepts_extension(kind: SourceKind, ext: &str) -> bool {
         })
 }
 
+pub(super) struct ParsedRecord {
+    event: UsageEvent,
+    pricing_ctx: PricingContext,
+    dedupe_hash: Option<u64>,
+    used_unknown_pricing: bool,
+}
+
+pub(super) enum MultiLineResult {
+    Parsed(Vec<ParsedRecord>),
+    InvalidJson,
+    MissingUsage,
+}
+
+fn merge_usage_max(dst: &mut UsageAccumulator, src: UsageAccumulator) -> bool {
+    let mut changed = false;
+    if src.input_tokens > dst.input_tokens {
+        dst.input_tokens = src.input_tokens;
+        changed = true;
+    }
+    if src.cache_creation_input_tokens > dst.cache_creation_input_tokens {
+        dst.cache_creation_input_tokens = src.cache_creation_input_tokens;
+        changed = true;
+    }
+    if src.cache_read_input_tokens > dst.cache_read_input_tokens {
+        dst.cache_read_input_tokens = src.cache_read_input_tokens;
+        changed = true;
+    }
+    if src.output_tokens > dst.output_tokens {
+        dst.output_tokens = src.output_tokens;
+        changed = true;
+    }
+    if src.reasoning_output_tokens > dst.reasoning_output_tokens {
+        dst.reasoning_output_tokens = src.reasoning_output_tokens;
+        changed = true;
+    }
+    changed
+}
+
+fn merge_ctx_max(dst: &mut PricingContext, src: PricingContext) -> bool {
+    let mut changed = false;
+    if src.cache_creation_1h_tokens > dst.cache_creation_1h_tokens {
+        dst.cache_creation_1h_tokens = src.cache_creation_1h_tokens;
+        changed = true;
+    }
+    match (dst.reported_cost_usd, src.reported_cost_usd) {
+        (None, Some(s)) => {
+            dst.reported_cost_usd = Some(s);
+            changed = true;
+        }
+        (Some(d), Some(s)) if s > d => {
+            dst.reported_cost_usd = Some(s);
+            changed = true;
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn dedupe_claude_events_max_merge(events: &mut Vec<InternalEvent>, pricing: &PricingTable) {
+    let mut seen = HashMap::<u64, usize>::new();
+    let mut out = Vec::<InternalEvent>::with_capacity(events.len());
+    for item in events.drain(..) {
+        if item.event.source != SourceKind::Claude {
+            out.push(item);
+            continue;
+        }
+        let Some(hash) = item.dedupe_hash else {
+            out.push(item);
+            continue;
+        };
+        if let Some(&idx) = seen.get(&hash) {
+            let held = &mut out[idx];
+            let mut changed = merge_usage_max(&mut held.event.usage, item.event.usage);
+            changed |= merge_ctx_max(&mut held.pricing_ctx, item.pricing_ctx);
+            if changed {
+                held.event.usage.cost_usd = pricing
+                    .estimate_cost_with_context(
+                        &held.event.model,
+                        held.event.usage,
+                        held.pricing_ctx,
+                    )
+                    .unwrap_or(0.0);
+            }
+        } else {
+            seen.insert(hash, out.len());
+            out.push(item);
+        }
+    }
+    *events = out;
+}
+
+fn dedupe_hash_events(events: &mut Vec<InternalEvent>) {
+    let mut seen = HashSet::<(SourceKind, u64)>::new();
+    let mut out = Vec::<InternalEvent>::with_capacity(events.len());
+    for item in events.drain(..) {
+        if matches!(
+            item.event.source,
+            SourceKind::Grok | SourceKind::Pi | SourceKind::Muse
+        ) && let Some(hash) = item.dedupe_hash
+            && !seen.insert((item.event.source, hash))
+        {
+            continue;
+        }
+        out.push(item);
+    }
+    *events = out;
+}
+
 pub(super) fn parse_files_concurrently(
     files: Vec<FileParseJob>,
     workers: usize,
@@ -822,7 +1515,6 @@ pub(super) fn parse_files_concurrently(
     }
 
     let (tx, rx) = bounded::<FileParseJob>(4096);
-    let global_claude_dedupe = Arc::new(ClaudeGlobalDedupe::default());
 
     let producer = {
         let tx = tx.clone();
@@ -842,18 +1534,9 @@ pub(super) fn parse_files_concurrently(
         let pricing = pricing.clone();
         let stats = stats.clone();
         let timezone = timezone.clone();
-        let global_claude_dedupe = global_claude_dedupe.clone();
 
         let handle = thread::spawn(move || {
-            worker_loop(
-                rx,
-                filter,
-                &timezone,
-                &pricing,
-                &stats,
-                &global_claude_dedupe,
-                cache_enabled,
-            )
+            worker_loop(rx, filter, &timezone, &pricing, &stats, cache_enabled)
         });
         handles.push(handle);
     }
@@ -875,21 +1558,14 @@ pub(super) fn worker_loop(
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
-    global_claude_dedupe: &ClaudeGlobalDedupe,
     cache_enabled: bool,
 ) -> WorkerParseOutput {
     let mut output = WorkerParseOutput::default();
     while let Ok(job) = rx.recv() {
         let cache_key = cache_enabled.then(|| job.cache_key.clone());
-        if let Some(parsed) = parse_single_file(
-            job,
-            filter,
-            timezone,
-            pricing,
-            stats,
-            global_claude_dedupe,
-            cache_enabled,
-        ) {
+        if let Some(parsed) =
+            parse_single_file(job, filter, timezone, pricing, stats, cache_enabled)
+        {
             output.events.extend(parsed.events);
             if let Some(cache_key) = cache_key {
                 output.cache_updates.push((cache_key, parsed.cache_entry));
@@ -899,47 +1575,12 @@ pub(super) fn worker_loop(
     output
 }
 
-#[derive(Debug)]
-pub(super) struct ClaudeGlobalDedupe {
-    shards: [Mutex<HashSet<u64>>; 64],
-}
-
-impl Default for ClaudeGlobalDedupe {
-    fn default() -> Self {
-        Self {
-            shards: std::array::from_fn(|_| Mutex::new(HashSet::new())),
-        }
-    }
-}
-
-impl ClaudeGlobalDedupe {
-    #[inline]
-    fn hash_key(key: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    #[inline]
-    fn insert(&self, key: &str) -> bool {
-        let hash = Self::hash_key(key);
-        let shard_idx = (hash as usize) & 63;
-        let mut seen = self.shards[shard_idx]
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        seen.insert(hash)
-    }
-}
-
 pub(super) fn parse_single_file(
     job: FileParseJob,
     filter: DateFilter,
     timezone: &TimeZoneMode,
     pricing: &PricingTable,
     stats: &ParseStatsAtomic,
-    global_claude_dedupe: &ClaudeGlobalDedupe,
     cache_enabled: bool,
 ) -> Option<ParsedFileOutput> {
     if job.file.source == SourceKind::Gemini {
@@ -980,10 +1621,12 @@ pub(super) fn parse_single_file(
 
     let mut reader = BufReader::with_capacity(64 * 1024, input);
     let mut codex_state = CodexParseState::default();
-    let mut claude_state = ClaudeDedupeState::default();
+    let mut pi_session_id = String::new();
 
-    let mut local_events = Vec::new();
-    let mut cached_events = Vec::new();
+    let mut local_events: Vec<InternalEvent> = Vec::new();
+    let mut cached_events: Vec<CachedUsageEvent> = Vec::new();
+    let mut claude_cached_idx: HashMap<u64, usize> = HashMap::new();
+    let mut claude_local_idx: HashMap<u64, usize> = HashMap::new();
     let mut lines_total = 0usize;
     let mut lines_parsed = 0usize;
     let mut lines_invalid_json = 0usize;
@@ -1003,24 +1646,43 @@ pub(super) fn parse_single_file(
             parsed_offset = seek_offset;
             base_stats = base_cache.stats.clone();
             cached_events.extend(base_cache.events.iter().cloned());
-            local_events.extend(hydrate_cached_events(
+            for (idx, ev) in cached_events.iter().enumerate() {
+                if let Some(hash) = ev.dedupe_hash {
+                    claude_cached_idx.insert(hash, idx);
+                }
+            }
+            local_events.extend(hydrate_cached_internal_events(
                 &job.file, base_cache, filter, timezone, pricing, stats,
             ));
-            match job.file.source {
-                SourceKind::Codex => {
-                    codex_state.current_model = base_cache.codex_last_model.clone();
-                    codex_state.previous_totals = base_cache.codex_last_totals;
+            for (idx, item) in local_events.iter().enumerate() {
+                if let Some(hash) = item.dedupe_hash {
+                    claude_local_idx.insert(hash, idx);
                 }
-                SourceKind::Claude => {
-                    claude_state =
-                        ClaudeDedupeState::with_seed(base_cache.claude_recent_keys.clone());
-                }
-                SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Grok => {}
+            }
+            if job.file.source == SourceKind::Codex {
+                codex_state.current_model = base_cache.codex_last_model.clone();
+                codex_state.previous_totals = base_cache.codex_last_totals;
+                codex_state.service_tier = base_cache.codex_service_tier;
+                codex_state.fork_anchor_ts = base_cache
+                    .codex_fork_anchor_ms
+                    .and_then(DateTime::from_timestamp_millis);
+                codex_state.request_ledger_active = base_cache.codex_request_ledger_active;
+            } else if job.file.source == SourceKind::Pi
+                && let Some(prev_session) = base_cache
+                    .events
+                    .iter()
+                    .rev()
+                    .find_map(|ev| ev.session.clone())
+                    .filter(|s| !s.is_empty())
+            {
+                pi_session_id = prev_session;
             }
         } else {
             let _ = reader.seek(SeekFrom::Start(0));
         }
     }
+    let hydrated_len = local_events.len();
+    let mut day_cache = LocalDayCache::new(timezone);
 
     let mut line = String::with_capacity(512);
     loop {
@@ -1050,51 +1712,128 @@ pub(super) fn parse_single_file(
             continue;
         }
 
-        let parsed = match job.file.source {
-            SourceKind::Claude => {
-                parse_claude_usage_line(&line, pricing, &mut claude_state, global_claude_dedupe)
-            }
-            SourceKind::Codex => parse_codex_usage_line(&line, &mut codex_state, pricing),
-            SourceKind::Gemini => parse_gemini_usage_line(&line, pricing),
+        let multi = match job.file.source {
+            SourceKind::Claude => parse_claude_usage_line_records(&line),
+            SourceKind::Codex => parse_codex_usage_line_records(&line, &mut codex_state, pricing),
+            SourceKind::Gemini => match parse_gemini_usage_line(&line, pricing) {
+                ParseLineResult::Parsed(p) => MultiLineResult::Parsed(vec![ParsedRecord {
+                    event: p.event,
+                    pricing_ctx: PricingContext::default(),
+                    dedupe_hash: None,
+                    used_unknown_pricing: p.used_unknown_pricing,
+                }]),
+                ParseLineResult::InvalidJson => MultiLineResult::InvalidJson,
+                ParseLineResult::MissingUsage => MultiLineResult::MissingUsage,
+            },
             SourceKind::OpenCode => unreachable!("OpenCode is parsed as whole-file JSON"),
-            SourceKind::Grok => parse_grok_usage_line(&line, pricing),
+            SourceKind::Grok => parse_grok_usage_line_records(&line, pricing),
+            SourceKind::Pi => parse_pi_usage_line_records(&line, &mut pi_session_id, pricing),
+            SourceKind::Muse => parse_muse_usage_line_records(&line, pricing),
         };
 
-        let mut parsed = match parsed {
-            ParseLineResult::Parsed(parsed) => parsed,
-            ParseLineResult::InvalidJson => {
+        let records = match multi {
+            MultiLineResult::Parsed(records) => records,
+            MultiLineResult::InvalidJson => {
                 lines_invalid_json += 1;
                 continue;
             }
-            ParseLineResult::MissingUsage => {
+            MultiLineResult::MissingUsage => {
                 lines_missing_usage += 1;
                 continue;
             }
         };
 
-        if parsed.used_unknown_pricing {
-            lines_unknown_pricing += 1;
-        }
+        for mut parsed in records {
+            if job.file.source == SourceKind::Claude
+                && let Some(hash) = parsed.dedupe_hash
+            {
+                let mut is_dup = false;
+                if let Some(&c_idx) = claude_cached_idx.get(&hash) {
+                    is_dup = true;
+                    let c_ev = &mut cached_events[c_idx];
+                    merge_usage_max(&mut c_ev.usage, parsed.event.usage);
+                    if parsed.pricing_ctx.cache_creation_1h_tokens > c_ev.cache_creation_1h_tokens {
+                        c_ev.cache_creation_1h_tokens = parsed.pricing_ctx.cache_creation_1h_tokens;
+                    }
+                    if let Some(rc) = parsed.pricing_ctx.reported_cost_usd {
+                        c_ev.reported_cost_usd =
+                            Some(c_ev.reported_cost_usd.map_or(rc, |prev| prev.max(rc)));
+                    }
+                }
+                if let Some(&l_idx) = claude_local_idx.get(&hash) {
+                    is_dup = true;
+                    let l_ev = &mut local_events[l_idx];
+                    merge_usage_max(&mut l_ev.event.usage, parsed.event.usage);
+                    merge_ctx_max(&mut l_ev.pricing_ctx, parsed.pricing_ctx);
+                }
+                if is_dup {
+                    continue;
+                }
+            }
 
-        if parsed.event.session.is_empty() {
-            parsed.event.session.clone_from(&session);
-        }
-        if parsed.event.project.is_none() {
-            parsed.event.project = project.clone();
-        }
-        parsed.event.file_path.clone_from(&file_path);
+            if parsed.used_unknown_pricing {
+                lines_unknown_pricing += 1;
+            }
 
-        if cache_enabled {
-            cached_events.push(cached_usage_event(&parsed.event));
-        }
+            if parsed.event.session.is_empty() {
+                parsed.event.session.clone_from(&session);
+            }
+            if parsed.event.project.is_none() {
+                parsed.event.project = project.clone();
+            }
+            parsed.event.file_path.clone_from(&file_path);
 
-        if !date_filter_allows(filter, parsed.event.timestamp, timezone) {
-            lines_filtered += 1;
-            continue;
-        }
+            if cache_enabled {
+                let c_idx = cached_events.len();
+                cached_events.push(cached_usage_event_for_file(
+                    &parsed.event,
+                    parsed.pricing_ctx,
+                    parsed.dedupe_hash,
+                    &file_path,
+                ));
+                if job.file.source == SourceKind::Claude
+                    && let Some(hash) = parsed.dedupe_hash
+                {
+                    claude_cached_idx.insert(hash, c_idx);
+                }
+            }
 
-        local_events.push(parsed.event);
-        lines_parsed += 1;
+            if !date_filter_allows_cached(filter, parsed.event.timestamp, &mut day_cache) {
+                lines_filtered += 1;
+                continue;
+            }
+
+            let l_idx = local_events.len();
+            local_events.push(InternalEvent {
+                event: parsed.event,
+                pricing_ctx: parsed.pricing_ctx,
+                dedupe_hash: parsed.dedupe_hash,
+            });
+            if job.file.source == SourceKind::Claude
+                && let Some(hash) = parsed.dedupe_hash
+            {
+                claude_local_idx.insert(hash, l_idx);
+            }
+            lines_parsed += 1;
+        }
+    }
+
+    if job.file.source == SourceKind::Claude {
+        for (idx, item) in local_events.iter_mut().enumerate() {
+            match pricing.estimate_cost_with_context(
+                &item.event.model,
+                item.event.usage,
+                item.pricing_ctx,
+            ) {
+                Some(cost) => item.event.usage.cost_usd = cost,
+                None => {
+                    item.event.usage.cost_usd = 0.0;
+                    if idx >= hydrated_len {
+                        lines_unknown_pricing += 1;
+                    }
+                }
+            }
+        }
     }
 
     stats.lines_total.fetch_add(lines_total, Ordering::Relaxed);
@@ -1126,11 +1865,9 @@ pub(super) fn parse_single_file(
         parsed_offset: job.fingerprint.size.max(parsed_offset),
         codex_last_model: codex_state.current_model,
         codex_last_totals: codex_state.previous_totals,
-        claude_recent_keys: if cache_enabled {
-            claude_state.snapshot()
-        } else {
-            Vec::new()
-        },
+        codex_service_tier: codex_state.service_tier,
+        codex_fork_anchor_ms: codex_state.fork_anchor_ts.map(|ts| ts.timestamp_millis()),
+        codex_request_ledger_active: codex_state.request_ledger_active,
     };
 
     Some(ParsedFileOutput {
@@ -1144,37 +1881,24 @@ pub(super) fn should_skip_parse_by_line_prefix(source: SourceKind, line: &str) -
     if markers.is_empty() {
         return false;
     }
-    let limit = 2048.min(line.len());
-    let mut boundary = limit;
-    while boundary > 0 && !line.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    let scan_window = &line[..boundary];
-    !markers.iter().any(|marker| scan_window.contains(marker))
+    !markers.iter().any(|marker| line.contains(marker))
 }
 
 fn provider_fast_line_markers(source: SourceKind) -> &'static [&'static str] {
     match source {
         SourceKind::Codex => &[
-            "\"type\":\"event_msg\"",
-            "\"type\": \"event_msg\"",
-            "\"type\":\"turn_context\"",
-            "\"type\": \"turn_context\"",
+            "\"token_count\"",
+            "\"token_usage_record\"",
+            "\"turn_context\"",
+            "\"thread_settings_applied\"",
+            "\"session_meta\"",
         ],
-        SourceKind::Claude => &["\"type\":\"assistant\"", "\"type\": \"assistant\""],
-        SourceKind::Gemini => &[
-            "\"type\":\"gemini\"",
-            "\"type\": \"gemini\"",
-            "\"tokens\":",
-            "\"tokens\": ",
-        ],
+        SourceKind::Claude => &["\"usage\""],
+        SourceKind::Gemini => &["\"tokens\"", "\"usage\""],
         SourceKind::OpenCode => &[],
-        SourceKind::Grok => &[
-            "\"sessionUpdate\":\"turn_completed\"",
-            "\"sessionUpdate\": \"turn_completed\"",
-            "\"msg\":\"shell.turn.inference_done\"",
-            "\"msg\": \"shell.turn.inference_done\"",
-        ],
+        SourceKind::Grok => &["\"turn_completed\"", "\"shell.turn.inference_done\""],
+        SourceKind::Pi => &["\"usage\"", "\"session\""],
+        SourceKind::Muse => &["\"model_completed\"", "\"automated_review_completed\""],
     }
 }
 
@@ -1196,8 +1920,8 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
                 .unwrap_or_default()
                 .to_string()
         }
-        SourceKind::Grok => {
-            // `<encoded_cwd>/<sessionID>/updates.jsonl` -> `<sessionID>`
+        SourceKind::Grok | SourceKind::Muse => {
+            // `<...>/<sessionID>/(updates.jsonl|session.jsonl)` -> `<sessionID>`
             let normalized = relative.to_string_lossy().replace('\\', "/");
             let parts: Vec<&str> = normalized.split('/').collect();
             if parts.len() >= 2 {
@@ -1222,10 +1946,9 @@ pub(super) fn derive_session_meta(file: &DiscoveredFile) -> (String, Option<Stri
         .filter(|s| !s.is_empty() && s != ".");
 
     let project = match file.source {
-        SourceKind::Claude => raw_project.map(|p| decode_claude_project_dir(&p)),
+        SourceKind::Claude | SourceKind::Pi => raw_project.map(|p| decode_claude_project_dir(&p)),
         SourceKind::Codex => extract_codex_project_from_file(&file.path).or(raw_project),
-        SourceKind::Gemini => None,
-        SourceKind::OpenCode => None,
+        SourceKind::Gemini | SourceKind::OpenCode | SourceKind::Muse => None,
         SourceKind::Grok => raw_project.map(|p| decode_grok_project_dir(&p)),
     };
 
@@ -1397,7 +2120,7 @@ pub(super) fn extract_session_title(source: SourceKind, path: &Path) -> String {
                     }
                 }
             }
-            SourceKind::OpenCode => {}
+            SourceKind::OpenCode | SourceKind::Pi | SourceKind::Muse => {}
             // Grok has no per-session file to preview from (unified.jsonl is
             // shared across every session/project).
             SourceKind::Grok => {}
@@ -1464,132 +2187,484 @@ pub(super) fn is_codex_system_content(s: &str) -> bool {
         || t.starts_with("AGENTS.md")
 }
 
-pub(super) fn parse_claude_usage_line(
-    line: &str,
-    pricing: &PricingTable,
-    dedupe_state: &mut ClaudeDedupeState,
-    global_dedupe: &ClaudeGlobalDedupe,
-) -> ParseLineResult {
-    let value: Value = match serde_json::from_str(line) {
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawTimestamp {
+    Str(String),
+    Int(i64),
+    Float(f64),
+}
+
+impl RawTimestamp {
+    fn to_utc(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Str(s) => DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc)),
+            Self::Int(raw) => {
+                if *raw > 10_000_000_000 {
+                    DateTime::from_timestamp_millis(*raw)
+                } else {
+                    DateTime::from_timestamp(*raw, 0)
+                }
+            }
+            Self::Float(f) => {
+                if !f.is_finite() {
+                    return None;
+                }
+                let raw = *f as i64;
+                if raw > 10_000_000_000 {
+                    DateTime::from_timestamp_millis(raw)
+                } else {
+                    DateTime::from_timestamp(raw, 0)
+                }
+            }
+        }
+    }
+}
+
+fn de_opt_u64_clamped<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct U64Visitor;
+    impl<'de> serde::de::Visitor<'de> for U64Visitor {
+        type Value = Option<u64>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("integer, numeric string, or null")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(v.max(0) as u64))
+        }
+        fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Self::Value, E> {
+            if v.is_finite() && v >= 0.0 {
+                Ok(Some(v as u64))
+            } else {
+                Ok(Some(0))
+            }
+        }
+        fn visit_str<E: serde::de::Error>(self, s: &str) -> std::result::Result<Self::Value, E> {
+            Ok(s.parse::<u64>().ok())
+        }
+    }
+    deserializer.deserialize_any(U64Visitor)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeCacheCreationSplit {
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    ephemeral_1h_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeOutputDetails {
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeIteration {
+    #[serde(rename = "type", default)]
+    iter_type: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    output_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning_output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation: Option<ClaudeCacheCreationSplit>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeUsageObj {
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "inputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheCreationInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_creation_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheReadInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_read_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cached_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cachedInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cached_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    output_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "outputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    output_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning_output_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "reasoningOutputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    reasoning_output_tokens_camel: Option<u64>,
+    #[serde(default)]
+    output_tokens_details: Option<ClaudeOutputDetails>,
+    #[serde(default)]
+    cache_creation: Option<ClaudeCacheCreationSplit>,
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde(default)]
+    iterations: Option<Vec<ClaudeIteration>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeMessageMetadata {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeMessageObj {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    timestamp: Option<RawTimestamp>,
+    #[serde(default)]
+    created_at: Option<RawTimestamp>,
+    #[serde(default)]
+    metadata: Option<ClaudeMessageMetadata>,
+    #[serde(default)]
+    usage: Option<ClaudeUsageObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudePayloadFallback {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeLineRecord {
+    #[serde(rename = "type", default)]
+    entry_type: Option<String>,
+    #[serde(default)]
+    timestamp: Option<RawTimestamp>,
+    #[serde(default)]
+    created_at: Option<RawTimestamp>,
+    #[serde(default, rename = "createdAt")]
+    created_at_camel: Option<RawTimestamp>,
+    #[serde(default, rename = "messageId")]
+    message_id: Option<String>,
+    #[serde(default, rename = "requestId")]
+    request_id: Option<String>,
+    #[serde(default, rename = "request_id")]
+    request_id_snake: Option<String>,
+    #[serde(default, rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(default, rename = "session_id")]
+    session_id_snake: Option<String>,
+    #[serde(default, rename = "costUSD")]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    payload: Option<ClaudePayloadFallback>,
+    #[serde(default)]
+    message: Option<ClaudeMessageObj>,
+    #[serde(default)]
+    usage: Option<ClaudeUsageObj>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "inputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheCreationInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_creation_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheReadInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_read_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cached_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cachedInputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cached_input_tokens_camel: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    output_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "outputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    output_tokens_camel: Option<u64>,
+}
+
+fn parse_claude_usage_line_records(line: &str) -> MultiLineResult {
+    let rec: ClaudeLineRecord = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(_) => return ParseLineResult::InvalidJson,
+        Err(_) => return MultiLineResult::InvalidJson,
     };
 
-    if get_value(&value, "type")
-        .and_then(Value::as_str)
+    if rec
+        .entry_type
+        .as_deref()
         .is_some_and(|entry_type| entry_type != "assistant")
     {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     }
 
-    let Some(timestamp) = extract_timestamp(&value) else {
-        return ParseLineResult::MissingUsage;
-    };
-    let Some(model) = extract_model(&value, SourceKind::Claude) else {
-        return ParseLineResult::MissingUsage;
+    let timestamp = rec
+        .timestamp
+        .as_ref()
+        .and_then(RawTimestamp::to_utc)
+        .or_else(|| rec.created_at.as_ref().and_then(RawTimestamp::to_utc))
+        .or_else(|| rec.created_at_camel.as_ref().and_then(RawTimestamp::to_utc))
+        .or_else(|| {
+            rec.message
+                .as_ref()
+                .and_then(|m| m.timestamp.as_ref().and_then(RawTimestamp::to_utc))
+        })
+        .or_else(|| {
+            rec.message
+                .as_ref()
+                .and_then(|m| m.created_at.as_ref().and_then(RawTimestamp::to_utc))
+        });
+    let Some(timestamp) = timestamp else {
+        return MultiLineResult::MissingUsage;
     };
 
-    let message_id = get_value(&value, "message.id")
-        .and_then(Value::as_str)
-        .or_else(|| get_value(&value, "messageId").and_then(Value::as_str));
-    let request_id = get_value(&value, "requestId")
-        .and_then(Value::as_str)
-        .or_else(|| get_value(&value, "request_id").and_then(Value::as_str));
-    if let Some(message_id) = message_id {
-        let key = request_id
-            .map(|r| format!("{message_id}:{r}"))
-            .unwrap_or_else(|| message_id.to_string());
-        if !dedupe_state.insert(key.clone()) {
-            return ParseLineResult::MissingUsage;
-        }
-        if !global_dedupe.insert(&key) {
-            return ParseLineResult::MissingUsage;
-        }
-    }
+    let msg_ref = rec.message.as_ref();
+    let usage_ref = msg_ref
+        .and_then(|m| m.usage.as_ref())
+        .or(rec.usage.as_ref());
+
+    let model = msg_ref
+        .and_then(|m| m.model.as_deref())
+        .or_else(|| usage_ref.and_then(|u| u.model.as_deref()))
+        .or(rec.model.as_deref())
+        .or_else(|| rec.payload.as_ref().and_then(|p| p.model.as_deref()))
+        .or_else(|| {
+            msg_ref
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|meta| meta.model.as_deref())
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "<synthetic>");
+    let Some(model) = model else {
+        return MultiLineResult::MissingUsage;
+    };
 
     let usage = UsageAccumulator {
-        input_tokens: extract_u64(
-            &value,
-            &[
-                "message.usage.input_tokens",
-                "usage.input_tokens",
-                "usage.inputTokens",
-                "input_tokens",
-                "inputTokens",
-            ],
-        )
-        .unwrap_or(0),
-        cache_creation_input_tokens: extract_u64(
-            &value,
-            &[
-                "message.usage.cache_creation_input_tokens",
-                "usage.cache_creation_input_tokens",
-                "usage.cacheCreationInputTokens",
-                "cache_creation_input_tokens",
-                "cacheCreationInputTokens",
-            ],
-        )
-        .unwrap_or(0),
-        cache_read_input_tokens: extract_u64(
-            &value,
-            &[
-                "message.usage.cache_read_input_tokens",
-                "usage.cache_read_input_tokens",
-                "usage.cached_input_tokens",
-                "usage.cachedInputTokens",
-                "cache_read_input_tokens",
-                "cached_input_tokens",
-                "cachedInputTokens",
-            ],
-        )
-        .unwrap_or(0),
-        output_tokens: extract_u64(
-            &value,
-            &[
-                "message.usage.output_tokens",
-                "usage.output_tokens",
-                "usage.outputTokens",
-                "output_tokens",
-                "outputTokens",
-            ],
-        )
-        .unwrap_or(0),
-        reasoning_output_tokens: extract_u64(
-            &value,
-            &[
-                "message.usage.reasoning_output_tokens",
-                "usage.reasoning_output_tokens",
-                "usage.reasoningOutputTokens",
-                "usage.output_tokens_details.reasoning_tokens",
-                "output_tokens_details.reasoning_tokens",
-            ],
-        )
-        .unwrap_or(0),
+        input_tokens: usage_ref
+            .and_then(|u| u.input_tokens.or(u.input_tokens_camel))
+            .or(rec.input_tokens)
+            .or(rec.input_tokens_camel)
+            .unwrap_or(0),
+        cache_creation_input_tokens: usage_ref
+            .and_then(|u| {
+                u.cache_creation_input_tokens
+                    .or(u.cache_creation_input_tokens_camel)
+            })
+            .or(rec.cache_creation_input_tokens)
+            .or(rec.cache_creation_input_tokens_camel)
+            .unwrap_or(0),
+        cache_read_input_tokens: usage_ref
+            .and_then(|u| {
+                u.cache_read_input_tokens
+                    .or(u.cache_read_input_tokens_camel)
+                    .or(u.cached_input_tokens)
+                    .or(u.cached_input_tokens_camel)
+            })
+            .or(rec.cache_read_input_tokens)
+            .or(rec.cache_read_input_tokens_camel)
+            .or(rec.cached_input_tokens)
+            .or(rec.cached_input_tokens_camel)
+            .unwrap_or(0),
+        output_tokens: usage_ref
+            .and_then(|u| u.output_tokens.or(u.output_tokens_camel))
+            .or(rec.output_tokens)
+            .or(rec.output_tokens_camel)
+            .unwrap_or(0),
+        reasoning_output_tokens: usage_ref
+            .and_then(|u| {
+                u.reasoning_output_tokens
+                    .or(u.reasoning_output_tokens_camel)
+                    .or_else(|| {
+                        u.output_tokens_details
+                            .as_ref()
+                            .and_then(|d| d.reasoning_tokens)
+                    })
+            })
+            .unwrap_or(0),
         cost_usd: 0.0,
     };
 
-    let total_tokens = usage.total_tokens();
-    if total_tokens == 0 {
-        return ParseLineResult::MissingUsage;
+    if usage.total_tokens() == 0 {
+        return MultiLineResult::MissingUsage;
     }
 
-    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
-        Some(v) => (v, false),
-        None => (0.0, true),
+    let message_id = msg_ref
+        .and_then(|m| m.id.as_deref())
+        .or(rec.message_id.as_deref());
+    let request_id = rec
+        .request_id
+        .as_deref()
+        .or(rec.request_id_snake.as_deref());
+    let dedupe_base = if message_id.is_some() || request_id.is_some() {
+        Some(format!(
+            "{}:{}",
+            message_id.unwrap_or(""),
+            request_id.unwrap_or("")
+        ))
+    } else {
+        None
     };
 
-    ParseLineResult::Parsed(ParsedLine {
+    let speed = if usage_ref
+        .and_then(|u| u.speed.as_deref())
+        .is_some_and(|s| s == "fast")
+    {
+        ServiceSpeed::Fast
+    } else {
+        ServiceSpeed::Standard
+    };
+    let cw_1h = usage_ref
+        .and_then(|u| u.cache_creation.as_ref())
+        .and_then(|c| c.ephemeral_1h_input_tokens)
+        .unwrap_or(0);
+    let reported_cost_usd = rec.cost_usd.filter(|c| c.is_finite() && *c >= 0.0);
+    let session = rec.session_id.or(rec.session_id_snake).unwrap_or_default();
+
+    let mut out = Vec::with_capacity(1);
+    out.push(ParsedRecord {
         event: UsageEvent {
             timestamp,
             source: SourceKind::Claude,
-            model,
-            session: String::new(),
+            model: model.to_string(),
+            session: session.clone(),
             project: None,
             file_path: String::new(),
-            usage: UsageAccumulator { cost_usd, ..usage },
+            usage,
         },
-        used_unknown_pricing,
-    })
+        pricing_ctx: PricingContext {
+            cache_creation_1h_tokens: cw_1h,
+            speed,
+            model_calls: 1,
+            reported_cost_usd,
+        },
+        dedupe_hash: dedupe_base.as_deref().map(|k| fnv1a_64(k.as_bytes())),
+        used_unknown_pricing: false,
+    });
+
+    if let Some(u) = usage_ref {
+        for (idx, iter) in u.iterations.as_deref().unwrap_or(&[]).iter().enumerate() {
+            if iter.iter_type.as_deref() != Some("advisor_message") {
+                continue;
+            }
+            let Some(adv_model) = iter
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "<synthetic>")
+            else {
+                continue;
+            };
+            let adv_usage = UsageAccumulator {
+                input_tokens: iter.input_tokens.unwrap_or(0),
+                cache_creation_input_tokens: iter.cache_creation_input_tokens.unwrap_or(0),
+                cache_read_input_tokens: iter.cache_read_input_tokens.unwrap_or(0),
+                output_tokens: iter.output_tokens.unwrap_or(0),
+                reasoning_output_tokens: iter.reasoning_output_tokens.unwrap_or(0),
+                cost_usd: 0.0,
+            };
+            if adv_usage.total_tokens() == 0 {
+                continue;
+            }
+            let adv_1h = iter
+                .cache_creation
+                .as_ref()
+                .and_then(|c| c.ephemeral_1h_input_tokens)
+                .unwrap_or(0);
+            let adv_hash = dedupe_base
+                .as_deref()
+                .map(|k| fnv1a_64(format!("{k}:advisor:{idx}").as_bytes()));
+            out.push(ParsedRecord {
+                event: UsageEvent {
+                    timestamp,
+                    source: SourceKind::Claude,
+                    model: adv_model.to_string(),
+                    session: session.clone(),
+                    project: None,
+                    file_path: String::new(),
+                    usage: adv_usage,
+                },
+                pricing_ctx: PricingContext {
+                    cache_creation_1h_tokens: adv_1h,
+                    speed,
+                    model_calls: 1,
+                    reported_cost_usd: None,
+                },
+                dedupe_hash: adv_hash,
+                used_unknown_pricing: false,
+            });
+        }
+    }
+
+    MultiLineResult::Parsed(out)
 }
 
 pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
@@ -1658,84 +2733,353 @@ pub(super) fn parse_gemini_usage_line(line: &str, pricing: &PricingTable) -> Par
     })
 }
 
+const GROK_COST_USD_TICKS_PER_DOLLAR: f64 = 1e10;
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokModelUsageEntry {
+    #[serde(
+        default,
+        rename = "inputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cachedReadTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cached_read_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheCreationTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_creation_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "outputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    output_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "reasoningTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    reasoning_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "costUsdTicks",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cost_usd_ticks: Option<u64>,
+    #[serde(
+        default,
+        rename = "modelCalls",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    model_calls: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokTurnUsage {
+    #[serde(
+        default,
+        rename = "inputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    input_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cachedReadTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cached_read_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheCreationTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_creation_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "outputTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    output_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "reasoningTokens",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    reasoning_tokens: Option<u64>,
+    #[serde(
+        default,
+        rename = "costUsdTicks",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cost_usd_ticks: Option<u64>,
+    #[serde(
+        default,
+        rename = "modelCalls",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    model_calls: Option<u64>,
+    #[serde(default, rename = "modelUsage")]
+    model_usage: Option<HashMap<String, GrokModelUsageEntry>>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokUpdateObj {
+    #[serde(default, rename = "sessionUpdate")]
+    session_update: Option<String>,
+    #[serde(default)]
+    prompt_id: Option<String>,
+    #[serde(default)]
+    usage: Option<GrokTurnUsage>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokMetaObj {
+    #[serde(default, rename = "agentTimestampMs")]
+    agent_timestamp_ms: Option<RawTimestamp>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokParamsObj {
+    #[serde(default, rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(default)]
+    update: Option<GrokUpdateObj>,
+    #[serde(default)]
+    _meta: Option<GrokMetaObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokUnifiedCtx {
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    prompt_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cached_prompt_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    completion_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokLineRecord {
+    #[serde(default)]
+    timestamp: Option<RawTimestamp>,
+    #[serde(default)]
+    created_at: Option<RawTimestamp>,
+    #[serde(default, rename = "createdAt")]
+    created_at_camel: Option<RawTimestamp>,
+    #[serde(default, rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(default)]
+    params: Option<GrokParamsObj>,
+    #[serde(default)]
+    update: Option<GrokUpdateObj>,
+    #[serde(default)]
+    _meta: Option<GrokMetaObj>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    ts: Option<RawTimestamp>,
+    #[serde(default)]
+    sid: Option<String>,
+    #[serde(default)]
+    ctx: Option<GrokUnifiedCtx>,
+}
+
+fn grok_usage_from_raw(
+    input: u64,
+    cached_read: u64,
+    cache_creation: u64,
+    output: u64,
+    reasoning: u64,
+) -> UsageAccumulator {
+    UsageAccumulator {
+        input_tokens: input
+            .saturating_sub(cached_read)
+            .saturating_sub(cache_creation),
+        cache_creation_input_tokens: cache_creation,
+        cache_read_input_tokens: cached_read,
+        output_tokens: output,
+        reasoning_output_tokens: reasoning,
+        cost_usd: 0.0,
+    }
+}
+
 /// Parse one line of Grok session (`updates.jsonl`) or unified log (`unified.jsonl`).
-///
-/// Supports:
-/// 1. `~/.grok/sessions/<encoded_cwd>/<session_id>/updates.jsonl` with `"sessionUpdate":"turn_completed"`
-///    containing explicit per-model breakdowns, exact token metrics, and costUsdTicks.
-/// 2. `~/.grok/logs/unified.jsonl` with `"msg":"shell.turn.inference_done"` for fallback.
-pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> ParseLineResult {
-    let value: Value = match serde_json::from_str(line) {
+pub(super) fn parse_grok_usage_line_records(line: &str, pricing: &PricingTable) -> MultiLineResult {
+    let rec: GrokLineRecord = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(_) => return ParseLineResult::InvalidJson,
+        Err(_) => return MultiLineResult::InvalidJson,
     };
 
-    // Format 1: updates.jsonl line with turn_completed
-    let is_turn_completed = get_value(&value, "params.update.sessionUpdate")
-        .or_else(|| get_value(&value, "update.sessionUpdate"))
-        .and_then(Value::as_str)
-        == Some("turn_completed");
+    let upd = rec
+        .params
+        .as_ref()
+        .and_then(|p| p.update.as_ref())
+        .or(rec.update.as_ref());
 
-    if is_turn_completed {
-        let timestamp = extract_timestamp(&value)
-            .or_else(|| get_value(&value, "_meta.agentTimestampMs").and_then(parse_timestamp_value))
-            .or_else(|| get_value(&value, "timestamp").and_then(parse_timestamp_value));
+    if let Some(upd) = upd
+        && upd.session_update.as_deref() == Some("turn_completed")
+    {
+        let timestamp = rec
+            .params
+            .as_ref()
+            .and_then(|p| p._meta.as_ref())
+            .and_then(|m| m.agent_timestamp_ms.as_ref())
+            .and_then(RawTimestamp::to_utc)
+            .or_else(|| {
+                rec._meta
+                    .as_ref()
+                    .and_then(|m| m.agent_timestamp_ms.as_ref())
+                    .and_then(RawTimestamp::to_utc)
+            })
+            .or_else(|| rec.timestamp.as_ref().and_then(RawTimestamp::to_utc))
+            .or_else(|| rec.created_at.as_ref().and_then(RawTimestamp::to_utc))
+            .or_else(|| rec.created_at_camel.as_ref().and_then(RawTimestamp::to_utc));
         let Some(timestamp) = timestamp else {
-            return ParseLineResult::MissingUsage;
+            return MultiLineResult::MissingUsage;
         };
 
-        let session =
-            extract_string(&value, &["params.sessionId", "sessionId"]).unwrap_or_default();
-        let usage_obj =
-            get_value(&value, "params.update.usage").or_else(|| get_value(&value, "update.usage"));
-
-        let Some(usage_val) = usage_obj else {
-            return ParseLineResult::MissingUsage;
+        let session = rec
+            .params
+            .as_ref()
+            .and_then(|p| p.session_id.clone())
+            .or(rec.session_id)
+            .unwrap_or_default();
+        let Some(usage_val) = upd.usage.as_ref() else {
+            return MultiLineResult::MissingUsage;
         };
+        let prompt_id = upd.prompt_id.as_deref();
+        let ts_ms = timestamp.timestamp_millis();
+        let top_calls = usage_val.model_calls.unwrap_or(1).max(1) as u32;
+        let top_cost_usd = usage_val
+            .cost_usd_ticks
+            .filter(|&t| t > 0)
+            .map(|t| (t as f64) / GROK_COST_USD_TICKS_PER_DOLLAR);
 
-        let input_tokens = extract_u64(usage_val, &["inputTokens"]).unwrap_or(0);
-        let cached_read_tokens = extract_u64(usage_val, &["cachedReadTokens"]).unwrap_or(0);
-        let output_tokens = extract_u64(usage_val, &["outputTokens"]).unwrap_or(0);
-        let reasoning_tokens = extract_u64(usage_val, &["reasoningTokens"]).unwrap_or(0);
-        let cost_usd_ticks = extract_u64(usage_val, &["costUsdTicks"]).unwrap_or(0);
+        if let Some(model_usage) = usage_val.model_usage.as_ref()
+            && !model_usage.is_empty()
+        {
+            let mut entries: Vec<(&str, UsageAccumulator, Option<f64>, u32)> =
+                Vec::with_capacity(model_usage.len());
+            let mut used_ticked_cost = 0.0;
+            let mut unticked_tokens: u64 = 0;
 
-        let usage = UsageAccumulator {
-            input_tokens: input_tokens.saturating_sub(cached_read_tokens),
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: cached_read_tokens,
-            output_tokens,
-            reasoning_output_tokens: reasoning_tokens,
-            cost_usd: 0.0,
-        };
+            for (model_name, m) in model_usage {
+                if model_name.is_empty() {
+                    continue;
+                }
+                let u = grok_usage_from_raw(
+                    m.input_tokens.unwrap_or(0),
+                    m.cached_read_tokens.unwrap_or(0),
+                    m.cache_creation_tokens.unwrap_or(0),
+                    m.output_tokens.unwrap_or(0),
+                    m.reasoning_tokens.unwrap_or(0),
+                );
+                let tot = u.total_tokens();
+                if tot == 0 {
+                    continue;
+                }
+                let rep = m
+                    .cost_usd_ticks
+                    .filter(|&t| t > 0)
+                    .map(|t| (t as f64) / GROK_COST_USD_TICKS_PER_DOLLAR);
+                if let Some(c) = rep {
+                    used_ticked_cost += c;
+                } else {
+                    unticked_tokens += tot;
+                }
+                let calls = m.model_calls.map(|c| c.max(1) as u32).unwrap_or(top_calls);
+                entries.push((model_name.as_str(), u, rep, calls));
+            }
 
-        if usage.total_tokens() == 0 {
-            return ParseLineResult::MissingUsage;
+            if entries.is_empty() {
+                return MultiLineResult::MissingUsage;
+            }
+
+            let remaining_cost = top_cost_usd.map(|c| (c - used_ticked_cost).max(0.0));
+            let mut out = Vec::with_capacity(entries.len());
+            for (model_name, mut u, mut rep, calls) in entries {
+                if rep.is_none()
+                    && let Some(rem) = remaining_cost
+                    && unticked_tokens > 0
+                {
+                    rep = Some(rem * (u.total_tokens() as f64 / unticked_tokens as f64));
+                }
+                let ctx = PricingContext {
+                    cache_creation_1h_tokens: 0,
+                    speed: ServiceSpeed::Standard,
+                    model_calls: calls,
+                    reported_cost_usd: rep,
+                };
+                let (cost_usd, used_unknown_pricing) =
+                    match pricing.estimate_cost_with_context(model_name, u, ctx) {
+                        Some(v) => (v, false),
+                        None => (0.0, true),
+                    };
+                u.cost_usd = cost_usd;
+                let dedupe_hash = prompt_id.map(|pid| {
+                    fnv1a_64(format!("{session}:{pid}:{ts_ms}:{model_name}").as_bytes())
+                });
+                out.push(ParsedRecord {
+                    event: UsageEvent {
+                        timestamp,
+                        source: SourceKind::Grok,
+                        model: model_name.to_string(),
+                        session: session.clone(),
+                        project: None,
+                        file_path: String::new(),
+                        usage: u,
+                    },
+                    pricing_ctx: ctx,
+                    dedupe_hash,
+                    used_unknown_pricing,
+                });
+            }
+            return MultiLineResult::Parsed(out);
         }
 
-        // Determine model from modelUsage map or fallback
-        let model = if let Some(model_usage) =
-            get_value(usage_val, "modelUsage").and_then(Value::as_object)
-        {
-            model_usage
-                .iter()
-                .max_by_key(|(_, v)| extract_u64(v, &["totalTokens", "inputTokens"]).unwrap_or(0))
-                .map(|(k, _)| k.clone())
-                .unwrap_or_else(|| crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string())
-        } else {
-            extract_string(usage_val, &["model", "model_id"])
-                .unwrap_or_else(|| crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string())
+        let mut u = grok_usage_from_raw(
+            usage_val.input_tokens.unwrap_or(0),
+            usage_val.cached_read_tokens.unwrap_or(0),
+            usage_val.cache_creation_tokens.unwrap_or(0),
+            usage_val.output_tokens.unwrap_or(0),
+            usage_val.reasoning_tokens.unwrap_or(0),
+        );
+        if u.total_tokens() == 0 {
+            return MultiLineResult::MissingUsage;
+        }
+        let model = usage_val
+            .model
+            .clone()
+            .or_else(|| usage_val.model_id.clone())
+            .unwrap_or_else(|| crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string());
+        let ctx = PricingContext {
+            cache_creation_1h_tokens: 0,
+            speed: ServiceSpeed::Standard,
+            model_calls: top_calls,
+            reported_cost_usd: top_cost_usd,
         };
-
-        let (cost_usd, used_unknown_pricing) = if cost_usd_ticks > 0 {
-            ((cost_usd_ticks as f64) / 1e9, false)
-        } else {
-            match pricing.estimate_cost(&model, usage) {
+        let (cost_usd, used_unknown_pricing) =
+            match pricing.estimate_cost_with_context(&model, u, ctx) {
                 Some(v) => (v, false),
                 None => (0.0, true),
-            }
-        };
-
-        return ParseLineResult::Parsed(ParsedLine {
+            };
+        u.cost_usd = cost_usd;
+        let dedupe_hash =
+            prompt_id.map(|pid| fnv1a_64(format!("{session}:{pid}:{ts_ms}:{model}").as_bytes()));
+        return MultiLineResult::Parsed(vec![ParsedRecord {
             event: UsageEvent {
                 timestamp,
                 source: SourceKind::Grok,
@@ -1743,31 +3087,35 @@ pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> Parse
                 session,
                 project: None,
                 file_path: String::new(),
-                usage: UsageAccumulator { cost_usd, ..usage },
+                usage: u,
             },
+            pricing_ctx: ctx,
+            dedupe_hash,
             used_unknown_pricing,
-        });
+        }]);
     }
 
     // Format 2: unified.jsonl line with shell.turn.inference_done
-    if get_value(&value, "msg").and_then(Value::as_str) != Some("shell.turn.inference_done") {
-        return ParseLineResult::MissingUsage;
+    if rec.msg.as_deref() != Some("shell.turn.inference_done") {
+        return MultiLineResult::MissingUsage;
     }
 
-    let Some(timestamp) = get_value(&value, "ts").and_then(parse_timestamp_value) else {
-        return ParseLineResult::MissingUsage;
+    let Some(timestamp) = rec.ts.as_ref().and_then(RawTimestamp::to_utc) else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(session) = rec.sid else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(ctx_obj) = rec.ctx else {
+        return MultiLineResult::MissingUsage;
     };
 
-    let Some(session) = extract_string(&value, &["sid"]) else {
-        return ParseLineResult::MissingUsage;
-    };
+    let prompt_tokens = ctx_obj.prompt_tokens.unwrap_or(0);
+    let cached_prompt_tokens = ctx_obj.cached_prompt_tokens.unwrap_or(0);
+    let completion_tokens = ctx_obj.completion_tokens.unwrap_or(0);
+    let reasoning_tokens = ctx_obj.reasoning_tokens.unwrap_or(0);
 
-    let prompt_tokens = extract_u64(&value, &["ctx.prompt_tokens"]).unwrap_or(0);
-    let cached_prompt_tokens = extract_u64(&value, &["ctx.cached_prompt_tokens"]).unwrap_or(0);
-    let completion_tokens = extract_u64(&value, &["ctx.completion_tokens"]).unwrap_or(0);
-    let reasoning_tokens = extract_u64(&value, &["ctx.reasoning_tokens"]).unwrap_or(0);
-
-    let usage = UsageAccumulator {
+    let mut usage = UsageAccumulator {
         input_tokens: prompt_tokens.saturating_sub(cached_prompt_tokens),
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: cached_prompt_tokens,
@@ -1776,9 +3124,8 @@ pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> Parse
         cost_usd: 0.0,
     };
 
-    let total_tokens = usage.total_tokens();
-    if total_tokens == 0 {
-        return ParseLineResult::MissingUsage;
+    if usage.total_tokens() == 0 {
+        return MultiLineResult::MissingUsage;
     }
 
     let model = crate::types::GROK_DEFAULT_MODEL_FALLBACK.to_string();
@@ -1786,8 +3133,9 @@ pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> Parse
         Some(v) => (v, false),
         None => (0.0, true),
     };
+    usage.cost_usd = cost_usd;
 
-    ParseLineResult::Parsed(ParsedLine {
+    MultiLineResult::Parsed(vec![ParsedRecord {
         event: UsageEvent {
             timestamp,
             source: SourceKind::Grok,
@@ -1795,10 +3143,388 @@ pub(super) fn parse_grok_usage_line(line: &str, pricing: &PricingTable) -> Parse
             session,
             project: None,
             file_path: String::new(),
-            usage: UsageAccumulator { cost_usd, ..usage },
+            usage,
         },
+        pricing_ctx: PricingContext::default(),
+        dedupe_hash: None,
         used_unknown_pricing,
-    })
+    }])
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PiCostObj {
+    #[serde(default)]
+    total: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PiUsageObj {
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    input: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    output: Option<u64>,
+    #[serde(default, rename = "cacheRead", deserialize_with = "de_opt_u64_clamped")]
+    cache_read: Option<u64>,
+    #[serde(
+        default,
+        rename = "cacheWrite",
+        deserialize_with = "de_opt_u64_clamped"
+    )]
+    cache_write: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning: Option<u64>,
+    #[serde(default)]
+    cost: Option<PiCostObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PiMessageObj {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, rename = "responseModel")]
+    response_model: Option<String>,
+    #[serde(default)]
+    usage: Option<PiUsageObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PiLineRecord {
+    #[serde(rename = "type", default)]
+    entry_type: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    usage: Option<PiUsageObj>,
+    #[serde(default)]
+    message: Option<PiMessageObj>,
+}
+
+/// Parse one JSONL record from a Pi coding agent session (`~/.pi/agent/sessions`).
+pub(super) fn parse_pi_usage_line_records(
+    line: &str,
+    session_id: &mut String,
+    pricing: &PricingTable,
+) -> MultiLineResult {
+    let rec: PiLineRecord = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return MultiLineResult::InvalidJson,
+    };
+
+    let Some(entry_type) = rec.entry_type.as_deref() else {
+        return MultiLineResult::MissingUsage;
+    };
+
+    if entry_type == "session" {
+        if let Some(id) = rec.id.filter(|s| !s.is_empty()) {
+            *session_id = id;
+        }
+        return MultiLineResult::MissingUsage;
+    }
+
+    let Some(id) = rec.id.as_deref().filter(|s| !s.is_empty()) else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(ts_raw) = rec.timestamp.as_deref() else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(timestamp) = DateTime::parse_from_rfc3339(ts_raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+    else {
+        return MultiLineResult::MissingUsage;
+    };
+
+    let (model, usage_obj) = match entry_type {
+        "message" => {
+            let Some(msg) = rec.message else {
+                return MultiLineResult::MissingUsage;
+            };
+            match msg.role.as_deref() {
+                Some("assistant") => {
+                    let Some(prov) = msg.provider.as_deref().filter(|s| !s.is_empty()) else {
+                        return MultiLineResult::MissingUsage;
+                    };
+                    let Some(rate_model) = msg
+                        .response_model
+                        .as_deref()
+                        .or(msg.model.as_deref())
+                        .filter(|s| !s.is_empty())
+                    else {
+                        return MultiLineResult::MissingUsage;
+                    };
+                    let Some(u) = msg.usage else {
+                        return MultiLineResult::MissingUsage;
+                    };
+                    (format!("{prov}/{rate_model}"), u)
+                }
+                Some("toolResult") => {
+                    let Some(u) = msg.usage else {
+                        return MultiLineResult::MissingUsage;
+                    };
+                    ("Tools/summaries".to_string(), u)
+                }
+                _ => return MultiLineResult::MissingUsage,
+            }
+        }
+        "usage" => {
+            let Some(prov) = rec.provider.as_deref().filter(|s| !s.is_empty()) else {
+                return MultiLineResult::MissingUsage;
+            };
+            let Some(rate_model) = rec.model.as_deref().filter(|s| !s.is_empty()) else {
+                return MultiLineResult::MissingUsage;
+            };
+            let Some(u) = rec.usage else {
+                return MultiLineResult::MissingUsage;
+            };
+            (format!("{prov}/{rate_model}"), u)
+        }
+        "compaction" | "branch_summary" => {
+            let Some(u) = rec.usage else {
+                return MultiLineResult::MissingUsage;
+            };
+            ("Tools/summaries".to_string(), u)
+        }
+        _ => return MultiLineResult::MissingUsage,
+    };
+
+    let output_tokens = usage_obj.output.unwrap_or(0);
+    let mut usage = UsageAccumulator {
+        input_tokens: usage_obj.input.unwrap_or(0),
+        cache_creation_input_tokens: usage_obj.cache_write.unwrap_or(0),
+        cache_read_input_tokens: usage_obj.cache_read.unwrap_or(0),
+        output_tokens,
+        reasoning_output_tokens: output_tokens.min(usage_obj.reasoning.unwrap_or(0)),
+        cost_usd: 0.0,
+    };
+    let reported_cost_usd = usage_obj
+        .cost
+        .and_then(|c| c.total)
+        .filter(|c| c.is_finite() && *c > 0.0);
+
+    if usage.total_tokens() == 0 && reported_cost_usd.is_none() {
+        return MultiLineResult::MissingUsage;
+    }
+
+    let ctx = PricingContext {
+        reported_cost_usd,
+        ..PricingContext::default()
+    };
+    let (cost_usd, used_unknown_pricing) =
+        match pricing.estimate_cost_with_context(&model, usage, ctx) {
+            Some(v) => (v, false),
+            None => (0.0, true),
+        };
+    usage.cost_usd = cost_usd;
+
+    let dedupe_hash = Some(fnv1a_64(format!("pi\0{id}\0{ts_raw}\0{model}").as_bytes()));
+    MultiLineResult::Parsed(vec![ParsedRecord {
+        event: UsageEvent {
+            timestamp,
+            source: SourceKind::Pi,
+            model,
+            session: session_id.clone(),
+            project: None,
+            file_path: String::new(),
+            usage,
+        },
+        pricing_ctx: ctx,
+        dedupe_hash,
+        used_unknown_pricing,
+    }])
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum MuseModelRef {
+    Name(String),
+    Obj { model_id: String },
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MuseUsageObj {
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    output_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cached_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cached_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    cache_write_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "de_opt_u64_clamped")]
+    reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MuseEventObj {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    model: Option<MuseModelRef>,
+    #[serde(default)]
+    usage: Option<MuseUsageObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MusePayloadObj {
+    #[serde(default)]
+    source_run_record_id: Option<String>,
+    #[serde(default)]
+    event: Option<MuseEventObj>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MuseStreamObj {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MuseLineRecord {
+    #[serde(default)]
+    schema_version: Option<i64>,
+    #[serde(default)]
+    record_type: Option<String>,
+    #[serde(default)]
+    payload_type: Option<String>,
+    #[serde(default)]
+    payload_schema_version: Option<i64>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    recorded_at: Option<serde_json::Number>,
+    #[serde(default)]
+    stream: Option<MuseStreamObj>,
+    #[serde(default)]
+    payload: Option<MusePayloadObj>,
+}
+
+/// Parse one JSONL record from a Muse Code session (`$MUSE_HOME/sessions/**/session.jsonl`).
+pub(super) fn parse_muse_usage_line_records(line: &str, pricing: &PricingTable) -> MultiLineResult {
+    let rec: MuseLineRecord = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return MultiLineResult::InvalidJson,
+    };
+
+    if rec.schema_version != Some(1)
+        || rec.record_type.as_deref() != Some("event")
+        || rec.payload_type.as_deref() != Some("runtime.session")
+        || !matches!(rec.payload_schema_version, Some(1 | 3))
+    {
+        return MultiLineResult::MissingUsage;
+    }
+
+    let Some(id) = rec.id.as_deref().filter(|s| !s.is_empty()) else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(recorded_us) = rec.recorded_at.and_then(|n| {
+        n.as_i64().filter(|&v| v >= 0).or_else(|| {
+            n.as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| v.trunc() as i64)
+        })
+    }) else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(timestamp) = DateTime::from_timestamp_millis(recorded_us / 1_000) else {
+        return MultiLineResult::MissingUsage;
+    };
+
+    let Some(stream) = rec.stream else {
+        return MultiLineResult::MissingUsage;
+    };
+    if stream.kind.as_deref() != Some("session") {
+        return MultiLineResult::MissingUsage;
+    }
+    let Some(session) = stream.id.filter(|s| !s.is_empty()) else {
+        return MultiLineResult::MissingUsage;
+    };
+
+    let Some(payload) = rec.payload else {
+        return MultiLineResult::MissingUsage;
+    };
+    let Some(ev) = payload.event else {
+        return MultiLineResult::MissingUsage;
+    };
+    if !matches!(
+        ev.kind.as_deref(),
+        Some("model_completed" | "automated_review_completed")
+    ) {
+        return MultiLineResult::MissingUsage;
+    }
+    let model = match ev.model {
+        Some(MuseModelRef::Name(s)) if !s.is_empty() => s,
+        Some(MuseModelRef::Obj { model_id }) if !model_id.is_empty() => model_id,
+        _ => return MultiLineResult::MissingUsage,
+    };
+    let Some(u) = ev.usage else {
+        return MultiLineResult::MissingUsage;
+    };
+
+    let input = u.input_tokens.unwrap_or(0);
+    let cached_read = input.min(
+        u.cache_read_tokens
+            .or(u.cached_input_tokens)
+            .or(u.cached_tokens)
+            .unwrap_or(0),
+    );
+    let cache_write = (input - cached_read).min(u.cache_write_tokens.unwrap_or(0));
+    let output_tokens = u.output_tokens.unwrap_or(0);
+
+    let mut usage = UsageAccumulator {
+        input_tokens: input - cached_read - cache_write,
+        cache_creation_input_tokens: cache_write,
+        cache_read_input_tokens: cached_read,
+        output_tokens,
+        reasoning_output_tokens: output_tokens.min(u.reasoning_tokens.unwrap_or(0)),
+        cost_usd: 0.0,
+    };
+    if usage.total_tokens() == 0 {
+        return MultiLineResult::MissingUsage;
+    }
+
+    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
+        Some(v) => (v, false),
+        None => (0.0, true),
+    };
+    usage.cost_usd = cost_usd;
+
+    let dedupe_id = payload
+        .source_run_record_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(id);
+    let dedupe_hash = Some(fnv1a_64(format!("muse\0{dedupe_id}").as_bytes()));
+
+    MultiLineResult::Parsed(vec![ParsedRecord {
+        event: UsageEvent {
+            timestamp,
+            source: SourceKind::Muse,
+            model,
+            session,
+            project: None,
+            file_path: String::new(),
+            usage,
+        },
+        pricing_ctx: PricingContext::default(),
+        dedupe_hash,
+        used_unknown_pricing,
+    }])
 }
 
 fn parse_opencode_timestamp_ms(value: &Value) -> Option<i64> {
@@ -1921,23 +3647,33 @@ fn parse_opencode_message_file(
 
     stats.lines_parsed.fetch_add(1, Ordering::Relaxed);
 
+    let file_path = job.file.path.display().to_string();
     let event = UsageEvent {
         timestamp,
         source: SourceKind::OpenCode,
         model,
         session,
         project,
-        file_path: job.file.path.display().to_string(),
+        file_path: file_path.clone(),
         usage: UsageAccumulator { cost_usd, ..usage },
     };
 
     let cached_events = if cache_enabled {
-        vec![cached_usage_event(&event)]
+        vec![cached_usage_event_for_file(
+            &event,
+            PricingContext::default(),
+            None,
+            &file_path,
+        )]
     } else {
         Vec::new()
     };
     Some(ParsedFileOutput {
-        events: vec![event],
+        events: vec![InternalEvent {
+            event,
+            pricing_ctx: PricingContext::default(),
+            dedupe_hash: None,
+        }],
         cache_entry: CachedFileEntry {
             fingerprint: job.fingerprint,
             stats: CachedFileStats {
@@ -1948,9 +3684,7 @@ fn parse_opencode_message_file(
             },
             events: cached_events,
             parsed_offset: job.fingerprint.size,
-            codex_last_model: None,
-            codex_last_totals: None,
-            claude_recent_keys: vec![],
+            ..CachedFileEntry::default()
         },
     })
 }
@@ -2195,6 +3929,7 @@ fn parse_antigravity_db_file(
             lines_unknown_pricing += 1;
         }
 
+        let file_path_str = path.to_string_lossy().to_string();
         let event = UsageEvent {
             timestamp,
             source: SourceKind::Gemini,
@@ -2205,11 +3940,16 @@ fn parse_antigravity_db_file(
                 .unwrap_or("")
                 .to_string(),
             project: None,
-            file_path: path.to_string_lossy().to_string(),
+            file_path: file_path_str.clone(),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
         if cache_enabled {
-            cached_events.push(cached_usage_event(&event));
+            cached_events.push(cached_usage_event_for_file(
+                &event,
+                PricingContext::default(),
+                None,
+                &file_path_str,
+            ));
         }
 
         if !date_filter_allows(filter, timestamp, timezone) {
@@ -2217,7 +3957,11 @@ fn parse_antigravity_db_file(
             continue;
         }
 
-        events.push(event);
+        events.push(InternalEvent {
+            event,
+            pricing_ctx: PricingContext::default(),
+            dedupe_hash: None,
+        });
         lines_parsed += 1;
     }
 
@@ -2247,9 +3991,7 @@ fn parse_antigravity_db_file(
             },
             events: cached_events,
             parsed_offset: job.fingerprint.size,
-            codex_last_model: None,
-            codex_last_totals: None,
-            claude_recent_keys: vec![],
+            ..CachedFileEntry::default()
         },
     })
 }
@@ -2387,17 +4129,23 @@ fn parse_opencode_db_file(
             project = Some(session.clone());
         }
 
+        let file_path_str = path.display().to_string();
         let event = UsageEvent {
             timestamp,
             source: SourceKind::OpenCode,
             model: model.clone(),
             session,
             project,
-            file_path: format!("{}#{}", path.display(), message_id),
+            file_path: format!("{file_path_str}#{message_id}"),
             usage: UsageAccumulator { cost_usd, ..usage },
         };
         if cache_enabled {
-            cached_events.push(cached_usage_event(&event));
+            cached_events.push(cached_usage_event_for_file(
+                &event,
+                PricingContext::default(),
+                None,
+                &file_path_str,
+            ));
         }
 
         if !date_filter_allows(filter, timestamp, timezone) {
@@ -2405,7 +4153,11 @@ fn parse_opencode_db_file(
             continue;
         }
 
-        events.push(event);
+        events.push(InternalEvent {
+            event,
+            pricing_ctx: PricingContext::default(),
+            dedupe_hash: None,
+        });
         lines_parsed += 1;
     }
 
@@ -2438,50 +4190,146 @@ fn parse_opencode_db_file(
             },
             events: cached_events,
             parsed_offset: job.fingerprint.size,
-            codex_last_model: None,
-            codex_last_totals: None,
-            claude_recent_keys: vec![],
+            ..CachedFileEntry::default()
         },
     })
 }
 
-pub(super) fn parse_codex_usage_line(
+fn codex_speed_from_tier(tier: Option<&str>) -> ServiceSpeed {
+    match tier {
+        Some("priority") | Some("fast") => ServiceSpeed::Fast,
+        Some("ultrafast") => ServiceSpeed::Ultrafast,
+        _ => ServiceSpeed::Standard,
+    }
+}
+
+pub(super) fn parse_codex_usage_line_records(
     line: &str,
     state: &mut CodexParseState,
     pricing: &PricingTable,
-) -> ParseLineResult {
+) -> MultiLineResult {
     let value: Value = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(_) => return ParseLineResult::InvalidJson,
+        Err(_) => return MultiLineResult::InvalidJson,
     };
 
     let Some(entry_type) = get_value(&value, "type").and_then(|v| v.as_str()) else {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     };
 
+    if entry_type == "session_meta" {
+        if let Some(payload) = get_value(&value, "payload")
+            && let Some(forked) = payload.get("forked_from_id").and_then(Value::as_str)
+            && !forked.is_empty()
+        {
+            state.fork_anchor_ts = extract_timestamp(&value);
+        }
+        return MultiLineResult::MissingUsage;
+    }
+
     if entry_type == "turn_context" {
+        state.request_ledger_active = false;
         if let Some(payload) = get_value(&value, "payload")
             && let Some(model) = extract_codex_model(payload)
         {
             state.current_model = Some(model);
             state.current_model_is_fallback = false;
         }
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
+    }
+
+    if entry_type == "token_usage_record" {
+        let Some(timestamp) = extract_timestamp(&value) else {
+            return MultiLineResult::MissingUsage;
+        };
+        if state
+            .fork_anchor_ts
+            .is_some_and(|anchor| timestamp <= anchor)
+        {
+            return MultiLineResult::MissingUsage;
+        }
+        let Some(payload) = get_value(&value, "payload") else {
+            return MultiLineResult::MissingUsage;
+        };
+        let Some(usage_val) = payload.get("usage") else {
+            return MultiLineResult::MissingUsage;
+        };
+        let Some(raw) = parse_codex_raw_usage(usage_val) else {
+            return MultiLineResult::MissingUsage;
+        };
+        if raw.is_zero() {
+            return MultiLineResult::MissingUsage;
+        }
+        let cache_write = extract_u64(usage_val, &["cache_write_input_tokens"]).unwrap_or(0);
+        if payload
+            .get("response_id")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
+            state.request_ledger_active = true;
+        }
+        let model = extract_codex_model(payload)
+            .or_else(|| state.current_model.clone())
+            .unwrap_or_else(|| LEGACY_CODEX_FALLBACK_MODEL.to_string());
+        let mut usage = UsageAccumulator {
+            input_tokens: raw
+                .input_tokens
+                .saturating_sub(raw.cached_input_tokens)
+                .saturating_sub(cache_write),
+            cache_creation_input_tokens: cache_write,
+            cache_read_input_tokens: raw.cached_input_tokens,
+            output_tokens: raw.output_tokens,
+            reasoning_output_tokens: raw.reasoning_output_tokens,
+            cost_usd: 0.0,
+        };
+        let ctx = PricingContext {
+            speed: state.service_tier,
+            ..PricingContext::default()
+        };
+        let (cost_usd, used_unknown_pricing) =
+            match pricing.estimate_cost_with_context(&model, usage, ctx) {
+                Some(v) => (v, false),
+                None => (0.0, true),
+            };
+        usage.cost_usd = cost_usd;
+        return MultiLineResult::Parsed(vec![ParsedRecord {
+            event: UsageEvent {
+                timestamp,
+                source: SourceKind::Codex,
+                model,
+                session: String::new(),
+                project: None,
+                file_path: String::new(),
+                usage,
+            },
+            pricing_ctx: ctx,
+            dedupe_hash: None,
+            used_unknown_pricing,
+        }]);
     }
 
     if entry_type != "event_msg" {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     }
 
     let Some(payload_type) = get_value(&value, "payload.type").and_then(|v| v.as_str()) else {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     };
+
+    if payload_type == "thread_settings_applied" {
+        let tier = get_value(&value, "payload.thread_settings.service_tier")
+            .or_else(|| get_value(&value, "payload.service_tier"))
+            .and_then(Value::as_str);
+        state.service_tier = codex_speed_from_tier(tier);
+        return MultiLineResult::MissingUsage;
+    }
+
     if payload_type != "token_count" {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     }
 
     let Some(timestamp) = extract_timestamp(&value) else {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     };
 
     let info = get_value(&value, "payload.info");
@@ -2491,7 +4339,49 @@ pub(super) fn parse_codex_usage_line(
     let parsed_last = last_usage.and_then(parse_codex_raw_usage);
     let parsed_total = total_usage.and_then(parse_codex_raw_usage);
 
+    if state
+        .fork_anchor_ts
+        .is_some_and(|anchor| timestamp <= anchor)
+    {
+        if let Some(total) = parsed_total {
+            state.previous_totals = Some(total);
+        }
+        return MultiLineResult::MissingUsage;
+    }
+
+    if state.request_ledger_active {
+        if let Some(total) = parsed_total {
+            state.previous_totals = Some(total);
+        }
+        return MultiLineResult::MissingUsage;
+    }
+
+    // Codex periodically re-emits identical cumulative token_count snapshots with
+    // the previous last_token_usage still populated. Skip when total_token_usage
+    // has not advanced.
+    if let (Some(total), Some(prev)) = (parsed_total, state.previous_totals)
+        && total.input_tokens == prev.input_tokens
+        && total.cached_input_tokens == prev.cached_input_tokens
+        && total.output_tokens == prev.output_tokens
+        && total.reasoning_output_tokens == prev.reasoning_output_tokens
+    {
+        return MultiLineResult::MissingUsage;
+    }
+
     let raw_delta = if let Some(last) = parsed_last {
+        if parsed_total.is_none() {
+            let sig = (
+                last.input_tokens,
+                last.cached_input_tokens,
+                last.output_tokens,
+                last.reasoning_output_tokens,
+                last.total_tokens,
+            );
+            if state.last_usage_signature == Some(sig) {
+                return MultiLineResult::MissingUsage;
+            }
+            state.last_usage_signature = Some(sig);
+        }
         Some(last)
     } else if let Some(total) = parsed_total {
         Some(subtract_codex_raw_usage(total, state.previous_totals))
@@ -2504,10 +4394,10 @@ pub(super) fn parse_codex_usage_line(
     }
 
     let Some(raw_delta) = raw_delta else {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     };
     if raw_delta.is_zero() {
-        return ParseLineResult::MissingUsage;
+        return MultiLineResult::MissingUsage;
     }
 
     let extracted_model = get_value(&value, "payload").and_then(extract_codex_model);
@@ -2526,14 +4416,20 @@ pub(super) fn parse_codex_usage_line(
         LEGACY_CODEX_FALLBACK_MODEL.to_string()
     };
 
-    let usage = codex_delta_to_usage(raw_delta);
-
-    let (cost_usd, used_unknown_pricing) = match pricing.estimate_cost(&model, usage) {
-        Some(v) => (v, false),
-        None => (0.0, true),
+    let mut usage = codex_delta_to_usage(raw_delta);
+    let ctx = PricingContext {
+        speed: state.service_tier,
+        ..PricingContext::default()
     };
 
-    ParseLineResult::Parsed(ParsedLine {
+    let (cost_usd, used_unknown_pricing) =
+        match pricing.estimate_cost_with_context(&model, usage, ctx) {
+            Some(v) => (v, false),
+            None => (0.0, true),
+        };
+    usage.cost_usd = cost_usd;
+
+    MultiLineResult::Parsed(vec![ParsedRecord {
         event: UsageEvent {
             timestamp,
             source: SourceKind::Codex,
@@ -2541,37 +4437,12 @@ pub(super) fn parse_codex_usage_line(
             session: String::new(),
             project: None,
             file_path: String::new(),
-            usage: UsageAccumulator { cost_usd, ..usage },
+            usage,
         },
+        pricing_ctx: ctx,
+        dedupe_hash: None,
         used_unknown_pricing,
-    })
-}
-
-pub(super) fn extract_model(value: &Value, source: SourceKind) -> Option<String> {
-    extract_string(value, provider_model_paths(source))
-}
-
-fn provider_model_paths(source: SourceKind) -> &'static [&'static str] {
-    match source {
-        SourceKind::Claude => &[
-            "message.model",
-            "usage.model",
-            "model",
-            "payload.model",
-            "message.metadata.model",
-        ],
-        SourceKind::Codex => &[
-            "payload.info.model",
-            "payload.info.current_model",
-            "payload.model",
-            "model",
-        ],
-        SourceKind::Gemini => &["model"],
-        SourceKind::OpenCode => &["model.modelID", "modelID", "model"],
-        // Grok's unified.jsonl never records a per-turn model name; the
-        // fallback in `parse_grok_usage_line` is used unconditionally instead.
-        SourceKind::Grok => &["params.update.usage.model", "update.usage.model", "model"],
-    }
+    }])
 }
 
 pub(super) fn extract_codex_model(value: &Value) -> Option<String> {
@@ -2701,8 +4572,16 @@ pub(super) fn get_value<'a>(value: &'a Value, dotted_path: &str) -> Option<&'a V
 pub(super) async fn load_pricing(path: Option<&str>, offline: bool) -> Result<PricingTable> {
     let mut table = PricingTable::default_table();
 
-    if let Some(openrouter_exact) = load_openrouter_pricing_with_cache(!offline).await {
+    let (openrouter_exact, litellm_exact) = tokio::join!(
+        load_openrouter_pricing_with_cache(!offline),
+        load_litellm_pricing_with_cache(!offline),
+    );
+
+    if let Some(openrouter_exact) = openrouter_exact {
         table.merge_exact(openrouter_exact);
+    }
+    if let Some(litellm_exact) = litellm_exact {
+        table.merge_exact(litellm_exact);
     }
 
     if let Some(path) = path {
@@ -2742,12 +4621,65 @@ pub(super) async fn load_openrouter_pricing_with_cache(
     match fetch_openrouter_pricing().await {
         Ok(exact) => {
             if let Some(path) = cache_path.as_ref() {
-                save_openrouter_pricing_cache(path, now, &exact);
+                save_pricing_cache(path, OPENROUTER_PRICING_CACHE_VERSION, now, &exact);
             }
             Some(exact)
         }
         Err(_) => cached.map(|cache| cache.exact),
     }
+}
+
+pub(super) async fn load_litellm_pricing_with_cache(
+    allow_network_fetch: bool,
+) -> Option<HashMap<String, PricingRate>> {
+    let cache_path = litellm_pricing_cache_path();
+    let cached = cache_path
+        .as_ref()
+        .and_then(|path| load_pricing_cache(path, LITELLM_PRICING_CACHE_VERSION));
+    let now = unix_now_secs();
+
+    if let Some(cache) = cached.as_ref()
+        && now.saturating_sub(cache.fetched_unix) < LITELLM_PRICING_CACHE_TTL_SECS
+    {
+        return Some(cache.exact.clone());
+    }
+
+    if !allow_network_fetch {
+        return cached.map(|cache| cache.exact);
+    }
+
+    match fetch_litellm_pricing().await {
+        Ok(exact) => {
+            if let Some(path) = cache_path.as_ref() {
+                save_pricing_cache(path, LITELLM_PRICING_CACHE_VERSION, now, &exact);
+            }
+            Some(exact)
+        }
+        Err(_) => cached.map(|cache| cache.exact),
+    }
+}
+
+pub(super) async fn fetch_litellm_pricing() -> Result<HashMap<String, PricingRate>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("tokenusage/0.1")
+        .build()
+        .context("Failed to initialize LiteLLM pricing client")?;
+
+    let response = client
+        .get(LITELLM_PRICING_URL)
+        .send()
+        .await
+        .context("Failed to fetch LiteLLM model pricing")?
+        .error_for_status()
+        .context("LiteLLM model pricing request failed")?;
+
+    let document: serde_json::Map<String, Value> = response
+        .json()
+        .await
+        .context("Failed to decode LiteLLM model pricing response")?;
+
+    Ok(parse_litellm_rate_table(&document))
 }
 
 pub(super) async fn fetch_openrouter_pricing() -> Result<HashMap<String, PricingRate>> {
@@ -2808,13 +4740,13 @@ pub(super) fn incremental_cache_stats() -> Option<IncrementalCacheStats> {
     let path = incremental_cache_path()?;
     let exists = path.is_file();
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    // Use the same opener as the real cache (WAL + busy_timeout); a bare
-    // Connection::open can miss rows still living in the -wal file.
+    // Use the same opener as the real cache (mmap + busy_timeout) so stats see
+    // consistent counts even if another process holds -wal.
     let entries = if exists {
-        open_cache_db(&path)
+        open_cache_db_readonly(&path)
             .ok()
             .and_then(|conn| {
-                conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))
+                conn.query_row("SELECT COUNT(*) FROM files_v5", [], |r| r.get::<_, i64>(0))
                     .ok()
             })
             .map(|n| n.max(0) as usize)
@@ -2829,9 +4761,29 @@ pub(super) fn incremental_cache_stats() -> Option<IncrementalCacheStats> {
     })
 }
 
+fn ensure_files_v5_schema(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS files_v5 (
+             cache_key TEXT PRIMARY KEY,
+             size INTEGER NOT NULL,
+             mtime_secs INTEGER NOT NULL,
+             mtime_nanos INTEGER NOT NULL,
+             parsed_offset INTEGER NOT NULL,
+             min_ts_ms INTEGER NOT NULL,
+             max_ts_ms INTEGER NOT NULL,
+             lines_total INTEGER NOT NULL,
+             lines_invalid_json INTEGER NOT NULL,
+             lines_missing_usage INTEGER NOT NULL,
+             blob BLOB NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_files_v5_ts ON files_v5 (max_ts_ms, min_ts_ms);",
+    )
+}
+
 fn open_cache_db(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(Duration::from_secs(5))?;
     // WAL keeps concurrent readers (e.g. statusline alongside an interactive run)
     // from blocking; NORMAL sync is durable enough for a rebuildable cache.
     let _ = conn.execute_batch(
@@ -2841,10 +4793,19 @@ fn open_cache_db(path: &Path) -> rusqlite::Result<Connection> {
          PRAGMA temp_store=MEMORY;
          PRAGMA cache_size=-64000;",
     );
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS files (cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL);",
-    )?;
+    ensure_files_v5_schema(&conn)?;
+    Ok(conn)
+}
+
+fn open_cache_db_readonly(path: &Path) -> rusqlite::Result<Connection> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(path, flags)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let _ = conn.execute_batch(
+        "PRAGMA mmap_size=268435456;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA cache_size=-64000;",
+    );
     Ok(conn)
 }
 
@@ -2863,6 +4824,44 @@ fn cache_meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result
     Ok(())
 }
 
+fn reset_stale_cache_db(conn: &Connection, pricing_key: &str) -> rusqlite::Result<()> {
+    let _ = conn.execute("DROP TABLE IF EXISTS files", []);
+    conn.execute("DELETE FROM files_v5", [])?;
+    cache_meta_set(conn, "version", &INCREMENTAL_CACHE_VERSION.to_string())?;
+    cache_meta_set(conn, "pricing_key", pricing_key)?;
+    // Reclaim space in-place when upgrading from legacy huge JSON-blob caches.
+    let _ = conn.execute_batch("VACUUM;");
+    Ok(())
+}
+
+const V5_UPSERT_SQL: &str = "INSERT OR REPLACE INTO files_v5 (
+    cache_key, size, mtime_secs, mtime_nanos, parsed_offset,
+    min_ts_ms, max_ts_ms, lines_total, lines_invalid_json, lines_missing_usage, blob
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+
+fn upsert_v5_row(
+    stmt: &mut rusqlite::Statement<'_>,
+    key: &str,
+    entry: &CachedFileEntry,
+) -> rusqlite::Result<()> {
+    let (min_ts_ms, max_ts_ms) = entry_ts_bounds(entry);
+    let blob = encode_cached_file_entry(entry);
+    stmt.execute(params![
+        key,
+        entry.fingerprint.size as i64,
+        entry.fingerprint.modified_unix_secs,
+        i64::from(entry.fingerprint.modified_unix_nanos),
+        entry.parsed_offset as i64,
+        min_ts_ms,
+        max_ts_ms,
+        entry.stats.lines_total as i64,
+        entry.stats.lines_invalid_json as i64,
+        entry.stats.lines_missing_usage as i64,
+        blob,
+    ])?;
+    Ok(())
+}
+
 /// One-time import of the legacy JSON cache into an empty SQLite DB. The JSON
 /// file is removed afterwards (whether imported or stale) so it's never retried.
 fn migrate_legacy_json_if_present(conn: &Connection, pricing_key: &str) {
@@ -2873,7 +4872,7 @@ fn migrate_legacy_json_if_present(conn: &Connection, pricing_key: &str) {
         return;
     }
     let existing: i64 = conn
-        .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM files_v5", [], |r| r.get(0))
         .unwrap_or(0);
     if existing > 0 {
         return;
@@ -2883,7 +4882,7 @@ fn migrate_legacy_json_if_present(conn: &Connection, pricing_key: &str) {
     let _ = std::fs::remove_file(&json_path);
 }
 
-/// Import a legacy JSON cache file into the (empty) SQLite `files` table when its
+/// Import a legacy JSON cache file into the (empty) SQLite `files_v5` table when its
 /// version + pricing key match. Returns Ok(true) when rows were imported.
 fn import_legacy_json(
     conn: &Connection,
@@ -2901,12 +4900,9 @@ fn import_legacy_json(
     }
     let tx = conn.unchecked_transaction()?;
     {
-        let mut stmt =
-            tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+        let mut stmt = tx.prepare(V5_UPSERT_SQL)?;
         for (key, entry) in &store.files {
-            if let Ok(json) = serde_json::to_string(entry) {
-                stmt.execute(params![key, json])?;
-            }
+            upsert_v5_row(&mut stmt, key, entry)?;
         }
     }
     tx.execute(
@@ -2940,21 +4936,48 @@ fn load_incremental_cache_inner(
         == Some(&INCREMENTAL_CACHE_VERSION.to_string());
     let pricing_ok = cache_meta_get(&conn, "pricing_key")?.as_deref() == Some(pricing_key);
     if !version_ok || !pricing_ok {
-        // Stale or first-time cache: clear and start fresh (DB now empty).
-        conn.execute("DELETE FROM files", [])?;
-        cache_meta_set(&conn, "version", &INCREMENTAL_CACHE_VERSION.to_string())?;
-        cache_meta_set(&conn, "pricing_key", pricing_key)?;
+        reset_stale_cache_db(&conn, pricing_key)?;
         return Ok(IncrementalCacheStore::new(pricing_key.to_string()));
     }
 
     let mut files = HashMap::new();
+    let mut meta = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT cache_key, entry FROM files")?;
+        let mut stmt = conn.prepare(
+            "SELECT cache_key, size, mtime_secs, mtime_nanos, parsed_offset,
+                    min_ts_ms, max_ts_ms, lines_total, lines_invalid_json, lines_missing_usage, blob
+             FROM files_v5",
+        )?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let key: String = row.get(0)?;
-            let entry_bytes = row.get_ref(1)?.as_bytes()?;
-            if let Ok(entry) = serde_json::from_slice::<CachedFileEntry>(entry_bytes) {
+            let fp = FileFingerprint {
+                size: row.get::<_, i64>(1)?.max(0) as u64,
+                modified_unix_secs: row.get(2)?,
+                modified_unix_nanos: row.get::<_, i64>(3)?.max(0) as u32,
+            };
+            let parsed_offset = row.get::<_, i64>(4)?.max(0) as u64;
+            let min_ts_ms: i64 = row.get(5)?;
+            let max_ts_ms: i64 = row.get(6)?;
+            let file_stats = CachedFileStats {
+                lines_total: row.get::<_, i64>(7)?.max(0) as usize,
+                lines_invalid_json: row.get::<_, i64>(8)?.max(0) as usize,
+                lines_missing_usage: row.get::<_, i64>(9)?.max(0) as usize,
+                lines_unknown_pricing: 0,
+            };
+            let blob = row.get_ref(10)?.as_bytes()?;
+            if let Ok(entry) = decode_cached_file_entry(blob, fp, file_stats.clone(), parsed_offset)
+            {
+                meta.insert(
+                    key.clone(),
+                    CachedFileMeta {
+                        fingerprint: fp,
+                        min_ts_ms,
+                        max_ts_ms,
+                        parsed_offset,
+                        stats: file_stats,
+                    },
+                );
                 files.insert(key, entry);
             }
         }
@@ -2964,6 +4987,82 @@ fn load_incremental_cache_inner(
         version: INCREMENTAL_CACHE_VERSION,
         pricing_key: pricing_key.to_string(),
         files,
+        meta,
+        meta_only: false,
+        changed: HashSet::new(),
+        removed: HashSet::new(),
+        full_rewrite: false,
+    })
+}
+
+/// Load ONLY per-file metadata and timestamp bounds so date-filtered commands skip
+/// decoding or even reading out-of-window blobs from SQLite.
+pub(super) fn load_incremental_cache_meta(path: &Path, pricing_key: &str) -> IncrementalCacheStore {
+    load_incremental_cache_meta_inner(path, pricing_key).unwrap_or_else(|_| {
+        let mut store = IncrementalCacheStore::new(pricing_key.to_string());
+        store.meta_only = true;
+        store
+    })
+}
+
+fn load_incremental_cache_meta_inner(
+    path: &Path,
+    pricing_key: &str,
+) -> rusqlite::Result<IncrementalCacheStore> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let conn = open_cache_db(path)?;
+    migrate_legacy_json_if_present(&conn, pricing_key);
+
+    let version_ok = cache_meta_get(&conn, "version")?.as_deref()
+        == Some(&INCREMENTAL_CACHE_VERSION.to_string());
+    let pricing_ok = cache_meta_get(&conn, "pricing_key")?.as_deref() == Some(pricing_key);
+    if !version_ok || !pricing_ok {
+        reset_stale_cache_db(&conn, pricing_key)?;
+        let mut store = IncrementalCacheStore::new(pricing_key.to_string());
+        store.meta_only = true;
+        return Ok(store);
+    }
+
+    let mut meta = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT cache_key, size, mtime_secs, mtime_nanos, parsed_offset,
+                    min_ts_ms, max_ts_ms, lines_total, lines_invalid_json, lines_missing_usage
+             FROM files_v5",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            meta.insert(
+                key,
+                CachedFileMeta {
+                    fingerprint: FileFingerprint {
+                        size: row.get::<_, i64>(1)?.max(0) as u64,
+                        modified_unix_secs: row.get(2)?,
+                        modified_unix_nanos: row.get::<_, i64>(3)?.max(0) as u32,
+                    },
+                    min_ts_ms: row.get(5)?,
+                    max_ts_ms: row.get(6)?,
+                    parsed_offset: row.get::<_, i64>(4)?.max(0) as u64,
+                    stats: CachedFileStats {
+                        lines_total: row.get::<_, i64>(7)?.max(0) as usize,
+                        lines_invalid_json: row.get::<_, i64>(8)?.max(0) as usize,
+                        lines_missing_usage: row.get::<_, i64>(9)?.max(0) as usize,
+                        lines_unknown_pricing: 0,
+                    },
+                },
+            );
+        }
+    }
+
+    Ok(IncrementalCacheStore {
+        version: INCREMENTAL_CACHE_VERSION,
+        pricing_key: pricing_key.to_string(),
+        files: HashMap::new(),
+        meta,
+        meta_only: true,
         changed: HashSet::new(),
         removed: HashSet::new(),
         full_rewrite: false,
@@ -2988,28 +5087,23 @@ fn save_incremental_cache_inner(
     let mut conn = open_cache_db(path)?;
     let tx = conn.transaction()?;
     if store.full_rewrite {
-        tx.execute("DELETE FROM files", [])?;
-        let mut stmt =
-            tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+        let _ = tx.execute("DROP TABLE IF EXISTS files", []);
+        tx.execute("DELETE FROM files_v5", [])?;
+        let mut stmt = tx.prepare(V5_UPSERT_SQL)?;
         for (key, entry) in &store.files {
-            if let Ok(json) = serde_json::to_string(entry) {
-                stmt.execute(params![key, json])?;
-            }
+            upsert_v5_row(&mut stmt, key, entry)?;
         }
     } else {
         {
-            let mut up =
-                tx.prepare("INSERT OR REPLACE INTO files (cache_key, entry) VALUES (?1, ?2)")?;
+            let mut up = tx.prepare(V5_UPSERT_SQL)?;
             for key in &store.changed {
-                if let Some(entry) = store.files.get(key)
-                    && let Ok(json) = serde_json::to_string(entry)
-                {
-                    up.execute(params![key, json])?;
+                if let Some(entry) = store.files.get(key) {
+                    upsert_v5_row(&mut up, key, entry)?;
                 }
             }
         }
         {
-            let mut del = tx.prepare("DELETE FROM files WHERE cache_key = ?1")?;
+            let mut del = tx.prepare("DELETE FROM files_v5 WHERE cache_key = ?1")?;
             for key in &store.removed {
                 del.execute(params![key])?;
             }
@@ -3049,6 +5143,14 @@ pub(super) fn can_incremental_parse(cached: &CachedFileEntry, current: FileFinge
     start_offset > 0 && start_offset <= current.size
 }
 
+pub(super) fn can_incremental_parse_meta(meta: &CachedFileMeta, current: FileFingerprint) -> bool {
+    if current.size <= meta.fingerprint.size {
+        return false;
+    }
+    let start_offset = meta.parsed_offset.max(meta.fingerprint.size);
+    start_offset > 0 && start_offset <= current.size
+}
+
 fn date_filter_allows(
     filter: DateFilter,
     timestamp: DateTime<Utc>,
@@ -3058,14 +5160,54 @@ fn date_filter_allows(
         || filter.allows(local_date(timestamp, timezone))
 }
 
-pub(super) fn hydrate_cached_events(
-    file: &DiscoveredFile,
-    cached: &CachedFileEntry,
+#[inline]
+fn date_filter_allows_cached(
     filter: DateFilter,
-    timezone: &TimeZoneMode,
-    pricing: &PricingTable,
-    stats: &ParseStatsAtomic,
-) -> Vec<UsageEvent> {
+    timestamp: DateTime<Utc>,
+    day_cache: &mut LocalDayCache<'_>,
+) -> bool {
+    (filter.since.is_none() && filter.until.is_none())
+        || filter.allows(day_cache.date_of(timestamp))
+}
+
+struct CachedHydrationRateCache<'a> {
+    pricing: &'a PricingTable,
+    last_model: Option<String>,
+    last_rate: Option<&'a PricingRate>,
+}
+
+impl<'a> CachedHydrationRateCache<'a> {
+    fn new(pricing: &'a PricingTable) -> Self {
+        Self {
+            pricing,
+            last_model: None,
+            last_rate: None,
+        }
+    }
+
+    #[inline]
+    fn estimate(
+        &mut self,
+        model: &str,
+        usage: UsageAccumulator,
+        ctx: PricingContext,
+    ) -> Option<f64> {
+        if let Some(reported) = ctx.reported_cost_usd
+            && reported.is_finite()
+            && reported >= 0.0
+        {
+            return Some(reported);
+        }
+        if self.last_model.as_deref() != Some(model) {
+            self.last_model = Some(model.to_string());
+            self.last_rate = self.pricing.find_rate(model);
+        }
+        self.pricing
+            .estimate_cost_with_rate_and_context(self.last_rate, usage, ctx)
+    }
+}
+
+fn hydrate_cached_stats_and_cost(cached: &CachedFileEntry, stats: &ParseStatsAtomic) {
     stats
         .lines_total
         .fetch_add(cached.stats.lines_total, Ordering::Relaxed);
@@ -3075,26 +5217,31 @@ pub(super) fn hydrate_cached_events(
     stats
         .lines_missing_usage
         .fetch_add(cached.stats.lines_missing_usage, Ordering::Relaxed);
-    // NB: lines_unknown_pricing is NOT taken from the cached stats — it depends
-    // on the CURRENT pricing table, so we recompute it live below (pre-filter,
-    // matching the parser, which counts unknown pricing before the date filter).
+}
 
-    // Current entries usually carry their own metadata. Deriving the fallback
-    // for Codex opens the original file, so defer it until an entry needs it.
+pub(super) fn hydrate_cached_internal_events(
+    file: &DiscoveredFile,
+    cached: &CachedFileEntry,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Vec<InternalEvent> {
+    hydrate_cached_stats_and_cost(cached, stats);
+
     let session_meta = std::cell::LazyCell::new(|| derive_session_meta(file));
     let file_path = std::cell::LazyCell::new(|| file.path.display().to_string());
     let mut filtered = 0usize;
     let mut parsed = 0usize;
     let mut unknown_pricing = 0usize;
     let mut events = Vec::with_capacity(cached.events.len());
+    let mut rate_cache = CachedHydrationRateCache::new(pricing);
+    let mut day_cache = LocalDayCache::new(timezone);
 
     for cached_event in &cached.events {
-        // Re-price against the CURRENT table, mirroring the parser EXACTLY so a
-        // cached event never drifts from a freshly-parsed one: the parser uses
-        // `estimate_cost(...).map(..).unwrap_or((0.0, unknown))`, i.e. an unknown
-        // model is $0 (not the stale cached cost). Count unknowns pre-filter.
+        let ctx = cached_event.pricing_context();
         let mut usage = cached_event.usage;
-        match pricing.estimate_cost(&cached_event.model, usage) {
+        match rate_cache.estimate(&cached_event.model, usage, ctx) {
             Some(cost) => usage.cost_usd = cost,
             None => {
                 usage.cost_usd = 0.0;
@@ -3102,28 +5249,32 @@ pub(super) fn hydrate_cached_events(
             }
         }
 
-        if !date_filter_allows(filter, cached_event.timestamp, timezone) {
+        if !date_filter_allows_cached(filter, cached_event.timestamp, &mut day_cache) {
             filtered += 1;
             continue;
         }
         parsed += 1;
-        events.push(UsageEvent {
-            timestamp: cached_event.timestamp,
-            source: file.source,
-            model: cached_event.model.clone(),
-            session: cached_event
-                .session
-                .clone()
-                .unwrap_or_else(|| session_meta.0.clone()),
-            project: cached_event
-                .project
-                .clone()
-                .or_else(|| session_meta.1.clone()),
-            file_path: cached_event
-                .file_path
-                .clone()
-                .unwrap_or_else(|| (*file_path).clone()),
-            usage,
+        events.push(InternalEvent {
+            event: UsageEvent {
+                timestamp: cached_event.timestamp,
+                source: file.source,
+                model: cached_event.model.clone(),
+                session: cached_event
+                    .session
+                    .clone()
+                    .unwrap_or_else(|| session_meta.0.clone()),
+                project: cached_event
+                    .project
+                    .clone()
+                    .or_else(|| session_meta.1.clone()),
+                file_path: cached_event
+                    .file_path
+                    .clone()
+                    .unwrap_or_else(|| (*file_path).clone()),
+                usage,
+            },
+            pricing_ctx: ctx,
+            dedupe_hash: cached_event.dedupe_hash,
         });
     }
 
@@ -3136,27 +5287,114 @@ pub(super) fn hydrate_cached_events(
     events
 }
 
-fn cached_usage_event(event: &UsageEvent) -> CachedUsageEvent {
+fn hydrate_cached_internal_events_owned(
+    file: &DiscoveredFile,
+    cached: CachedFileEntry,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Vec<InternalEvent> {
+    hydrate_cached_stats_and_cost(&cached, stats);
+
+    let session_meta = std::cell::LazyCell::new(|| derive_session_meta(file));
+    let file_path = std::cell::LazyCell::new(|| file.path.display().to_string());
+    let mut filtered = 0usize;
+    let mut parsed = 0usize;
+    let mut unknown_pricing = 0usize;
+    let mut events = Vec::with_capacity(cached.events.len());
+    let mut rate_cache = CachedHydrationRateCache::new(pricing);
+    let mut day_cache = LocalDayCache::new(timezone);
+
+    for cached_event in cached.events {
+        let ctx = cached_event.pricing_context();
+        let mut usage = cached_event.usage;
+        match rate_cache.estimate(&cached_event.model, usage, ctx) {
+            Some(cost) => usage.cost_usd = cost,
+            None => {
+                usage.cost_usd = 0.0;
+                unknown_pricing += 1;
+            }
+        }
+
+        if !date_filter_allows_cached(filter, cached_event.timestamp, &mut day_cache) {
+            filtered += 1;
+            continue;
+        }
+        parsed += 1;
+        events.push(InternalEvent {
+            event: UsageEvent {
+                timestamp: cached_event.timestamp,
+                source: file.source,
+                model: cached_event.model,
+                session: cached_event
+                    .session
+                    .unwrap_or_else(|| session_meta.0.clone()),
+                project: cached_event.project.or_else(|| session_meta.1.clone()),
+                file_path: cached_event
+                    .file_path
+                    .unwrap_or_else(|| (*file_path).clone()),
+                usage,
+            },
+            pricing_ctx: ctx,
+            dedupe_hash: cached_event.dedupe_hash,
+        });
+    }
+
+    stats.lines_filtered.fetch_add(filtered, Ordering::Relaxed);
+    stats.lines_parsed.fetch_add(parsed, Ordering::Relaxed);
+    stats
+        .lines_unknown_pricing
+        .fetch_add(unknown_pricing, Ordering::Relaxed);
+
+    events
+}
+
+#[cfg(test)]
+pub(super) fn hydrate_cached_events(
+    file: &DiscoveredFile,
+    cached: &CachedFileEntry,
+    filter: DateFilter,
+    timezone: &TimeZoneMode,
+    pricing: &PricingTable,
+    stats: &ParseStatsAtomic,
+) -> Vec<UsageEvent> {
+    hydrate_cached_internal_events(file, cached, filter, timezone, pricing, stats)
+        .into_iter()
+        .map(|item| item.event)
+        .collect()
+}
+
+fn cached_usage_event_for_file(
+    event: &UsageEvent,
+    ctx: PricingContext,
+    dedupe_hash: Option<u64>,
+    default_file_path: &str,
+) -> CachedUsageEvent {
+    let mut usage = event.usage;
+    usage.cost_usd = 0.0;
     CachedUsageEvent {
         timestamp: event.timestamp,
         model: event.model.clone(),
-        usage: event.usage,
+        usage,
         session: Some(event.session.clone()),
         project: event.project.clone(),
-        file_path: Some(event.file_path.clone()),
+        file_path: (event.file_path != default_file_path).then(|| event.file_path.clone()),
+        cache_creation_1h_tokens: ctx.cache_creation_1h_tokens,
+        speed: ctx.speed,
+        model_calls: ctx.model_calls.max(1),
+        reported_cost_usd: ctx.reported_cost_usd,
+        dedupe_hash,
     }
 }
 
 /// Cache invalidation key — deliberately **independent of pricing**.
-///
-/// Cached events store token counts and are re-priced at hydration
-/// (see [`hydrate_cached_events`]), so a pricing refresh no longer wipes the
-/// cache. Previously this embedded the entire pricing table (800+ models), so
-/// every 6h OpenRouter refresh — or any online/offline flip — changed the key
-/// and forced a full reparse, making the cache nearly useless. Bump the marker
-/// only when the parse/cache-entry *semantics* change. `v3` = re-price-on-hydrate.
+fn cache_schema_key() -> String {
+    "estimate-v5.1-claude-fix".to_string()
+}
+
 pub(super) fn pricing_cache_key(_pricing: &PricingTable) -> String {
-    "estimate-v3-reprice".to_string()
+    cache_schema_key()
 }
 
 pub(super) fn normalize_path(path: &Path) -> PathBuf {
@@ -3412,12 +5650,8 @@ mod cache_tests {
                 modified_unix_secs: 1,
                 modified_unix_nanos: 0,
             },
-            stats: CachedFileStats::default(),
-            events: Vec::new(),
             parsed_offset: size,
-            codex_last_model: None,
-            codex_last_totals: None,
-            claude_recent_keys: Vec::new(),
+            ..CachedFileEntry::default()
         }
     }
 
@@ -3448,9 +5682,7 @@ mod cache_tests {
                     cost_usd: 0.42,
                     ..UsageAccumulator::default()
                 },
-                session: None,
-                project: None,
-                file_path: None,
+                ..CachedUsageEvent::default()
             });
         }
 
@@ -3552,7 +5784,7 @@ mod cache_tests {
         let conn = open_cache_db(&path).unwrap();
         assert!(import_legacy_json(&conn, "pk", &json_path).unwrap());
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM files_v5", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
 
@@ -3572,10 +5804,11 @@ mod cache_tests {
         let pricing = PricingTable::default();
         let sample = r#"{"timestamp":1785179745,"method":"_x.ai/session/update","params":{"sessionId":"019fa4ff-8769-76c1-b662-ab0d9141d183","update":{"sessionUpdate":"turn_completed","prompt_id":"019fa4ff-8a6a-7b71-a71e-e681dee271c4","stop_reason":"end_turn","usage":{"inputTokens":659466,"outputTokens":11143,"totalTokens":670609,"cachedReadTokens":608640,"reasoningTokens":6744,"modelCalls":15,"apiDurationMs":102689,"costUsdTicks":1948400000,"modelUsage":{"grok-4.6-build":{"inputTokens":659466,"outputTokens":11143,"totalTokens":670609,"cachedReadTokens":608640,"reasoningTokens":6744,"modelCalls":15,"apiDurationMs":102689,"costUsdTicks":1948400000}},"numTurns":15}},"_meta":{"eventId":"019fa4ff-8769-76c1-b662-ab0d9141d183-38799","agentTimestampMs":1785179745037}}}"#;
 
-        let result = parse_grok_usage_line(sample, &pricing);
-        let ParseLineResult::Parsed(parsed) = result else {
+        let result = parse_grok_usage_line_records(sample, &pricing);
+        let MultiLineResult::Parsed(records) = result else {
             panic!("Expected parsed result");
         };
+        let parsed = &records[0];
 
         assert_eq!(parsed.event.source, SourceKind::Grok);
         assert_eq!(parsed.event.model, "grok-4.6-build");
@@ -3584,7 +5817,9 @@ mod cache_tests {
         assert_eq!(parsed.event.usage.cache_read_input_tokens, 608640);
         assert_eq!(parsed.event.usage.output_tokens, 11143);
         assert_eq!(parsed.event.usage.reasoning_output_tokens, 6744);
-        assert!((parsed.event.usage.cost_usd - 1.9484).abs() < 1e-4);
+        assert!((parsed.event.usage.cost_usd - 0.19484).abs() < 1e-6);
+        assert_eq!(parsed.pricing_ctx.reported_cost_usd, Some(0.19484));
+        assert_eq!(parsed.pricing_ctx.model_calls, 15);
     }
 
     #[test]
@@ -3592,10 +5827,11 @@ mod cache_tests {
         let pricing = PricingTable::default();
         let sample = r#"{"ts":"2026-08-25T14:12:31.661Z","src":"shell","pid":49284,"ver":"1.0.5","lvl":"info","sid":"01a03943-f501-70f3-a587-28e468a24112","msg":"shell.turn.inference_done","ctx":{"prompt_tokens":1000,"cached_prompt_tokens":800,"completion_tokens":200,"reasoning_tokens":50}}"#;
 
-        let result = parse_grok_usage_line(sample, &pricing);
-        let ParseLineResult::Parsed(parsed) = result else {
+        let result = parse_grok_usage_line_records(sample, &pricing);
+        let MultiLineResult::Parsed(records) = result else {
             panic!("Expected parsed result");
         };
+        let parsed = &records[0];
 
         assert_eq!(parsed.event.source, SourceKind::Grok);
         assert_eq!(parsed.event.session, "01a03943-f501-70f3-a587-28e468a24112");
@@ -3616,5 +5852,423 @@ mod cache_tests {
             decode_grok_project_dir("standalone-proj"),
             "standalone-proj"
         );
+    }
+
+    #[test]
+    fn should_not_skip_claude_assistant_after_2048_bytes() {
+        let padding = "x".repeat(4096);
+        let line = format!(
+            r#"{{"padding":"{padding}","type":"assistant","timestamp":"2026-10-01T10:00:00Z","sessionId":"s1","message":{{"id":"msg_1","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":25}}}}}}"#
+        );
+        assert!(!should_skip_parse_by_line_prefix(SourceKind::Claude, &line));
+        let MultiLineResult::Parsed(records) = parse_claude_usage_line_records(&line) else {
+            panic!("expected late assistant line to parse");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event.usage.input_tokens, 100);
+        assert_eq!(records[0].event.usage.output_tokens, 25);
+    }
+
+    #[test]
+    fn claude_max_merge_dedupe_1h_fast_advisor_and_synthetic() {
+        let synth = r#"{"type":"assistant","timestamp":"2026-10-01T10:00:00Z","message":{"id":"m0","model":"<synthetic>","usage":{"input_tokens":50,"output_tokens":5}}}"#;
+        assert!(matches!(
+            parse_claude_usage_line_records(synth),
+            MultiLineResult::MissingUsage
+        ));
+
+        let row1 = r#"{"type":"assistant","timestamp":"2026-10-01T10:00:01Z","sessionId":"s1","requestId":"r1","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":100},"cache_read_input_tokens":50,"output_tokens":5,"speed":"fast"}}}"#;
+        let row2 = r#"{"type":"assistant","timestamp":"2026-10-01T10:00:02Z","sessionId":"s1","requestId":"r1","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":100},"cache_read_input_tokens":50,"output_tokens":42,"speed":"fast","iterations":[{"type":"advisor_message","model":"claude-opus-4-6","input_tokens":50,"output_tokens":20}]}}}"#;
+
+        let MultiLineResult::Parsed(r2) = parse_claude_usage_line_records(row2) else {
+            panic!("expected row2 to parse");
+        };
+        assert_eq!(r2.len(), 2);
+        assert_eq!(r2[0].pricing_ctx.cache_creation_1h_tokens, 100);
+        assert_eq!(r2[0].pricing_ctx.speed, ServiceSpeed::Fast);
+        assert_eq!(r2[0].event.usage.input_tokens, 10);
+        assert_eq!(r2[0].event.usage.output_tokens, 42);
+        assert_eq!(r2[1].event.model, "claude-opus-4-6");
+        assert_eq!(r2[1].event.usage.input_tokens, 50);
+        assert_eq!(r2[1].event.usage.output_tokens, 20);
+
+        let dir = std::env::temp_dir().join(format!("tu-claude-dedupe-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f1 = dir.join("a.jsonl");
+        let f2 = dir.join("b.jsonl");
+        std::fs::write(&f1, format!("{row1}\n")).unwrap();
+        std::fs::write(&f2, format!("{row2}\n")).unwrap();
+
+        let files = vec![
+            DiscoveredFile {
+                source: SourceKind::Claude,
+                root: dir.clone(),
+                path: f1,
+            },
+            DiscoveredFile {
+                source: SourceKind::Claude,
+                root: dir.clone(),
+                path: f2,
+            },
+        ];
+        let mut store = IncrementalCacheStore::new("pk".into());
+        let out = parse_files_with_cache(
+            &files,
+            &mut store,
+            ParseFilesConfig {
+                filter: DateFilter::default(),
+                timezone: &TimeZoneMode::Utc,
+                pricing: Arc::new(PricingTable::default()),
+                worker_count: 1,
+                cache_enabled: false,
+                cache_path: None,
+                sort_events: true,
+            },
+        );
+        assert_eq!(out.loaded.events.len(), 2);
+        let main_ev = out
+            .loaded
+            .events
+            .iter()
+            .find(|e| e.model == "claude-sonnet-4-6")
+            .unwrap();
+        let adv_ev = out
+            .loaded
+            .events
+            .iter()
+            .find(|e| e.model == "claude-opus-4-6")
+            .unwrap();
+        assert_eq!(main_ev.usage.input_tokens, 10);
+        assert_eq!(main_ev.usage.output_tokens, 42);
+        assert_eq!(adv_ev.usage.input_tokens, 50);
+        assert_eq!(adv_ev.usage.output_tokens, 20);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grok_multi_model_split_cache_creation_and_cliff_guard() {
+        let pricing = PricingTable::default_table();
+        // 500K total input across 10 calls = 50K/call <= 200K cliff => standard rate ($2/M, $6/M), not cliff rate.
+        let sample = r#"{"timestamp":1785179745,"method":"_x.ai/session/update","params":{"sessionId":"s-multi","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{"inputTokens":500000,"outputTokens":1000,"costUsdTicks":0,"modelCalls":10,"modelUsage":{"grok-4.6":{"inputTokens":500000,"outputTokens":1000,"cacheCreationTokens":4000,"cachedReadTokens":0,"modelCalls":10,"costUsdTicks":0},"grok-4.6-fast":{"inputTokens":1000,"outputTokens":500,"cachedReadTokens":0,"modelCalls":1,"costUsdTicks":15000000}}}},"_meta":{"agentTimestampMs":1785179745000}}}"#;
+
+        let MultiLineResult::Parsed(records) = parse_grok_usage_line_records(sample, &pricing)
+        else {
+            panic!("expected Grok records");
+        };
+        assert_eq!(records.len(), 2);
+
+        let main = records
+            .iter()
+            .find(|r| r.event.model == "grok-4.6")
+            .expect("grok-4.6 record");
+        assert_eq!(main.event.usage.cache_creation_input_tokens, 4000);
+        assert_eq!(main.pricing_ctx.model_calls, 10);
+        // Reported cost was absent/0, so estimate runs with per-call prompt 50K (< 200K cliff):
+        // 0.5M * $2/M + 1000 * $6/M = $1.006 (well below >200K cliff ~$2.012)
+        assert!(
+            main.event.usage.cost_usd > 0.9 && main.event.usage.cost_usd < 1.5,
+            "multi-call turn should use standard (non-cliff) rate: {}",
+            main.event.usage.cost_usd
+        );
+
+        let fast = records
+            .iter()
+            .find(|r| r.event.model == "grok-4.6-fast")
+            .expect("grok-4.6-fast record");
+        assert!((fast.event.usage.cost_usd - 0.0015).abs() < 1e-8);
+        assert_eq!(fast.pricing_ctx.reported_cost_usd, Some(0.0015));
+
+        // Ensure TU05 codec + hydrate_cached_internal_events preserves context & reported cost.
+        let mut entry = sample_entry(128);
+        for rec in &records {
+            entry.events.push(cached_usage_event_for_file(
+                &rec.event,
+                rec.pricing_ctx,
+                rec.dedupe_hash,
+                "x",
+            ));
+        }
+        let blob = encode_cached_file_entry(&entry);
+        let decoded = decode_cached_file_entry(&blob, entry.fingerprint, entry.stats, 128).unwrap();
+        let file = DiscoveredFile {
+            source: SourceKind::Grok,
+            root: PathBuf::from("/tmp"),
+            path: PathBuf::from("/tmp/updates.jsonl"),
+        };
+        let stats = ParseStatsAtomic::default();
+        let hydrated = hydrate_cached_internal_events(
+            &file,
+            &decoded,
+            DateFilter::default(),
+            &TimeZoneMode::Utc,
+            &pricing,
+            &stats,
+        );
+        assert_eq!(hydrated.len(), 2);
+        let hydrated_fast = hydrated
+            .iter()
+            .find(|e| e.event.model == "grok-4.6-fast")
+            .unwrap();
+        assert!((hydrated_fast.event.usage.cost_usd - 0.0015).abs() < 1e-8);
+    }
+
+    #[test]
+    fn codex_duplicate_token_count_fork_and_service_tier() {
+        let pricing = PricingTable::default_table();
+        let mut state = CodexParseState::default();
+
+        let fork_meta = r#"{"timestamp":"2026-10-01T10:00:00Z","type":"session_meta","payload":{"forked_from_id":"parent-123"}}"#;
+        assert!(matches!(
+            parse_codex_usage_line_records(fork_meta, &mut state, &pricing),
+            MultiLineResult::MissingUsage
+        ));
+        assert!(state.fork_anchor_ts.is_some());
+
+        let turn_ctx = r#"{"timestamp":"2026-10-01T10:00:01Z","type":"turn_context","payload":{"model":"gpt-5.4","cwd":"/work/app"}}"#;
+        assert!(matches!(
+            parse_codex_usage_line_records(turn_ctx, &mut state, &pricing),
+            MultiLineResult::MissingUsage
+        ));
+
+        let tier_line = r#"{"timestamp":"2026-10-01T10:00:02Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"fast"}}}"#;
+        assert!(matches!(
+            parse_codex_usage_line_records(tier_line, &mut state, &pricing),
+            MultiLineResult::MissingUsage
+        ));
+        assert_eq!(state.service_tier, ServiceSpeed::Fast);
+
+        let tok_line = r#"{"timestamp":"2026-10-01T10:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"reasoning_output_tokens":0},"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"reasoning_output_tokens":0,"total_tokens":1100}}}}"#;
+        let MultiLineResult::Parsed(first) =
+            parse_codex_usage_line_records(tok_line, &mut state, &pricing)
+        else {
+            panic!("expected first token_count to parse");
+        };
+        assert_eq!(first[0].pricing_ctx.speed, ServiceSpeed::Fast);
+        // Fast doubles gpt-5.4 price ($2.5/M input + $15/M output) * 2
+        let expected_std = 1000.0 * 2.5e-6 + 100.0 * 15e-6;
+        assert!((first[0].event.usage.cost_usd - expected_std * 2.0).abs() < 1e-8);
+
+        // Identical duplicate token_count emission must be ignored.
+        assert!(matches!(
+            parse_codex_usage_line_records(tok_line, &mut state, &pricing),
+            MultiLineResult::MissingUsage
+        ));
+    }
+
+    #[test]
+    fn tu05_codec_and_meta_date_pushdown() {
+        let path = tmp_db("meta-pushdown");
+        cleanup(&path);
+        let dir = std::env::temp_dir().join(format!("tu-pushdown-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let old_path = dir.join("old.jsonl");
+        let new_path = dir.join("new.jsonl");
+        std::fs::write(&old_path, "{}\n").unwrap();
+        std::fs::write(&new_path, "{}\n").unwrap();
+
+        let old_fp = read_file_fingerprint(&old_path).unwrap();
+        let new_fp = read_file_fingerprint(&new_path).unwrap();
+
+        let mut old_entry = sample_entry(old_fp.size);
+        old_entry.fingerprint = old_fp;
+        old_entry.codex_service_tier = ServiceSpeed::Ultrafast;
+        old_entry.codex_fork_anchor_ms = Some(123_456);
+        old_entry.codex_request_ledger_active = true;
+        old_entry.events.push(CachedUsageEvent {
+            timestamp: DateTime::parse_from_rfc3339("2026-01-10T12:00:00Z")
+                .unwrap()
+                .to_utc(),
+            model: "claude-sonnet-4-6".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: 100,
+                output_tokens: 10,
+                ..UsageAccumulator::default()
+            },
+            cache_creation_1h_tokens: 55,
+            speed: ServiceSpeed::Fast,
+            model_calls: 3,
+            reported_cost_usd: Some(0.1234),
+            dedupe_hash: Some(42),
+            ..CachedUsageEvent::default()
+        });
+
+        let decoded = decode_cached_file_entry(
+            &encode_cached_file_entry(&old_entry),
+            old_fp,
+            old_entry.stats.clone(),
+            old_entry.parsed_offset,
+        )
+        .unwrap();
+        assert_eq!(decoded.codex_service_tier, ServiceSpeed::Ultrafast);
+        assert_eq!(decoded.codex_fork_anchor_ms, Some(123_456));
+        assert!(decoded.codex_request_ledger_active);
+        assert_eq!(decoded.events[0].cache_creation_1h_tokens, 55);
+        assert_eq!(decoded.events[0].speed, ServiceSpeed::Fast);
+        assert_eq!(decoded.events[0].model_calls, 3);
+        assert_eq!(decoded.events[0].reported_cost_usd, Some(0.1234));
+        assert_eq!(decoded.events[0].dedupe_hash, Some(42));
+
+        let mut new_entry = sample_entry(new_fp.size);
+        new_entry.fingerprint = new_fp;
+        new_entry.events.push(CachedUsageEvent {
+            timestamp: DateTime::parse_from_rfc3339("2026-11-20T12:00:00Z")
+                .unwrap()
+                .to_utc(),
+            model: "claude-sonnet-4-6".to_string(),
+            usage: UsageAccumulator {
+                input_tokens: 200,
+                output_tokens: 20,
+                ..UsageAccumulator::default()
+            },
+            ..CachedUsageEvent::default()
+        });
+
+        let old_key = cache_file_key(&old_path);
+        let new_key = cache_file_key(&new_path);
+        let mut store = IncrementalCacheStore::new("pk-meta".into());
+        store.files.insert(old_key.clone(), old_entry);
+        store.files.insert(new_key, new_entry);
+        save_incremental_cache(&path, &mut store);
+
+        // Corrupt the old blob in SQLite: if meta pushdown wrongly reads old blobs, this would fail.
+        {
+            let conn = open_cache_db(&path).unwrap();
+            conn.execute(
+                "UPDATE files_v5 SET blob = X'DEADBEEF' WHERE cache_key = ?1",
+                params![&old_key],
+            )
+            .unwrap();
+        }
+
+        let mut meta_store = load_incremental_cache_meta(&path, "pk-meta");
+        assert!(meta_store.meta_only);
+        assert!(meta_store.files.is_empty());
+        assert_eq!(meta_store.meta.len(), 2);
+
+        let files = vec![
+            DiscoveredFile {
+                source: SourceKind::Claude,
+                root: dir.clone(),
+                path: old_path,
+            },
+            DiscoveredFile {
+                source: SourceKind::Claude,
+                root: dir.clone(),
+                path: new_path,
+            },
+        ];
+        let out = parse_files_with_cache(
+            &files,
+            &mut meta_store,
+            ParseFilesConfig {
+                filter: DateFilter {
+                    since: NaiveDate::from_ymd_opt(2026, 11, 19),
+                    until: NaiveDate::from_ymd_opt(2026, 11, 21),
+                },
+                timezone: &TimeZoneMode::Utc,
+                pricing: Arc::new(PricingTable::default()),
+                worker_count: 1,
+                cache_enabled: true,
+                cache_path: Some(&path),
+                sort_events: true,
+            },
+        );
+        assert_eq!(out.loaded.events.len(), 1);
+        assert_eq!(out.loaded.events[0].usage.input_tokens, 200);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn claude_handles_duplicate_session_id_and_null_iterations() {
+        let line = r#"{"type":"assistant","timestamp":"2026-10-01T10:00:00Z","sessionId":"sess-camel","session_id":"sess-snake","requestId":"req-1","request_id":"req-1","message":{"id":"m-dup","model":"claude-opus-5-5","usage":{"input_tokens":120,"cache_creation_input_tokens":500,"cache_read_input_tokens":4000,"output_tokens":80,"iterations":null,"speed":null,"inference_geo":null}}}"#;
+        let MultiLineResult::Parsed(records) = parse_claude_usage_line_records(line) else {
+            panic!("expected Claude line with duplicate session_id and null iterations to parse");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event.session, "sess-camel");
+        assert_eq!(records[0].event.usage.input_tokens, 120);
+        assert_eq!(records[0].event.usage.cache_creation_input_tokens, 500);
+        assert_eq!(records[0].event.usage.cache_read_input_tokens, 4000);
+        assert_eq!(records[0].event.usage.output_tokens, 80);
+    }
+
+    #[test]
+    fn pi_parses_session_assistant_toolresult_summary_and_reported_cost() {
+        let pricing = PricingTable::default_table();
+        let mut session_id = String::new();
+
+        let sess = r#"{"type":"session","version":3,"id":"sess-pi-1","timestamp":"2026-10-01T10:00:00Z","cwd":"/Users/dev/app"}"#;
+        assert!(matches!(
+            parse_pi_usage_line_records(sess, &mut session_id, &pricing),
+            MultiLineResult::MissingUsage
+        ));
+        assert_eq!(session_id, "sess-pi-1");
+
+        let assistant = r#"{"type":"message","id":"msg-1","timestamp":"2026-10-01T10:00:05Z","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","responseModel":"claude-sonnet-4-6","usage":{"input":1000,"output":200,"cacheRead":5000,"cacheWrite":300,"reasoning":50,"cost":{"total":0.125}}}}"#;
+        let MultiLineResult::Parsed(recs) =
+            parse_pi_usage_line_records(assistant, &mut session_id, &pricing)
+        else {
+            panic!("expected assistant Pi record");
+        };
+        assert_eq!(recs[0].event.source, SourceKind::Pi);
+        assert_eq!(recs[0].event.session, "sess-pi-1");
+        assert_eq!(recs[0].event.model, "anthropic/claude-sonnet-4-6");
+        assert_eq!(recs[0].event.usage.input_tokens, 1000);
+        assert_eq!(recs[0].event.usage.cache_read_input_tokens, 5000);
+        assert_eq!(recs[0].event.usage.cache_creation_input_tokens, 300);
+        assert_eq!(recs[0].event.usage.output_tokens, 200);
+        assert_eq!(recs[0].event.usage.reasoning_output_tokens, 50);
+        assert!((recs[0].event.usage.cost_usd - 0.125).abs() < 1e-8);
+
+        let tool_res = r#"{"type":"message","id":"msg-2","timestamp":"2026-10-01T10:00:06Z","message":{"role":"toolResult","usage":{"input":0,"output":40,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.0}}}}"#;
+        let MultiLineResult::Parsed(tool_recs) =
+            parse_pi_usage_line_records(tool_res, &mut session_id, &pricing)
+        else {
+            panic!("expected toolResult Pi record");
+        };
+        assert_eq!(tool_recs[0].event.model, "Tools/summaries");
+        assert_eq!(tool_recs[0].event.usage.output_tokens, 40);
+        assert_eq!(tool_recs[0].pricing_ctx.reported_cost_usd, None);
+
+        let compaction = r#"{"type":"compaction","id":"cmp-1","timestamp":"2026-10-01T10:00:10Z","usage":{"input":2000,"output":150,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.02}}}"#;
+        let MultiLineResult::Parsed(cmp_recs) =
+            parse_pi_usage_line_records(compaction, &mut session_id, &pricing)
+        else {
+            panic!("expected compaction Pi record");
+        };
+        assert_eq!(cmp_recs[0].event.model, "Tools/summaries");
+        assert!((cmp_recs[0].event.usage.cost_usd - 0.02).abs() < 1e-8);
+    }
+
+    #[test]
+    fn muse_parses_v1_v3_models_and_dedupe_hash() {
+        let pricing = PricingTable::default_table();
+        let line_v1 = r#"{"schema_version":1,"record_type":"event","payload_type":"runtime.session","payload_schema_version":1,"id":"ev-1","recorded_at":1760000000123000,"stream":{"kind":"session","id":"sess-muse-1"},"payload":{"source_run_record_id":"run-1","event":{"kind":"model_completed","model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_tokens":600,"cache_write_tokens":100,"reasoning_tokens":50}}}}"#;
+        let MultiLineResult::Parsed(recs) = parse_muse_usage_line_records(line_v1, &pricing) else {
+            panic!("expected Muse v1 record");
+        };
+        assert_eq!(recs[0].event.source, SourceKind::Muse);
+        assert_eq!(recs[0].event.session, "sess-muse-1");
+        assert_eq!(recs[0].event.model, "claude-sonnet-4-6");
+        assert_eq!(
+            recs[0].event.timestamp.timestamp_millis(),
+            1_760_000_000_123
+        );
+        assert_eq!(recs[0].event.usage.input_tokens, 300);
+        assert_eq!(recs[0].event.usage.cache_read_input_tokens, 600);
+        assert_eq!(recs[0].event.usage.cache_creation_input_tokens, 100);
+        assert_eq!(recs[0].event.usage.output_tokens, 200);
+        assert_eq!(recs[0].event.usage.reasoning_output_tokens, 50);
+
+        let line_v3 = r#"{"schema_version":1,"record_type":"event","payload_type":"runtime.session","payload_schema_version":3,"id":"ev-2","recorded_at":1760000005000000,"stream":{"kind":"session","id":"sess-muse-2"},"payload":{"event":{"kind":"automated_review_completed","model":{"model_id":"gpt-5.4"},"usage":{"input_tokens":500,"output_tokens":50,"cached_input_tokens":200}}}}"#;
+        let MultiLineResult::Parsed(recs_v3) = parse_muse_usage_line_records(line_v3, &pricing)
+        else {
+            panic!("expected Muse v3 record");
+        };
+        assert_eq!(recs_v3[0].event.model, "gpt-5.4");
+        assert_eq!(recs_v3[0].event.usage.input_tokens, 300);
+        assert_eq!(recs_v3[0].event.usage.cache_read_input_tokens, 200);
     }
 }

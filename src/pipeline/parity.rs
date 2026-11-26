@@ -113,7 +113,9 @@ fn normalize_tu_for_provider(provider: ProviderArg, raw: &TokenCounts) -> TokenC
         | ProviderArg::Gemini
         | ProviderArg::Antigravity
         | ProviderArg::Opencode
-        | ProviderArg::Grok => {
+        | ProviderArg::Grok
+        | ProviderArg::Pi
+        | ProviderArg::Muse => {
             // ccusage-family totals generally exclude reasoning as a separate additive bucket.
             TokenCounts {
                 input_tokens: raw.input_tokens,
@@ -172,6 +174,8 @@ fn provider_name(provider: ProviderArg) -> &'static str {
         ProviderArg::Gemini | ProviderArg::Antigravity => "gemini",
         ProviderArg::Opencode => "opencode",
         ProviderArg::Grok => "grok",
+        ProviderArg::Pi => "pi",
+        ProviderArg::Muse => "muse",
     }
 }
 
@@ -190,9 +194,10 @@ fn fetch_ccusage_totals(
         ProviderArg::Codex => "@ccusage/codex@latest",
         ProviderArg::Gemini | ProviderArg::Antigravity => "@ccusage/gemini@latest",
         ProviderArg::Opencode => "@ccusage/opencode@latest",
-        ProviderArg::Grok => {
+        ProviderArg::Grok | ProviderArg::Pi | ProviderArg::Muse => {
             bail!(
-                "tu parity does not support Grok — no ccusage-family package exists to compare against"
+                "tu parity does not support {} — no ccusage-family package exists to compare against",
+                provider_name(provider)
             );
         }
     };

@@ -170,10 +170,11 @@ impl EnvironmentalMetrics {
         pue: f64,
         wue_combined: f64,
     ) -> Self {
+        // Output tokens already include reasoning tokens across all parsers; avoid double-counting.
         Self::calculate(
             counts.input_tokens + counts.cache_creation_input_tokens,
             counts.cache_read_input_tokens,
-            counts.output_tokens + counts.reasoning_output_tokens,
+            counts.output_tokens,
             model_name,
             grid,
             pue,
@@ -485,5 +486,37 @@ mod tests {
         assert!(equiv.cups_boiled > 0.0);
         assert!(equiv.tree_months > 0.0);
         assert!(equiv.streaming_hours > 0.0);
+    }
+
+    #[test]
+    fn test_calculate_counts_does_not_double_count_reasoning_tokens() {
+        let with_reasoning = TokenCounts {
+            input_tokens: 1_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            output_tokens: 500,
+            reasoning_output_tokens: 300,
+            total_tokens: 1_500,
+            cost_usd: 0.0,
+        };
+        let without_reasoning = TokenCounts {
+            reasoning_output_tokens: 0,
+            ..with_reasoning.clone()
+        };
+        let a = EnvironmentalMetrics::calculate_counts(
+            &with_reasoning,
+            "claude-opus-5",
+            GridRegion::UsEast,
+            1.15,
+            4.30,
+        );
+        let b = EnvironmentalMetrics::calculate_counts(
+            &without_reasoning,
+            "claude-opus-5",
+            GridRegion::UsEast,
+            1.15,
+            4.30,
+        );
+        assert_eq!(a, b);
     }
 }

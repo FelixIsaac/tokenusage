@@ -121,6 +121,7 @@ pub(crate) async fn run_top(args: TopArgs) -> Result<()> {
                     pricing: rt.pricing.clone(),
                     worker_count: rt.worker_count,
                     cache_enabled: rt.cache_enabled,
+                    cache_path: rt.cache_path.as_deref(),
                     sort_events: false,
                 },
             );
@@ -426,6 +427,8 @@ pub(super) fn render_top_frame(
                     SourceKind::Gemini => TuiColor::Green,
                     SourceKind::OpenCode => TuiColor::Magenta,
                     SourceKind::Grok => TuiColor::Red,
+                    SourceKind::Pi => TuiColor::Yellow,
+                    SourceKind::Muse => TuiColor::White,
                 };
                 let project = s.project.as_deref().unwrap_or("-");
                 let project_short = if project.len() > 20 {
