@@ -1026,6 +1026,10 @@ fn menu_rows() -> Vec<MenuRow> {
     let mut rows = vec![
         Header("Reporting"),
         Cmd {
+            name: "wrapped",
+            desc: "AI Year in Review (7-slide TUI, HTML micro-site, PNG poster)",
+        },
+        Cmd {
             name: "today",
             desc: "Today's usage + coding activity",
         },
@@ -1277,6 +1281,16 @@ fn draw_menu(
     pos: usize,
     filter: &str,
 ) {
+    use crate::tui_theme::{
+        ACCENT_AMBER, ACCENT_CYAN, BG_CANVAS, BG_ELEVATED, BG_SURFACE, BORDER_FOCUS, TEXT_MUTED,
+        TEXT_PRIMARY, TEXT_SECONDARY, keybar_line,
+    };
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG_CANVAS)),
+        frame.area(),
+    );
+
     let [list_area, footer] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
 
@@ -1284,14 +1298,19 @@ fn draw_menu(
         .iter()
         .map(|&ri| match &rows[ri] {
             MenuRow::Header(title) => ListItem::new(Line::from(Span::styled(
-                (*title).to_string(),
+                format!("── {title}"),
                 Style::default()
-                    .fg(TuiColor::Cyan)
+                    .fg(ACCENT_AMBER)
                     .add_modifier(Modifier::BOLD),
             ))),
             MenuRow::Cmd { name, desc } => ListItem::new(Line::from(vec![
-                Span::styled(format!("{name:<17}"), Style::default().fg(TuiColor::White)),
-                Span::styled((*desc).to_string(), Style::default().fg(TuiColor::DarkGray)),
+                Span::styled(
+                    format!("{name:<17}"),
+                    Style::default()
+                        .fg(TEXT_PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled((*desc).to_string(), Style::default().fg(TEXT_SECONDARY)),
             ])),
         })
         .collect();
@@ -1302,19 +1321,43 @@ fn draw_menu(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" tu — pick a command "),
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .style(Style::default().bg(BG_SURFACE).fg(TEXT_PRIMARY))
+                .border_style(Style::default().fg(BORDER_FOCUS))
+                .title(Span::styled(
+                    " ✦ tu — pick a command ",
+                    Style::default()
+                        .fg(ACCENT_CYAN)
+                        .add_modifier(Modifier::BOLD),
+                )),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_style(
+            Style::default()
+                .bg(BG_ELEVATED)
+                .fg(ACCENT_CYAN)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("❯ ");
     frame.render_stateful_widget(list, list_area, &mut state);
 
-    let hint = if filter.is_empty() {
-        "↑/↓ move · enter run · type to filter · esc quit".to_string()
+    let footer_line = if filter.is_empty() {
+        keybar_line(&[
+            ("↑/↓", "Move"),
+            ("Enter", "Run"),
+            ("Type", "Filter"),
+            ("Esc", "Quit"),
+        ])
     } else {
-        format!("/{filter}    enter run · esc quit")
+        Line::from(vec![
+            Span::styled(
+                format!(" /{filter} "),
+                Style::default().bg(BG_ELEVATED).fg(ACCENT_CYAN),
+            ),
+            Span::styled("   enter run · esc quit", Style::default().fg(TEXT_MUTED)),
+        ])
     };
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(TuiColor::DarkGray)),
+        Paragraph::new(footer_line).style(Style::default().bg(BG_CANVAS)),
         footer,
     );
 }
@@ -1756,12 +1799,12 @@ fn visible_body_rows(area_height: usize) -> usize {
     area_height.saturating_sub(4).max(1)
 }
 
-struct TuiSession {
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+pub(crate) struct TuiSession {
+    pub(crate) terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
 impl TuiSession {
-    fn enter() -> Result<Self> {
+    pub(crate) fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;

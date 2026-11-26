@@ -382,6 +382,10 @@ pub(crate) fn apply_config(command: Commands) -> Result<Commands> {
             apply_common_config(&mut args.common, config.defaults.as_ref());
             Commands::Tui(args)
         }
+        Commands::Wrapped(mut args) => {
+            apply_common_config(&mut args.common, config.defaults.as_ref());
+            Commands::Wrapped(args)
+        }
     };
 
     Ok(merged)
@@ -409,6 +413,7 @@ fn resolve_config_path(command: &Commands) -> Result<Option<PathBuf>> {
         Commands::Rank(args) => args.common.config.as_deref(),
         Commands::Breakdown(args) => args.common.config.as_deref(),
         Commands::Tui(args) => args.common.config.as_deref(),
+        Commands::Wrapped(args) => args.common.config.as_deref(),
         Commands::Img(args) => args.common.config.as_deref(),
         Commands::Session(args) => args.common.config.as_deref(),
         Commands::Blocks(args) => args.common.config.as_deref(),

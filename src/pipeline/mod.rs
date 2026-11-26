@@ -39,6 +39,8 @@ pub(crate) use live::run_blocks;
 #[cfg(feature = "cli")]
 pub(crate) use parity::run_parity;
 #[cfg(feature = "cli")]
+pub(crate) use parsing::load_usage_unsorted;
+#[cfg(feature = "cli")]
 pub(crate) use statusline::run_statusline;
 #[cfg(feature = "cli")]
 pub(crate) use top::run_top;
@@ -120,7 +122,7 @@ impl TimeZoneMode {
 /// bounds check without calling `chrono::Local` (`localtime_r`) or IANA offset
 /// lookups per event. Days whose 24-hour boundary verification fails (e.g. DST
 /// transitions) fall through directly to [`TimeZoneMode::date_of`].
-pub(super) struct LocalDayCache<'a> {
+pub(crate) struct LocalDayCache<'a> {
     tz: &'a TimeZoneMode,
     cached_start_secs: i64,
     cached_end_secs: i64,
@@ -128,7 +130,7 @@ pub(super) struct LocalDayCache<'a> {
 }
 
 impl<'a> LocalDayCache<'a> {
-    pub(super) fn new(tz: &'a TimeZoneMode) -> Self {
+    pub(crate) fn new(tz: &'a TimeZoneMode) -> Self {
         Self {
             tz,
             // Inverted bounds force a miss on the first call.
@@ -139,7 +141,7 @@ impl<'a> LocalDayCache<'a> {
     }
 
     #[inline]
-    pub(super) fn date_of(&mut self, ts: DateTime<Utc>) -> NaiveDate {
+    pub(crate) fn date_of(&mut self, ts: DateTime<Utc>) -> NaiveDate {
         if matches!(self.tz, TimeZoneMode::Utc) {
             return ts.date_naive();
         }
@@ -148,6 +150,24 @@ impl<'a> LocalDayCache<'a> {
             return self.cached_day;
         }
         self.date_of_slow(ts, secs)
+    }
+
+    #[inline]
+    pub(crate) fn date_and_hour(&mut self, ts: DateTime<Utc>) -> (NaiveDate, u32) {
+        if matches!(self.tz, TimeZoneMode::Utc) {
+            return (ts.date_naive(), ts.hour());
+        }
+        let secs = ts.timestamp();
+        if secs >= self.cached_start_secs && secs < self.cached_end_secs {
+            let hour = ((secs - self.cached_start_secs) / 3600).clamp(0, 23) as u32;
+            return (self.cached_day, hour);
+        }
+        let day = self.date_of_slow(ts, secs);
+        if secs >= self.cached_start_secs && secs < self.cached_end_secs {
+            let hour = ((secs - self.cached_start_secs) / 3600).clamp(0, 23) as u32;
+            return (day, hour);
+        }
+        (day, self.tz.hour_of(ts))
     }
 
     #[cold]
@@ -223,11 +243,11 @@ impl GroupAggregate {
 }
 
 #[derive(Debug)]
-struct LoadedUsage {
-    events: Vec<UsageEvent>,
-    stats: ParseStats,
-    filter: DateFilter,
-    pricing: Arc<PricingTable>,
+pub(crate) struct LoadedUsage {
+    pub(crate) events: Vec<UsageEvent>,
+    pub(crate) stats: ParseStats,
+    pub(crate) filter: DateFilter,
+    pub(crate) pricing: Arc<PricingTable>,
 }
 
 #[derive(Debug)]
@@ -980,7 +1000,7 @@ struct ParsedFileOutput {
     cache_entry: CachedFileEntry,
 }
 
-fn should_emit_json(common: &CommonArgs) -> bool {
+pub(crate) fn should_emit_json(common: &CommonArgs) -> bool {
     common.json || common.jq.is_some()
 }
 
@@ -1002,7 +1022,7 @@ fn print_debug(stats: &ParseStats, common: &CommonArgs) {
     );
 }
 
-fn emit_json<T: Serialize>(value: &T, jq: Option<&str>) -> Result<()> {
+pub(crate) fn emit_json<T: Serialize>(value: &T, jq: Option<&str>) -> Result<()> {
     let pretty = serde_json::to_string_pretty(value)?;
     if let Some(query) = jq {
         let mut child = Command::new("jq")
@@ -1128,7 +1148,7 @@ fn build_period_attribution<'events, 'keys>(
         .collect()
 }
 
-fn build_group_rows<'a, Key: Eq + std::hash::Hash>(
+pub(crate) fn build_group_rows<'a, Key: Eq + std::hash::Hash>(
     events: &'a [UsageEvent],
     mut key_fn: impl FnMut(&'a UsageEvent) -> Key,
     mut label_fn: impl FnMut(Key) -> String,
@@ -1167,7 +1187,7 @@ fn build_group_rows<'a, Key: Eq + std::hash::Hash>(
     rows
 }
 
-fn apply_group_history(
+pub(crate) fn apply_group_history(
     rows: &mut Vec<DailyRow>,
     period: ReportPeriod,
     common: &CommonArgs,
@@ -1188,7 +1208,7 @@ fn apply_group_history(
     }
 }
 
-fn parse_timezone_mode(input: Option<&str>) -> Result<TimeZoneMode> {
+pub(crate) fn parse_timezone_mode(input: Option<&str>) -> Result<TimeZoneMode> {
     let Some(raw) = input else {
         return Ok(TimeZoneMode::Local);
     };

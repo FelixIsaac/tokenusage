@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.14.0] - 2026-11-27
+
+### Added
+- **AI Year in Review (`tu wrapped`):** Added `tu wrapped` (`wrap`, `year`, `recap`, `rewind`) featuring a 7-slide animated 24-bit TUI deck (`Cover`, `The Rhythm`, `The Arsenal`, `The Cache Engine`, `Scale & Planet`, `Hall of Fame`, `Share & Export`), privacy-first redaction of project and session names by default (`--include-projects` opts in), and `--prompt` to print an anonymized storytelling/roast prompt.
+- **Pop-culture personas & benchmark tiers:** Added usage tier calibration grounded in coding-agent averages (`Est. Top 0.1%` .. `Precision Builder Tier`), pop-culture word-scale anchors (`Harry Potter`, `LOTR`, `Dune`, `The Hobbit`, `Bee Movie`), pop-culture archetypes/chronotypes/badges, and tightened prompt-cache badge/persona thresholds to reflect typical coding-agent hit rates (~91–96.6%).
+- **Interactive Three.js + GSAP showcase & `--theme`:** Added `--theme <cyber|carbon|matrix|solar>` for standalone HTML (`--html`) and PNG (`--png`) exports, complete with a fixed Three.js WebGL background core, an interactive 3D voxel contribution cityscape (`#city-3d`), GSAP scroll choreography, holographic card tilt, and a live 60fps `.webm` highlight-loop recorder alongside high-craft 1200×1500 neon/forged-carbon PNG posters.
+
+### Changed
+- **Shared 24-bit TUI theme revamp:** Extracted `src/tui_theme.rs` with obsidian surface/border tokens, geometric hero block glyphs, upper half-block 53×7 heatmaps, eighth-block meters, 24h sparklines, and pill keybars, upgrading both `tu tui` (`src/dashboard_tui.rs`) and the bare-`tu` command menu (`src/output.rs`) while accelerating dashboard filtering with `LocalDayCache`.
+
 ## [1.13.0] - 2026-11-27
 
 ### Added

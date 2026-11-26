@@ -126,7 +126,11 @@ mod pipeline;
 pub mod scale;
 #[cfg(feature = "cli")]
 mod share;
+#[cfg(feature = "cli")]
+mod tui_theme;
 mod types;
+#[cfg(feature = "cli")]
+mod wrapped;
 
 // ---------------------------------------------------------------------------
 // Public re-exports for library consumers
@@ -254,6 +258,7 @@ fn extract_throttle(cmd: &Commands) -> u64 {
         Commands::Rank(a) => a.common.slow,
         Commands::Breakdown(a) => a.common.slow,
         Commands::Tui(a) => a.common.slow,
+        Commands::Wrapped(a) => a.common.slow,
         Commands::Img(a) => a.common.slow,
         Commands::Session(a) => a.common.slow,
         Commands::Blocks(a) => a.common.slow,
@@ -355,6 +360,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Rank(args) => pipeline::run_rank(args).await,
         Commands::Breakdown(args) => pipeline::run_breakdown(args).await,
         Commands::Tui(args) => pipeline::run_tui(args).await,
+        Commands::Wrapped(args) => wrapped::run_wrapped(args).await,
         Commands::Img(args) => share::run_share(args).await,
         Commands::Session(args) => pipeline::run_session(args).await,
         Commands::Blocks(args) => pipeline::run_blocks(args).await,

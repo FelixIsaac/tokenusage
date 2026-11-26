@@ -17,12 +17,15 @@ use crate::cli::{CommonArgs, ScalePeriodArg, WeekStart};
 use crate::insights::{
     ReportInsights, compute_report_insights, sanitize_project_label, sanitize_session_label,
 };
-use crate::pipeline::TimeZoneMode;
 use crate::pipeline::commands::{
     RankDayItem, RankLeaderboardOut, RankModelItem, RankProjectItem, RankSessionItem,
 };
-use crate::pipeline::week_start;
+use crate::pipeline::{LocalDayCache, TimeZoneMode, week_start};
 use crate::scale::InformationScale;
+use crate::tui_theme::{
+    ACCENT_AMBER, ACCENT_CYAN, ACCENT_EMERALD, BG_CANVAS, BG_ELEVATED, BG_SURFACE, BORDER_FOCUS,
+    TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, card_block, keybar_line,
+};
 use crate::types::{DailyReport, DailyRow, ParseStats, TokenCounts, UsageEvent};
 
 type BreakdownGroup = (u64, f64, HashMap<String, (u64, f64)>);
@@ -119,6 +122,7 @@ impl DashboardState {
             NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1).unwrap_or(today_date);
         let seven_days_ago = today_date - chrono::TimeDelta::days(7);
 
+        let mut day_cache = LocalDayCache::new(&self.tz);
         self.current_events = self
             .all_events
             .iter()
@@ -128,7 +132,7 @@ impl DashboardState {
                         return false;
                     }
                 }
-                let event_date = self.tz.date_of(e.timestamp);
+                let event_date = day_cache.date_of(e.timestamp);
                 match self.period {
                     ScalePeriodArg::Today => {
                         if event_date != today_date {
@@ -193,7 +197,10 @@ impl DashboardState {
                 .entry(e.model.clone())
                 .or_insert(0) += tok;
 
-            let day_str = self.tz.date_of(e.timestamp).format("%Y-%m-%d").to_string();
+            let day_str = day_cache
+                .date_of(e.timestamp)
+                .format("%Y-%m-%d")
+                .to_string();
             *day_tokens.entry(day_str.clone()).or_insert(0) += tok;
             *day_cost.entry(day_str.clone()).or_insert(0.0) += cost;
             *day_top_model
@@ -206,7 +213,10 @@ impl DashboardState {
                 *session_tokens.entry(e.session.clone()).or_insert(0) += tok;
                 *session_cost.entry(e.session.clone()).or_insert(0.0) += cost;
                 session_meta.entry(e.session.clone()).or_insert_with(|| {
-                    let d = self.tz.date_of(e.timestamp).format("%Y-%m-%d").to_string();
+                    let d = day_cache
+                        .date_of(e.timestamp)
+                        .format("%Y-%m-%d")
+                        .to_string();
                     let p = e.project.as_deref().unwrap_or("-").to_string();
                     (d, p)
                 });
@@ -347,7 +357,10 @@ impl DashboardState {
         // 3. Daily / Timeline Report
         let mut daily_map: BTreeMap<String, DailyRow> = BTreeMap::new();
         for e in &self.current_events {
-            let day_str = self.tz.date_of(e.timestamp).format("%Y-%m-%d").to_string();
+            let day_str = day_cache
+                .date_of(e.timestamp)
+                .format("%Y-%m-%d")
+                .to_string();
             let row = daily_map
                 .entry(day_str.clone())
                 .or_insert_with(|| DailyRow {
@@ -547,9 +560,10 @@ fn run_dashboard_event_loop(
 
 fn draw_dashboard(frame: &mut ratatui::Frame<'_>, state: &DashboardState) {
     let area = frame.area();
+    frame.render_widget(Block::default().style(Style::default().bg(BG_CANVAS)), area);
     if area.width < 50 || area.height < 12 {
         let msg = Paragraph::new("Terminal window too small for dashboard")
-            .style(Style::default().fg(Color::Yellow));
+            .style(Style::default().fg(ACCENT_AMBER).bg(BG_CANVAS));
         frame.render_widget(msg, area);
         return;
     }
@@ -601,25 +615,27 @@ fn draw_header(frame: &mut ratatui::Frame<'_>, area: Rect, state: &DashboardStat
     let title_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(BG_SURFACE))
+        .border_style(Style::default().fg(BORDER_FOCUS))
         .title(Span::styled(
             format!(
-                " ⚡ tokenusage v{} · Timeframe: [{}] ",
+                " ✦ tokenusage v{} · Timeframe: [{}] ",
                 env!("CARGO_PKG_VERSION"),
                 period_str
             ),
             Style::default()
-                .fg(Color::White)
+                .fg(TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ));
 
     let tabs = Tabs::new(titles)
         .block(title_block)
         .select(tab_idx)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(TEXT_MUTED).bg(BG_SURFACE))
         .highlight_style(
             Style::default()
-                .fg(Color::Cyan)
+                .bg(BG_ELEVATED)
+                .fg(ACCENT_CYAN)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         );
 
@@ -627,15 +643,26 @@ fn draw_header(frame: &mut ratatui::Frame<'_>, area: Rect, state: &DashboardStat
 }
 
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, state: &DashboardState) {
-    let shortcuts = match state.selected_tab {
-        DashboardTab::Breakdown => {
-            "[Tab/1-4] Tabs  [a/m/w/d/t] Period  [m] Flip Matrix  [↑/↓/j/k] Scroll  [?] Help  [q] Quit"
-        }
-        _ => "[Tab/1-4] Tabs  [a/m/w/d/t] Period  [↑/↓/j/k] Scroll  [?] Help  [q] Quit",
+    let line = match state.selected_tab {
+        DashboardTab::Breakdown => keybar_line(&[
+            ("Tab/1-4", "Tabs"),
+            ("a/m/w/d/t", "Period"),
+            ("m", "Flip Matrix"),
+            ("↑/↓", "Scroll"),
+            ("?", "Help"),
+            ("q", "Quit"),
+        ]),
+        _ => keybar_line(&[
+            ("Tab/1-4", "Tabs"),
+            ("a/m/w/d/t", "Period"),
+            ("↑/↓", "Scroll"),
+            ("?", "Help"),
+            ("q", "Quit"),
+        ]),
     };
-    let footer = Paragraph::new(shortcuts)
+    let footer = Paragraph::new(line)
         .alignment(Alignment::Center)
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().bg(BG_CANVAS));
     frame.render_widget(footer, area);
 }
 
@@ -661,66 +688,56 @@ fn draw_scale_overview_tab(frame: &mut ratatui::Frame<'_>, area: Rect, state: &D
 
     let spend_text = vec![
         Line::from(vec![
-            Span::styled("Total Cost: ", Style::default().fg(Color::Gray)),
+            Span::styled("Total Cost: ", Style::default().fg(TEXT_SECONDARY)),
             Span::styled(
                 format!("${:.2}", state.rank_out.total_cost_usd),
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(ACCENT_EMERALD)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  (${:.2}/1M tok)", cost_m),
-                Style::default().fg(Color::DarkGray),
+                format!("  (${cost_m:.2}/1M tok)"),
+                Style::default().fg(TEXT_MUTED),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Prompt Cache Saved: ", Style::default().fg(Color::Gray)),
+            Span::styled("Prompt Cache Saved: ", Style::default().fg(TEXT_SECONDARY)),
             Span::styled(
-                format!("~${:.2}", savings),
-                Style::default().fg(Color::Green),
+                format!("~${savings:.2}"),
+                Style::default().fg(ACCENT_EMERALD),
             ),
-            Span::styled(" vs uncached rates", Style::default().fg(Color::DarkGray)),
+            Span::styled(" vs uncached rates", Style::default().fg(TEXT_MUTED)),
         ]),
     ];
 
-    let spend_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" 💰 Spending & Economics ")
-        .border_style(Style::default().fg(Color::Blue));
-
-    let spend_para = Paragraph::new(spend_text).block(spend_block);
+    let spend_para = Paragraph::new(spend_text).block(card_block("Spending & Economics", true));
     frame.render_widget(spend_para, row1_chunks[0]);
 
-    // 🏆 Drivers & Mix
+    // Drivers & Mix
     let top_src = state.insights.top_source.as_deref().unwrap_or("-");
     let top_mod = state.insights.top_model.as_deref().unwrap_or("-");
     let mod_share = state.insights.top_model_share_pct.unwrap_or(0.0);
 
     let driver_text = vec![
         Line::from(vec![
-            Span::styled("Primary Provider: ", Style::default().fg(Color::Gray)),
+            Span::styled("Primary Provider: ", Style::default().fg(TEXT_SECONDARY)),
             Span::styled(
                 top_src,
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(ACCENT_AMBER)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Dominant Model:   ", Style::default().fg(Color::Gray)),
+            Span::styled("Dominant Model:   ", Style::default().fg(TEXT_SECONDARY)),
             Span::styled(
-                format!("{} ({:.1}%)", top_mod, mod_share),
-                Style::default().fg(Color::Yellow),
+                format!("{top_mod} ({mod_share:.1}%)"),
+                Style::default().fg(ACCENT_CYAN),
             ),
         ]),
     ];
 
-    let driver_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" 🏆 Drivers & Provider Mix ")
-        .border_style(Style::default().fg(Color::Blue));
+    let driver_block = card_block("Drivers & Provider Mix", false);
 
     let driver_para = Paragraph::new(driver_text).block(driver_block);
     frame.render_widget(driver_para, row1_chunks[1]);
@@ -1408,8 +1425,14 @@ fn draw_help_modal(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let help_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" ❓ Help & Navigation ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .style(Style::default().bg(BG_SURFACE).fg(TEXT_PRIMARY))
+        .title(Span::styled(
+            " Help & Navigation ",
+            Style::default()
+                .fg(ACCENT_AMBER)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(Style::default().fg(BORDER_FOCUS));
 
     let help_para = Paragraph::new(help_text).block(help_block);
     frame.render_widget(help_para, popup_area);

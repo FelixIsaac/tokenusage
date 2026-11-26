@@ -486,6 +486,12 @@ pub(crate) enum Commands {
         display_order = 12
     )]
     Tui(TuiArgs),
+    #[command(
+        about = "Interactive AI Year in Review (7-slide TUI, HTML micro-site, 1200×1500 PNG poster & AI prompt)",
+        aliases = ["wrap", "year", "recap", "rewind"],
+        display_order = 1
+    )]
+    Wrapped(WrappedArgs),
 
     // --- Live / interactive (display_order 10-12) ---
     #[command(
@@ -681,6 +687,78 @@ pub(crate) struct TuiArgs {
     pub(crate) period: ScalePeriodArg,
     #[arg(long, short = 'p', help = "Filter specific project")]
     pub(crate) project: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub(crate) enum WrappedTheme {
+    #[default]
+    Cyber,
+    Carbon,
+    Matrix,
+    Solar,
+}
+
+#[cfg(feature = "cli")]
+impl WrappedTheme {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            WrappedTheme::Cyber => "cyber",
+            WrappedTheme::Carbon => "carbon",
+            WrappedTheme::Matrix => "matrix",
+            WrappedTheme::Solar => "solar",
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct WrappedArgs {
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    #[arg(long, short = 'y', help = "Calendar year to summarize (e.g. 2026)")]
+    pub(crate) year: Option<i32>,
+    #[arg(
+        long,
+        help = "Summarize full all-time history instead of one calendar year"
+    )]
+    pub(crate) all_time: bool,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = WrappedTheme::Cyber,
+        help = "Visual theme for HTML & PNG exports: cyber, carbon, matrix, solar"
+    )]
+    pub(crate) theme: WrappedTheme,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write standalone interactive HTML micro-site"
+    )]
+    pub(crate) html: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write high-resolution PNG share poster (1200x1500)"
+    )]
+    pub(crate) png: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        help = "Print ready-to-paste AI storytelling/roast prompt with your stats"
+    )]
+    pub(crate) prompt: bool,
+    #[arg(
+        long,
+        help = "Include sanitized project & session names (hidden by default)"
+    )]
+    pub(crate) include_projects: bool,
+    #[arg(long, help = "Open generated HTML/PNG file in your default viewer")]
+    pub(crate) open: bool,
+    #[arg(
+        long,
+        help = "Print concise static summary instead of interactive presentation"
+    )]
+    pub(crate) no_tui: bool,
 }
 
 #[cfg(feature = "cli")]

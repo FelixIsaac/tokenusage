@@ -664,7 +664,7 @@ pub(super) async fn load_usage(
     load_usage_with_options(common, timezone, LoadUsageOptions::default()).await
 }
 
-pub(super) async fn load_usage_unsorted(
+pub(crate) async fn load_usage_unsorted(
     common: &CommonArgs,
     timezone: &TimeZoneMode,
 ) -> Result<LoadedUsage> {

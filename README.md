@@ -31,6 +31,32 @@ Parsing local logs in under **0.08 seconds** (214x faster than alternatives), `t
 
 ---
 
+## ✨ AI Year in Review (`tu wrapped`)
+
+Generate a shareable **AI Year in Review** in one command — with an animated 7-slide 24-bit TUI deck, a self-contained interactive HTML micro-site, a high-res `1200×1500` share poster PNG, and a ready-to-paste AI roast prompt. **Project & session names are redacted by default.**
+
+```bash
+# Launch the 7-slide interactive terminal showcase
+tu wrapped
+
+# Export an interactive Three.js + GSAP HTML showcase & themed 1200x1500 PNG poster
+tu wrapped --theme cyber --html wrapped.html --png wrapped-poster.png --open
+
+# Forged carbon & molten amber edition (also supports: matrix, solar)
+tu wrapped --theme carbon --png wrapped-carbon.png
+
+# Opt in to project names in local exports
+tu wrapped --include-projects --png wrapped-poster.png
+
+# Generate a ready-to-paste prompt for Claude / ChatGPT / Codex to roast & visualize your year
+tu wrapped --prompt
+```
+
+**1-Prompt Agent Challenge** — paste this into any coding agent:
+> Install `tokenusage` (`brew install FelixIsaac/tap/tokenusage` or `cargo install tokenusage`), run `tu wrapped --offline --prompt`, and turn my metrics into a punchy year-in-review roast + share card.
+
+---
+
 ## 📸 Interface Screenshots
 
 <table align="center" width="100%">
